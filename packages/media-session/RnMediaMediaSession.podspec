@@ -14,7 +14,7 @@ Pod::Spec.new do |s|
   # MPNowPlayingInfoCenter/MPRemoteCommandCenter exist on tvOS/visionOS too; add
   # those platforms when there is a target that actually builds them.
   s.platforms    = { :ios => min_ios_version_supported }
-  s.source       = { :git => "https://github.com/ashishkumar/rn-media.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/afkcodes/rn-media.git", :tag => "#{s.version}" }
 
   s.source_files = [
     # Implementation (Swift)

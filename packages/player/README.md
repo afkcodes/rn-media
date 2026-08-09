@@ -4,7 +4,7 @@ React Native audio player built on libmpv, powered by Nitro Modules.
 
 [![Version](https://img.shields.io/npm/v/@rn-media/player.svg)](https://www.npmjs.com/package/@rn-media/player)
 [![Downloads](https://img.shields.io/npm/dm/@rn-media/player.svg)](https://www.npmjs.com/package/@rn-media/player)
-[![License](https://img.shields.io/npm/l/@rn-media/player.svg)](https://github.com/ashishkumar/rn-media/blob/main/LICENSE)
+[![License](https://img.shields.io/npm/l/@rn-media/player.svg)](https://github.com/afkcodes/rn-media/blob/main/LICENSE)
 
 ## Requirements
 
