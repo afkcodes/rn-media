@@ -198,6 +198,31 @@ Expo apps and media3 silently falls back to its own icon. Vectors go to
 `drawable/` is read as mdpi and upscaled 4×). Files are copied, never resized —
 resizing would mean depending on `@expo/image-utils` for every consumer.
 
+### 17. Dependencies: grouped weekly, except the ones RN pins for us
+Dependabot runs weekly (Monday) and emits **one grouped PR per ecosystem** for
+minor+patch; majors always arrive alone, because a major deserves its own
+changelog read. Patch/minor **dev**-dependency PRs auto-merge on green CI;
+production dependencies and all majors stay manual.
+
+The exception that makes this safe: a large class of packages here is not a
+dependency but a *pin* — react/react-dom, react-native and its `@react-native/*`
+toolchain, `@react-native-community/cli`, `@types/react`, the Gradle wrapper,
+AGP, Kotlin, and the RN-template Gemfile bounds (`xcodeproj`,
+`concurrent-ruby`) are version-locked to the React Native release we target,
+and nitrogen + react-native-nitro-modules are locked to each other (§2, §5 —
+the C++/Kotlin bindings are *generated* against one runtime). These are
+`ignore`d in `.github/dependabot.yml` with the reason attached; they move only
+as part of a deliberate, tested RN-upgrade commit. Babel is capped at 7.x for
+the same reason: `@react-native/babel-preset` is a Babel 7 stack.
+
+Not theory — the ignore list is what CI already proved: Gradle 9.7.0 failed
+with `:gradle-plugin:settings-plugin:compileKotlin > Internal compiler error`
+(RN 0.86's own Gradle plugin does not compile under it), and a lone `react-dom`
+bump would have left a mismatched React under the only DOM test environment we
+have. **Auto-merge on green requires branch protection with the two build
+checks marked required** — without it a PR is mergeable the instant it opens
+and auto-merge fires while CI is still running (observed 2026-08-10).
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
