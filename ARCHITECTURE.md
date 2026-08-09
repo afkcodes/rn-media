@@ -223,6 +223,30 @@ have. **Auto-merge on green requires branch protection with the two build
 checks marked required** — without it a PR is mergeable the instant it opens
 and auto-merge fires while CI is still running (observed 2026-08-10).
 
+### 18. EQ/DSP is a typed chain over mpv's `af`, not a native module
+`Player.setAudioFilters([...])` compiles typed filter descriptors into mpv's own
+`af` grammar; the raw property stays settable. No C++ was added — mpv resolves
+any filter name it does not implement through `avfilter_get_by_name`, so the
+whole ffmpeg audio-filter set is reachable from TS the moment it is *compiled in*
+(§5 again). The audit found it was not: the audio flavour uses
+`--disable-filters` with an allow-list that held only `overlay` and `equalizer`,
+while `--enable-avfilter` and mpv's lavfi bridge were already present — `af=`
+resolved to nothing. Android pin `v1.1.9-rnmedia.2` adds 16 LGPL filters
+(EQ, dynamics, crossfeed, +104 KB/ABI, symbol set unchanged); **`aresample` is
+among them and is not optional** — libavfilter auto-inserts it whenever two pads
+disagree on sample format, and every one of these filters pins a different one.
+Every GPL-gated filter in ffmpeg n6.0 is a *video* filter, so the LGPL line
+(§11) is untouched. Composition is free: user `af` entries are mpv's
+`user_filters`, while speed handling (`scaletempo2`) lives in `post_filters`
+downstream, and ReplayGain is volume-domain — filters, speed and RG never
+interact. On top sits a **10-band preset layer** (ISO octave centres, one biquad
+per band, 22 tuned curves + `defineEqualizerPreset` for custom ones). Its one
+non-obvious piece: headroom is computed from the *summed* magnitude response,
+not the largest slider — octave-spaced one-octave bells overlap and add, so
+`Loudness` peaks at +8.8 dB from +7 dB sliders and attenuating by 7 would clip.
+**iOS does not have these filters yet** (darwin binaries not rebuilt); calls
+fail with a typed `mpv` error, which is also the supported availability probe.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
@@ -243,6 +267,11 @@ and auto-merge fires while CI is still running (observed 2026-08-10).
   deprecated `hls://` protocol; only the `hls`+`mpegts` *demuxers* matter.
 - **mpv 0.35.1's manual documents `replaygain-clip` inverted** vs its own
   code; our API maps to behavior (verified in `player/audio.c`).
+- **mpv's waf does not relink `libmpv.so` when ffmpeg's static libs change** —
+  a rebuilt `libavfilter.a` next to a stale `.so` looks like a successful build
+  and silently ships the old binary (`./build.sh --clean -n mpv` forces it).
+  Same false-evidence shape as the `--enable-protocol=hls` trap: always verify
+  flags/symbols in the *shipped* artifact, never trust the build log.
 - **generator scaffolds contain load-bearing "dead code"**: the ReactPackage
   class is the only trigger of `System.loadLibrary` — deleting it fails only
   at runtime.

@@ -2,6 +2,8 @@ import type { PlayerError } from './errors'
 import { PlayerErrorException, disposedError, toPlayerError } from './errors'
 import type { LogEvent, PlayerEvent } from './events'
 import { toPlayerEvents } from './events'
+import type { AudioFilter } from './filters'
+import { compileAudioFilters } from './filters'
 import { createMpvClient } from './native-client'
 import {
   MPV_VOLUME_SCALE,
@@ -1145,6 +1147,90 @@ export class Player {
     if (options.fallback !== undefined) {
       this.#setNumber(MpvProperty.replayGainFallback, options.fallback)
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Audio filters (EQ / DSP)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Replace the audio filter chain (mpv's `af`).
+   *
+   * Build entries with the `AudioFilters` factories; they compile to mpv's own
+   * `af` grammar and are validated against each filter's documented ffmpeg
+   * ranges before anything is written. The whole chain is replaced atomically:
+   * mpv parses the string first and leaves the previous chain in place if any
+   * entry is bad, so a rejected call never leaves playback half-filtered.
+   *
+   * @param filters - The new chain, in signal-flow order (first entry runs
+   * first). Pass `[]` — or call {@link Player.clearAudioFilters} — to remove
+   * every filter.
+   *
+   * @throws {@link PlayerErrorException} with code `invalid-state` when the
+   * chain is malformed or a value is out of the filter's range (checked here,
+   * before mpv sees it), and with code `mpv` (`errno: -11`,
+   * `MPV_ERROR_PROPERTY_ERROR`) when mpv itself rejects it.
+   *
+   * @remarks
+   * **Availability is a property of the binary, not of this API.** mpv resolves
+   * any name it does not implement itself through
+   * `avfilter_get_by_name()`, so a filter exists only if it was compiled into
+   * that platform's libmpv. On Android (pin `v1.1.9-rnmedia.2`) the full EQ/DSP
+   * set is present. On **iOS it is not yet** — the darwin binaries still carry
+   * the old two-filter allow-list, so every call here fails with
+   * `code: 'mpv', errno: -11` and mpv logs `Option af: <name> doesn't exist.`
+   * at error level (visible through `PlayerOptions.onLog`). That is the honest
+   * signal, and it is also the supported way to probe support: try the chain,
+   * catch, fall back.
+   *
+   * Applying filters mid-playback rebuilds mpv's filter chain in place; it does
+   * not reload the file, reset the position, or drop the audio device. The
+   * chain also survives track changes — `af` is a global option, not a
+   * per-entry one.
+   *
+   * @example
+   * ```ts
+   * import { AudioFilters } from '@rn-media/player'
+   *
+   * player.setAudioFilters([
+   *   AudioFilters.volume({ gainDb: -6 }),      // headroom for the boost below
+   *   AudioFilters.bass({ frequency: 110, gain: 12 }),
+   *   AudioFilters.limiter(),                   // and nothing clips
+   * ])
+   * ```
+   */
+  setAudioFilters(filters: readonly AudioFilter[]): void {
+    this.#assertAlive('setAudioFilters')
+    this.#setString(MpvProperty.audioFilters, compileAudioFilters(filters))
+  }
+
+  /**
+   * Remove every audio filter.
+   *
+   * Equivalent to `setAudioFilters([])`; spelled out because "set the empty
+   * string" is not an obvious way to say it.
+   */
+  clearAudioFilters(): void {
+    this.#assertAlive('clearAudioFilters')
+    this.#setString(MpvProperty.audioFilters, '')
+  }
+
+  /**
+   * The chain mpv currently has, as mpv prints it.
+   *
+   * This is a read-back of the raw `af` property, not a reconstruction: mpv
+   * serialises with the same rules `compileAudioFilters` uses, so for a chain
+   * set through {@link Player.setAudioFilters} this returns exactly the string
+   * that was written. Useful as an assertion in tests and on-device checks, and
+   * as the way to see a chain that was set through the raw escape hatch.
+   *
+   * @returns The `af` value; `''` when no filters are active.
+   */
+  getAudioFilters(): string {
+    this.#assertAlive('getAudioFilters')
+    return this.#guard(
+      () => this.#client.getPropertyString(MpvProperty.audioFilters) ?? ''
+    )
   }
 
   // -------------------------------------------------------------------------
