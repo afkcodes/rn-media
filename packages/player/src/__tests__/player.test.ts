@@ -45,12 +45,16 @@ beforeEach(() => {
 })
 
 describe('Player.create', () => {
-  it('initializes the core with the default log level and user agent', async () => {
+  it('initializes the core with the default log level, user agent and cache', async () => {
     await createPlayer()
     expect(client.initialized).toBe(true)
     expect(client.initOptions).toEqual({
       'log-level': 'warn',
       'user-agent': 'rn-media (libmpv)',
+      // mpv's own default readahead is 1000 h, capped only by the 150 MiB
+      // `demuxer-max-bytes`; bounding it is what stops a paused radio stream
+      // from downloading for hours. See DEFAULT_CACHE_SECS.
+      'cache-secs': '30',
     })
   })
 
@@ -67,12 +71,12 @@ describe('Player.create', () => {
   it('passes raw mpv options through and lets them override', async () => {
     await createPlayer({
       userAgent: 'my-app/1.0',
-      mpvOptions: { 'cache-secs': '30', 'user-agent': 'raw-wins/2.0' },
+      mpvOptions: { 'cache-secs': '120', 'user-agent': 'raw-wins/2.0' },
     })
     expect(client.initOptions).toEqual({
       'log-level': 'warn',
-      'cache-secs': '30',
-      // The raw escape hatch beats the typed option.
+      // The raw escape hatch beats both the typed option and our default.
+      'cache-secs': '120',
       'user-agent': 'raw-wins/2.0',
     })
   })
@@ -606,6 +610,20 @@ describe('Player — playlist API', () => {
     await player.playlist.jumpTo(4)
     expect(client.commands).toEqual([['playlist-play-index', '4']])
     expect(client.written.has(MpvProperty.playlistPos)).toBe(false)
+  })
+
+  it('jumpTo clears pause, because mpv leaves it alone on a jump', async () => {
+    // Regression: a player loaded with `autoPlay: false` used to jump to an
+    // entry, open it, buffer it and never make a sound.
+    const player = await createPlayer()
+    await player.playlist.jumpTo(1)
+    expect(client.written.get(MpvProperty.pause)).toBe(false)
+  })
+
+  it('jumpTo honours autoPlay: false by leaving pause untouched', async () => {
+    const player = await createPlayer()
+    await player.playlist.jumpTo(1, { autoPlay: false })
+    expect(client.written.has(MpvProperty.pause)).toBe(false)
   })
 
   it('next/previous/clear map to mpv commands', async () => {

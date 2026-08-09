@@ -41,7 +41,10 @@ export interface PlayerOptions {
    * Raw mpv options applied before `mpv_initialize()`.
    *
    * Audio-only defaults (`vid=no`, `force-window=no`, `idle=yes`,
-   * `audio-display=no`) are applied natively first, so anything here wins.
+   * `audio-display=no`) are applied natively first, and this library's own
+   * option defaults (`user-agent`, see {@link DEFAULT_USER_AGENT}, and
+   * `cache-secs`, see {@link DEFAULT_CACHE_SECS}) are merged underneath this
+   * map — so anything here wins over all of them.
    *
    * @remarks
    * Option *order* is not preserved (the native layer takes a map), so
@@ -172,8 +175,27 @@ export interface PlaylistApi {
    * array semantics and does the adjustment.
    */
   move(from: number, to: number): Promise<void>
-  /** Jump to `index` and (re)start playback of it. */
-  jumpTo(index: number): Promise<void>
+  /**
+   * Jump to `index` and (re)start playback of it.
+   *
+   * @param index - Playlist index to make current.
+   * @param options - `autoPlay: false` keeps the current pause state instead
+   * of starting playback.
+   *
+   * @remarks
+   * mpv's `playlist-play-index` restarts the *entry*, but `pause` is a global
+   * player property it does not touch — so on a player that was loaded with
+   * `autoPlay: false`, a bare jump used to select the entry, open the network
+   * stream, fill the demuxer cache and then sit there silently. (Measured
+   * on-device against a Shoutcast station: mpv logged `playback restart
+   * complete @ 0.000000, audio=playing, video=eof (paused)` and the cache grew
+   * past 45 s with nothing audible.) Jumping to an entry means playing it, so
+   * this clears `pause` by default, exactly like {@link Player.load}.
+   */
+  jumpTo(
+    index: number,
+    options?: { readonly autoPlay?: boolean }
+  ): Promise<void>
   /** Go to the next entry. */
   next(): Promise<void>
   /** Go to the previous entry. */
@@ -194,6 +216,33 @@ const DEFAULT_LOG_LEVEL: PlayerLogLevel = 'warn'
  * `mpvOptions['user-agent']`.
  */
 export const DEFAULT_USER_AGENT = 'rn-media (libmpv)'
+
+/**
+ * Default `--cache-secs`, i.e. how far ahead the demuxer is allowed to read on
+ * a network stream.
+ *
+ * mpv's own default is `1000 * 60 * 60` seconds (`demux/demux.c`,
+ * `demux_conf.defaults.min_secs_cache`, mpv 0.35.1), and `demux.c` takes
+ * `min_secs = MPMAX(demuxer-readahead-secs, cache-secs)` whenever the cache is
+ * active — which `--cache=auto` makes true for anything that looks like a
+ * network stream. The only brake left is `--demuxer-max-bytes`, whose default
+ * is 150 MiB: on a 128 kbit/s radio stream that is ~2.7 hours of audio which
+ * mpv will happily download, over mobile data, while *paused*. (Measured
+ * on-device: a paused Shoutcast entry's `buffered` readout climbed past 45 s
+ * and kept going.)
+ *
+ * 30 s is the balance point. It does not delay startup — how far ahead the
+ * demuxer reads is independent of when playback starts, which is gated by the
+ * AO queue (`--audio-buffer`, 0.2 s) and *not* by the cache, since
+ * `--cache-pause-initial` defaults to `no` (mpv 0.35.1 `options.rst`). It
+ * leaves 30 s of slack to ride out a mobile-network stall, and mpv only needs
+ * `--cache-pause-wait` (1 s) buffered to resume after one. The cost is that a
+ * stall longer than 30 s rebuffers where mpv's default would not have; that is
+ * the deliberate trade for bounded memory and bounded data use.
+ *
+ * Override per player with `mpvOptions: { 'cache-secs': '…' }`.
+ */
+export const DEFAULT_CACHE_SECS = 30
 
 /**
  * Our TS level names → mpv's `mpv_request_log_messages` strings.
@@ -347,6 +396,7 @@ export class Player {
       client.setEventBatchListener((events) => player.#handleBatch(events))
       client.initialize({
         'user-agent': options.userAgent ?? DEFAULT_USER_AGENT,
+        'cache-secs': String(DEFAULT_CACHE_SECS),
         ...(options.mpvOptions ?? {}),
         'log-level': MPV_LOG_LEVEL_NAMES[options.logLevel ?? DEFAULT_LOG_LEVEL],
       })
@@ -662,8 +712,12 @@ export class Player {
       const target = to > from ? to + 1 : to
       await this.command(['playlist-move', String(from), String(target)])
     },
-    jumpTo: async (index) => {
+    jumpTo: async (index, options) => {
       this.#assertAlive('playlist.jumpTo')
+      // Order matters: clear `pause` before the jump so mpv's own playback
+      // restart already runs with the right intent and cannot publish a
+      // paused-then-playing flicker to observers.
+      if (options?.autoPlay !== false) this.#setBool(MpvProperty.pause, false)
       // `playlist-play-index` rather than writing `playlist-pos`: mpv
       // guarantees playback restarts even when jumping to the current entry.
       await this.command(['playlist-play-index', String(index)])
