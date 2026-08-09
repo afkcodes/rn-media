@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "lib": ["esnext", "dom"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "vitest.config.mts"],
+  "exclude": ["**/node_modules", "**/lib"]
+}

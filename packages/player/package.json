@@ -1,0 +1,139 @@
+{
+  "name": "@rn-media/player",
+  "version": "0.1.0",
+  "description": "React Native audio player built on libmpv, powered by Nitro Modules",
+  "main": "./lib/commonjs/index.js",
+  "module": "./lib/module/index.js",
+  "types": "./lib/typescript/src/index.d.ts",
+  "react-native": "src/index",
+  "source": "src/index",
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "git clean -dfX",
+    "release": "semantic-release",
+    "build": "npm run typecheck && bob build",
+    "codegen": "nitrogen --logLevel=\"debug\" && npm run build",
+    "test:cpp": "cmake -S cpp/tests -B cpp/tests/build && cmake --build cpp/tests/build && ctest --test-dir cpp/tests/build --output-on-failure",
+    "pod": "npm --prefix ../../apps/example run pod"
+  },
+  "keywords": [
+    "react-native",
+    "nitro-modules",
+    "libmpv",
+    "audio",
+    "player"
+  ],
+  "files": [
+    "src",
+    "react-native.config.js",
+    "lib",
+    "nitrogen",
+    "cpp",
+    "!cpp/tests",
+    "nitro.json",
+    "android/build.gradle",
+    "android/fix-prefab.gradle",
+    "android/libmpv.gradle",
+    "android/gradle.properties",
+    "android/CMakeLists.txt",
+    "android/src",
+    "ios/**/*.h",
+    "ios/**/*.m",
+    "ios/**/*.mm",
+    "ios/**/*.cpp",
+    "ios/**/*.swift",
+    "ios/fetch-libmpv.sh",
+    "ios/libmpv.pin",
+    "app.plugin.js",
+    "*.podspec",
+    "README.md",
+    "!ios/Frameworks",
+    "!ios/.cache"
+  ],
+  "repository": "https://github.com/ashishkumar/rn-media.git",
+  "author": "Ashish Kumar",
+  "license": "MIT",
+  "bugs": "https://github.com/ashishkumar/rn-media/issues",
+  "homepage": "https://github.com/ashishkumar/rn-media#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "devDependencies": {
+    "@jamesacarr/eslint-formatter-github-actions": "^0.2.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/jest": "^29.5.12",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^29.1.1",
+    "nitrogen": "^0.36.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-builder-bob": "^0.40.18",
+    "react-native-nitro-modules": "^0.36.1",
+    "conventional-changelog-conventionalcommits": "^10.2.1",
+    "semantic-release": "^25.0.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": ">=0.82.0",
+    "react-native-nitro-modules": "*"
+  },
+  "eslintConfig": {
+    "root": true,
+    "extends": [
+      "@react-native",
+      "prettier"
+    ],
+    "plugins": [
+      "prettier"
+    ],
+    "rules": {
+      "prettier/prettier": [
+        "warn",
+        {
+          "quoteProps": "consistent",
+          "singleQuote": true,
+          "tabWidth": 2,
+          "trailingComma": "es5",
+          "useTabs": false
+        }
+      ]
+    }
+  },
+  "eslintIgnore": [
+    "node_modules/",
+    "lib/"
+  ],
+  "prettier": {
+    "quoteProps": "consistent",
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "es5",
+    "useTabs": false,
+    "semi": false
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      "commonjs",
+      "module",
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json",
+          "tsc": "../../node_modules/.bin/tsc"
+        }
+      ]
+    ]
+  }
+}
