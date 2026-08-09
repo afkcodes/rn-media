@@ -349,15 +349,28 @@ Covered in v1: gapless playlist/queue, metadata→system UI, custom actions+icon
 (Android), live/ICY streams, background+focus, pitch-corrected speed,
 loop modes, all ffmpeg formats the binaries enable.
 
-**HLS CORRECTION (2026-08-09, proven on-device):** the pinned prebuilt *audio*
-binaries do NOT include ffmpeg's `hls`/`mpegts` demuxers (verified from the
-configure line embedded in libmpv.so) — HLS currently fails with a clean
-`unsupported-format` error. TLS/HTTPS itself works (mbedtls). Fix = fork the
-libmpv build scripts (already planned, §6) and add
-`--enable-demuxer=hls --enable-demuxer=mpegts` to the audio flavor.
-**Backlog A, top priority — a music library needs HLS.** Also: mpv's playlist
-demuxer parses `.m3u8` as a plain playlist (queue explosion) unless
-`demuxer=lavf` is forced for HLS URIs — guard shipped in the player.
+**HLS — DONE on Android (2026-08-09), still open on iOS.** media-kit's stock
+*audio* binaries do NOT include ffmpeg's `hls`/`mpegts` demuxers (verified from
+the configure line embedded in libmpv.so, and reproduced on-device as a clean
+`unsupported-format`); `--enable-protocol=hls` is present but that is the
+deprecated `hls://` protocol and is useless without the demuxer. Fixed by
+forking the build scripts as §6 always planned:
+`afkcodes/libmpv-android-audio-build`, branch `rn-media-hls` off `v1.1.9`,
+released as **`v1.1.9-rnmedia.1`** and pinned in
+`packages/player/android/libmpv.gradle` (owner is now a pin field). The delta
+versus the shipped v1.1.9 binaries is exactly
+`--enable-demuxer=hls --enable-demuxer=mpegts` — same mpv 0.35.1 / ffmpeg n6.0
+source tree, same patches (incl. `mpv_lavc_set_java_vm`), identical exported
+symbol set, +54 KB/ABI, still LGPLv3. Everything else HLS needs was already in
+the allow-list and was checked rather than assumed: `mov` (fMP4 segments),
+`ac3`/`aac*`/`mpegaudio` parsers, the `crypto` protocol for AES-128
+(`CONFIG_CRYPTO_PROTOCOL 1` in the generated config, not just on the command
+line), and id3v2 (compiled unconditionally by libavformat).
+**iOS remains without HLS** — it still uses stock `libmpv-darwin-build`; the
+same two flags need the same treatment there, and that is now the top binary
+task. Also: mpv's playlist demuxer parses `.m3u8` as a plain playlist (queue
+explosion) unless `demuxer=lavf` is forced for HLS URIs — guard shipped in the
+player.
 
 **Backlog A — typed-API gaps (mpv already capable, raw escape hatch works today):**
 - shuffle (`playlist-shuffle`/`playlist-unshuffle`)
