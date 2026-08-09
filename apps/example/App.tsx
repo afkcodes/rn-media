@@ -103,11 +103,16 @@ interface Track extends MediaItem {
  */
 const TRACKS: readonly Track[] = [
   {
-    id: 'groove-salad',
-    title: 'Groove Salad',
-    artist: 'SomaFM',
-    album: 'Icecast MP3 · live',
-    uri: 'https://ice1.somafm.com/groovesalad-128-mp3',
+    id: 'diverse-fm',
+    title: 'Diverse FM',
+    artist: 'Diverse FM',
+    album: 'Shoutcast AAC+ · live',
+    // The trailing `/;` is the Shoutcast convention for "give me the stream,
+    // not the status page" — verified to return `audio/aacp` with
+    // `icy-name: Diverse FM`.
+    uri: 'https://carol.epichosts.co.uk:8570/;',
+    artworkUri:
+      'https://static.mytuner.mobi/media/tvos_radios/621/diverse-fm-bollywood-music-mix.7ea30dfa.png',
     live: true,
   },
   {
@@ -374,6 +379,12 @@ class Playback {
   async #createPlayer(): Promise<void> {
     try {
       const player = await Player.create({ volume: 0.8 });
+      // Surface mpv's own warnings/errors in the JS console — the first thing
+      // to check when a stream misbehaves. (Bump `logLevel` in `Player.create`
+      // to 'verbose'/'debugging'/'trace' when digging deeper: 'trace' is what
+      // exposed a Shoutcast server 401-ing mpv's default `libmpv` user-agent,
+      // which is why the player now ships its own default UA.)
+      player.on('log', e => console.log(`[mpv:${e.level}] ${e.prefix}: ${e.text.trim()}`));
       this.#player = player;
 
       this.#unwireAudio = wireAudioSession(player, {
@@ -393,21 +404,12 @@ class Playback {
         this.#notify();
       });
 
+      // No demuxer workaround needed: the player forces `demuxer=lavf` for
+      // `.m3u8`/`.m3u` entries on its own (and only for those), so mpv's
+      // playlist demuxer can't explode the queue with variant/segment entries.
       await player.loadPlaylist(
         TRACKS.map(t => t.uri),
-        {
-          startIndex: 0,
-          autoPlay: false,
-          mpvOptions: {
-            // Force libavformat. Left to itself mpv hands a `.m3u8` to its own
-            // *playlist* demuxer, which parses the master playlist as a plain
-            // m3u and appends every variant — and then every media playlist's
-            // `.ts` segments — as new queue entries, so a 3-entry queue became
-            // 23 and HLS never played. A media app owns its own queue, so
-            // losing playlist-file expansion costs nothing.
-            'demuxer': 'lavf',
-          },
-        },
+        { startIndex: 0, autoPlay: false },
       );
     } catch (cause) {
       this.#error = toPlayerError(cause);

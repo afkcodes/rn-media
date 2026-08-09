@@ -51,6 +51,16 @@ export interface PlayerOptions {
   readonly mpvOptions?: Readonly<Record<string, string>>
   /** mpv log verbosity. Defaults to mpv's `warn`. */
   readonly logLevel?: PlayerLogLevel
+  /**
+   * HTTP `User-Agent` for network playback. Defaults to
+   * {@link DEFAULT_USER_AGENT} rather than mpv's own `libmpv`, because real
+   * streaming hosts blocklist the literal string `libmpv` (observed on-device:
+   * a Shoutcast DNAS v2 server returning `401 Unauthorized` for exactly
+   * `User-Agent: libmpv` while accepting any other value, including
+   * `rn-media/0.1 (libmpv)`). A raw `mpvOptions['user-agent']` still wins over
+   * this option.
+   */
+  readonly userAgent?: string
   /** Initial volume in `0..1`. */
   readonly volume?: number
   /** Initial mute state. */
@@ -173,6 +183,37 @@ export interface PlaylistApi {
 }
 
 const DEFAULT_LOG_LEVEL: PlayerLogLevel = 'warn'
+
+/**
+ * Default HTTP User-Agent.
+ *
+ * mpv's own default is the bare string `libmpv`, which streaming hosts
+ * blocklist (see {@link PlayerOptions.userAgent} for the observed 401). This
+ * stays honest — it names the engine — without matching those exact-string
+ * bans. Overridable per player via `userAgent`, or raw via
+ * `mpvOptions['user-agent']`.
+ */
+export const DEFAULT_USER_AGENT = 'rn-media (libmpv)'
+
+/**
+ * Our TS level names → mpv's `mpv_request_log_messages` strings.
+ *
+ * The TS union deliberately renames two levels (`verbose`, `debugging`) because
+ * their natural spellings collide with C/Xcode macros when nitrogen upper-cases
+ * enum members (see the spec). mpv itself only accepts `v` and `debug`, so the
+ * rename must be undone here — passing the TS name through raw makes
+ * `mpv_request_log_messages` fail and `Player.create` throw.
+ */
+const MPV_LOG_LEVEL_NAMES: Readonly<Record<PlayerLogLevel, string>> = {
+  no: 'no',
+  fatal: 'fatal',
+  error: 'error',
+  warn: 'warn',
+  info: 'info',
+  verbose: 'v',
+  debugging: 'debug',
+  trace: 'trace',
+}
 
 function clamp(value: number, min: number, max: number): number {
   if (Number.isNaN(value)) return min
@@ -305,8 +346,9 @@ export class Player {
     try {
       client.setEventBatchListener((events) => player.#handleBatch(events))
       client.initialize({
+        'user-agent': options.userAgent ?? DEFAULT_USER_AGENT,
         ...(options.mpvOptions ?? {}),
-        'log-level': options.logLevel ?? DEFAULT_LOG_LEVEL,
+        'log-level': MPV_LOG_LEVEL_NAMES[options.logLevel ?? DEFAULT_LOG_LEVEL],
       })
       for (const property of OBSERVED_PROPERTIES) {
         client.observeProperty(property.name, property.format)
