@@ -1,0 +1,30 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": [
+    "rnmediaaudiosession"
+  ],
+  "ios": {
+    "iosModuleName": "RnMediaAudioSession"
+  },
+  "android": {
+    "androidNamespace": [
+      "rnmediaaudiosession"
+    ],
+    "androidCxxLibName": "RnMediaAudioSession"
+  },
+  "autolinking": {
+    "RnMediaAudioSession": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridRnMediaAudioSession"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridRnMediaAudioSession"
+      }
+    }
+  },
+  "ignorePaths": [
+    "**/node_modules"
+  ]
+}
