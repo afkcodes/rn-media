@@ -4,7 +4,10 @@ import java.util.zip.ZipFile
 /*
  * Prebuilt libmpv (audio-only, LGPL flavour) for Android.
  *
- * Source of truth: https://github.com/media-kit/libmpv-android-audio-build/releases
+ * Source of truth: https://github.com/afkcodes/libmpv-android-audio-build/releases
+ * — our fork of media-kit/libmpv-android-audio-build, which exists only so the
+ * ffmpeg configure flags are ours (upstream's audio flavour ships no HLS
+ * demuxer). The owner is a field in the pin block below, not a constant.
  * Each release ships one `.jar` per ABI containing `lib/<abi>/libmpv.so`.
  * Flavours are `default` (mpv --enable-lgpl + LGPL ffmpeg), `full` and
  * `encoders-gpl`. We use `default` only — see CLAUDE.md "Dependency policy".
@@ -26,19 +29,35 @@ import java.util.zip.ZipFile
 // every download; a mismatch is a hard build failure, never a warning.
 // ─────────────────────────────────────────────────────────────────────────────
 ext.libmpv = [
-    // Release tag of media-kit/libmpv-android-audio-build.
-    release   : 'v1.1.9',
+    // GitHub owner of `libmpv-android-audio-build`. This is part of the pin, not
+    // a constant: we ship from our own fork so that the ffmpeg configure flags
+    // are under our control (see `release` below). Upstream is 'media-kit'.
+    owner     : 'afkcodes',
+    // Release tag in `<owner>/libmpv-android-audio-build`.
+    //
+    // v1.1.9-rnmedia.1 = upstream v1.1.9 with exactly two ffmpeg configure flags
+    // added (`--enable-demuxer=hls --enable-demuxer=mpegts`) on branch
+    // `rn-media-hls`. Upstream's audio flavour builds ffmpeg with
+    // `--disable-demuxers` plus an allow-list that carried neither, so every
+    // `.m3u8` failed with `unsupported-format` on-device — `--enable-protocol=hls`
+    // was present but that is the deprecated `hls://` protocol, useless without
+    // the demuxer. Same source tree otherwise (mpv 0.35.1, ffmpeg n6.0, NDK
+    // 27.1.12297006, all upstream patches incl. `mpv_lavc_set_java_vm`); the
+    // exported symbol set is identical to v1.1.9, so this is not an ABI change.
+    // Still LGPLv3: no `--enable-gpl`, no `--enable-nonfree`, no new libraries.
+    release   : 'v1.1.9-rnmedia.1',
     // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
     flavor    : 'default',
     // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
     // Must match the tag the headers in cpp/third_party/mpv are vendored from.
+    // Unchanged from v1.1.9 — the delta is ffmpeg flags, not an mpv bump.
     mpvVersion: '0.35.1',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
-        'arm64-v8a'  : '4938a4b6f9d209fa1913a673affe758937b2531e2ae2760e895a3beb6e47f320',
-        'armeabi-v7a': '70be6df2c0ea28a80b05d5684a33d0d1c92d0316a16cac6de80b4dadc9b2f2dc',
-        'x86'        : 'b8a4887b0a798e9ad37692ac56d3d1c7dd9c4807aae7b90e291a4d3401873748',
-        'x86_64'     : '9837c71de3883d70f07eadf91ea7f6b7131e4f4d94ba2569fff35cc3ce3e9810',
+        'arm64-v8a'  : 'f3aebbbf24a12c01cbdd38d18894edc0c0575e949ee036a53b1c0f13976f6e07',
+        'armeabi-v7a': '25824cd12561086a9f9c317918d46e91773ea18d4178c53d63f7c324ce2fcd1e',
+        'x86'        : 'fd2d715ecc7d9566c23b203a015e3246a717fc9f2348651a984bc721b49f54ff',
+        'x86_64'     : 'd821715f4cf4a2ba6ee0d54c0fa50b356025e90c9c035b5f468fbbac30beb14d',
     ],
 ]
 
@@ -124,7 +143,7 @@ def prepareLibmpv = tasks.register('prepareLibmpv') {
             }
 
             if (!jar.exists()) {
-                def url = "https://github.com/media-kit/libmpv-android-audio-build/releases/download/${pin.release}/${assetName}"
+                def url = "https://github.com/${pin.owner}/libmpv-android-audio-build/releases/download/${pin.release}/${assetName}"
                 logger.lifecycle("libmpv: downloading ${url}")
                 jar.parentFile.mkdirs()
                 // Download to a temp file first so an interrupted build can never
@@ -150,10 +169,13 @@ def prepareLibmpv = tasks.register('prepareLibmpv') {
                 if (entry == null) {
                     throw new GradleException("libmpv: ${assetName} does not contain ${entryName}")
                 }
-                // Only libmpv.so is extracted. The jars also carry
+                // Only libmpv.so is extracted, and our fork's jars ship nothing
+                // else. Upstream media-kit jars additionally carry
                 // libmediakitandroidhelper.so, which is media_kit's own Flutter
                 // glue (asset copying / content-URI fds) — libmpv.so has no
-                // DT_NEEDED on it and we do not use it.
+                // DT_NEEDED on it and we do not use it. Kept as an explicit
+                // single-entry extraction so switching back to an upstream tag
+                // still yields exactly libmpv.so and nothing more.
                 zip.getInputStream(entry).withStream { input ->
                     outFile.withOutputStream { os -> os << input }
                 }

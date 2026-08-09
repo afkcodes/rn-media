@@ -262,12 +262,16 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
 
 ## Limitations (current, honest)
 
-- **No HLS yet.** The pinned prebuilt audio binaries lack ffmpeg's `hls`/
-  `mpegts` demuxers (verified from the binaries themselves). HTTPS, ICY/
-  Icecast, and direct files all work. HLS lands with our own binary build —
-  top of the roadmap. HLS URLs today fail with a clean `unsupported-format`
-  error (and the player guards mpv's playlist demuxer from exploding your
-  queue with segment entries).
+- **HLS: Android yes, iOS not yet.** Android ships our own libmpv build
+  ([`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.1`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.1)),
+  which is media-kit's v1.1.9 with ffmpeg's `hls` and `mpegts` demuxers enabled
+  — stock media-kit audio binaries omit both, so `.m3u8` used to fail with a
+  clean `unsupported-format` error. iOS still uses the stock
+  `libmpv-darwin-build` binaries and therefore still cannot play HLS; rebuilding
+  those the same way is the next binary task. HTTPS, ICY/Icecast, and direct
+  files work on both. (On both platforms the player forces `demuxer=lavf` for
+  `.m3u8`/`.m3u` so mpv's playlist demuxer can't explode your queue with
+  segment entries.)
 - **No DRM**, by construction — libmpv has no Widevine/FairPlay. This library
   cannot power a licensed-catalog streaming app.
 - **iOS is code-complete but unverified** — no CI run has compiled it yet.
@@ -282,9 +286,11 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
   components, `--enable-version3`). They are **dynamically linked** (`.so` in
   the APK, embedded dynamic xcframeworks on iOS — the App Store-accepted
   pattern), which is what the LGPL's relink requirement needs. Ship your app's
-  licenses screen with the mpv/FFmpeg notices; the binaries come from
-  [media-kit's build repos](https://github.com/media-kit/libmpv-android-audio-build),
-  whose build scripts are public (source + relink obligations covered).
+  licenses screen with the mpv/FFmpeg notices. Android binaries are built by
+  [our fork of media-kit's build scripts](https://github.com/afkcodes/libmpv-android-audio-build/tree/rn-media-hls)
+  (the only change is two ffmpeg demuxer flags); iOS binaries come from
+  [media-kit's `libmpv-darwin-build`](https://github.com/media-kit/libmpv-darwin-build).
+  Both script sets are public, which covers the source + relink obligations.
 
 ## Development
 
@@ -303,7 +309,8 @@ to audio-only users.
 
 ## Roadmap (next)
 
-1. HLS-capable binary builds (forked build scripts, `hls`+`mpegts` demuxers)
+1. HLS-capable **iOS** binaries (`libmpv-darwin-build` fork; Android already
+   ships ours with the `hls`+`mpegts` demuxers)
 2. Typed shuffle, ICY now-playing metadata, ReplayGain, prefetch controls
 3. iOS CI verification + first published release
 4. Android Auto / CarPlay browse trees; typed EQ/DSP; FFT visualizer taps

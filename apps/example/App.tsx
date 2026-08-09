@@ -78,26 +78,32 @@ interface Track extends MediaItem {
 /**
  * Public HTTPS endpoints, so this runs on a clean device with no fixtures.
  *
- * Three deliberately different shapes, because each exercises a different part
- * of the stack:
+ * Deliberately different shapes, because each exercises a different part of
+ * the stack:
  *
  * 1. **Icecast MP3, live** — plain chunked HTTPS, no container index.
- * 2. **HLS/AAC, live** — a master playlist with three variants.
+ * 2. **HLS/AAC, live, master playlist** — three variants, AAC in MPEG-TS
+ *    segments. Exercises the one thing entries 1/4/5 do not: a
+ *    playlist-of-segments container, where ffmpeg (not our stream layer)
+ *    fetches every segment itself, plus variant selection.
+ * 3. **HLS/AAC, live, media playlist** — the *other* HLS shape: no master, the
+ *    URL is the segment list directly, so there is no variant to pick. Kept
+ *    alongside 2 because a build can get one right and the other wrong.
  *
- *    KNOWN GAP, kept here on purpose: this entry **fails** with
- *    `unsupported-format` on the pinned prebuilt libmpv. The
- *    `libmpv-android-audio-build` binaries configure ffmpeg with
- *    `--disable-demuxers` plus an explicit allow-list that contains neither
- *    `hls` nor `mpegts` (the configure line is readable with
- *    `strings libmpv.so`), so neither the HLS demuxer nor the deprecated
- *    `hls+https://` protocol can work. TLS itself is fine — entry 1 is HTTPS.
- *    Supporting HLS needs a libmpv rebuild with
- *    `--enable-demuxer=hls --enable-demuxer=mpegts`.
+ *    Both HLS entries work on Android since the libmpv pin moved to
+ *    `v1.1.9-rnmedia.1` (packages/player/android/libmpv.gradle): media-kit's
+ *    stock audio binaries configure ffmpeg with `--disable-demuxers` plus an
+ *    allow-list that carried neither `hls` nor `mpegts`, so they used to fail
+ *    with `unsupported-format` no matter what — `--enable-protocol=hls` was
+ *    present, but that is the deprecated `hls://` protocol, not the demuxer.
+ *    Our fork adds `--enable-demuxer=hls --enable-demuxer=mpegts` and nothing
+ *    else. iOS still uses the stock `libmpv-darwin-build` binaries, which have
+ *    not been rebuilt yet, so both are still expected to fail there.
  *
- * 3. **Finite MP3, 12 s** — short enough to reach `trackEnded` while you are
+ * 4. **Finite MP3, 12 s** — short enough to reach `trackEnded` while you are
  *    still looking at it, so it is what proves duration reporting and the
  *    end-of-queue path.
- * 4. **Finite MP3, ~6 min** — the same shape as 3, but long enough that the
+ * 5. **Finite MP3, ~6 min** — the same shape as 4, but long enough that the
  *    seek bar (in-app and on the lock screen) is actually usable: a 12-second
  *    track is under one thumb-width per 15 seconds of travel.
  */
@@ -119,8 +125,21 @@ const TRACKS: readonly Track[] = [
     id: 'fip-hls',
     title: 'FIP',
     artist: 'Radio France',
-    album: 'HLS · AAC · unsupported by this libmpv build',
+    album: 'HLS master · AAC · live (Android only)',
     uri: 'https://stream.radiofrance.fr/fip/fip.m3u8',
+    live: true,
+  },
+  {
+    id: 'vividh-bharati-hls',
+    title: 'Vividh Bharati',
+    artist: 'All India Radio',
+    // No master playlist: this URL *is* the media playlist (`#EXTINF` +
+    // `.ts` segments), so it covers the no-variant HLS path that entry 2
+    // does not.
+    album: 'HLS media · AAC · live (Android only)',
+    uri: 'https://radio.wavespb.com/live/146ed6ec6dea5a24/146ed6ec6dea5a24.m3u8',
+    artworkUri:
+      'https://airdco.pc.cdn.bitgravity.com/images/vividh-bharati.jpg',
     live: true,
   },
   {
