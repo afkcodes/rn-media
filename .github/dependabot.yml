@@ -1,56 +1,188 @@
+# Dependabot configuration — see ARCHITECTURE §17 for the policy this encodes.
+#
+# Two rules govern everything below:
+#
+#   1. We stay current. Every ecosystem is checked weekly, and minor/patch
+#      updates arrive as ONE grouped PR per ecosystem so the queue stays a
+#      handful of reviewable PRs instead of a flood of single-dependency ones.
+#      Majors always arrive on their own, because a major deserves its own
+#      changelog read.
+#
+#   2. Template-pinned dependencies are NOT dependencies. A whole class of
+#      packages here is version-locked to the React Native release we target
+#      (currently 0.86.0) or to the Nitro version nitrogen generated our C++
+#      against — see ARCHITECTURE §2 (Nitro pure-C++ HybridObject; New
+#      Architecture only; peer floor react-native >= 0.82). Bumping one of them
+#      in isolation does not fail at install time; it fails at transform time,
+#      at link time, or at runtime on a device. They move as a deliberate,
+#      tested RN-upgrade commit and never as a Dependabot PR, so they are
+#      ignored below with the reason attached.
+#
+# Reviewed 2026-08-10. When RN is upgraded, revisit the ignore blocks in the
+# same commit — they are pins, not permanent exclusions.
+
 version: 2
 enable-beta-ecosystems: true
+
 updates:
+  # ── GitHub Actions ──────────────────────────────────────────────────────
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
+      day: 'monday'
     labels:
       - 'dependencies'
+      - 'github-actions'
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
 
+  # ── Gradle (Android library modules + the example app) ──────────────────
+  # NOTE: the previous config pointed at a root '/android/' that does not
+  # exist; the three library modules under packages/*/android were therefore
+  # never checked at all. They are the ones that actually declare versions
+  # (media3, AGP) — the example app's build.gradle takes its classpath
+  # versions from RN's version catalog and pins only the wrapper.
   - package-ecosystem: 'gradle'
     directories:
-      - '/android/'
       - '/apps/example/android/'
+      - '/packages/*/android/'
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
+      day: 'monday'
     labels:
-      - 'nitro-core'
-      - 'nitrogen'
       - 'dependencies'
       - 'kotlin'
+    groups:
+      gradle:
+        applies-to: version-updates
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+    ignore:
+      # The Gradle wrapper moves with the RN/AGP matrix, not on its own.
+      # Proof, not theory: Dependabot's 9.3.1 -> 9.7.0 PR (#5) failed CI with
+      # ":gradle-plugin:settings-plugin:compileKotlin > Internal compiler
+      # error" — RN 0.86's own Gradle plugin does not compile under 9.7.0.
+      - dependency-name: 'gradle-wrapper'
+      # AGP is chosen by the React Native version and by what the consuming
+      # app can tolerate; a library that compiles against a newer AGP than the
+      # app breaks the app, not us. Raised during RN upgrades.
+      - dependency-name: 'com.android.tools.build:gradle'
+      # Kotlin 2.1.20 is what RN 0.86's version catalog hands an Expo prebuild
+      # app (ARCHITECTURE §16) and what media3 1.11 expects. Kotlin's ABI is
+      # not forgiving across minors when nitrogen-generated Kotlin is in the
+      # same compilation.
+      - dependency-name: 'org.jetbrains.kotlin:*'
 
+  # ── Bundler (CocoaPods toolchain for the example app) ───────────────────
   - package-ecosystem: 'bundler'
     directory: '/apps/example/'
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
+      day: 'monday'
     labels:
       - 'dependencies'
       - 'ruby'
+    groups:
+      bundler:
+        applies-to: version-updates
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+    ignore:
+      # These two upper bounds are copied verbatim from
+      # @react-native-community/template@0.86.0's Gemfile. They are RN's
+      # deliberate exclusions of versions that break CocoaPods, not stale pins
+      # of ours. Relaxing them re-admits exactly what RN excluded — and iOS
+      # only compiles on CI here (the dev machine is Linux), so we would be
+      # trusting one macOS runner over the RN team. Tracks the template.
+      - dependency-name: 'xcodeproj'
+      - dependency-name: 'concurrent-ruby'
 
+  # ── npm (the whole workspace) ───────────────────────────────────────────
+  # '/' covers apps/example and packages/* too: this is a single npm workspace
+  # with one root package-lock.json, and Dependabot edits the individual
+  # workspace package.json files from here. The old separate
+  # '/apps/example/' entry only produced duplicate "across 2 directories" PRs.
   - package-ecosystem: 'npm'
-    directories:
-      - '/apps/example/'
-      - '/'
+    directory: '/'
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
+      day: 'monday'
     labels:
-      - 'nitro-core'
       - 'dependencies'
       - 'typescript'
-      - 'nitrogen'
-
     groups:
-      react-native-cli:
+      npm-development:
+        applies-to: version-updates
+        dependency-type: 'development'
         patterns:
-          - '@react-native-community/cli*'
-      babel:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+      npm-production:
+        applies-to: version-updates
+        dependency-type: 'production'
         patterns:
-          - '@babel/*'
-      react-native:
-        patterns:
-          - '@react-native/*'
-      nitro:
-        patterns:
-          - 'nitrogen'
-          - 'react-native-nitro-modules'
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+    ignore:
+      # --- React, pinned by the RN 0.86 template ---------------------------
+      # react and react-dom must be byte-identical to each other, and the
+      # version is chosen by the RN release, not by us. react-dom is only here
+      # for @testing-library/react — the one DOM test environment we have — so
+      # letting it drift from react gives us a mismatched React runtime under
+      # the entire player test suite.
+      - dependency-name: 'react'
+      - dependency-name: 'react-dom'
+      # @types/react is pinned exact (19.2.0) to match the React it types;
+      # a floating types package against a pinned runtime is how you get
+      # type errors that no runtime change explains.
+      - dependency-name: '@types/react'
+      - dependency-name: '@types/react-dom'
+
+      # --- React Native and its toolchain ----------------------------------
+      # ARCHITECTURE §2: New Architecture only, peer floor react-native
+      # >= 0.82, and the native binding is generated against a specific RN.
+      # The @react-native/* packages ship WITH react-native and carry its
+      # exact version — babel-preset, codegen, metro-config and the runtime
+      # are one unit. @react-native-community/cli drives the Android/iOS build
+      # integration and is pinned exact by the template for the same reason.
+      - dependency-name: 'react-native'
+      - dependency-name: '@react-native/*'
+      - dependency-name: '@react-native-community/cli*'
+
+      # --- Nitro ------------------------------------------------------------
+      # nitrogen GENERATES the C++/Kotlin/Swift in packages/*/nitrogen from a
+      # specific react-native-nitro-modules runtime; the two are one version.
+      # Bumping either alone leaves generated bindings compiled against a
+      # runtime that no longer matches — and per ARCHITECTURE's platform
+      # truths, a wrong nitrogen binding compiles, links, ships, and only then
+      # throws at runtime. They are raised together, with codegen re-run and
+      # the regenerated output committed.
+      - dependency-name: 'react-native-nitro-modules'
+      - dependency-name: 'nitrogen'
+
+      # --- Babel majors -----------------------------------------------------
+      # 7.x minor/patch is welcome (it flows through the grouped PR above).
+      # Babel 8 is not: @react-native/babel-preset@0.86.0 depends on
+      # "@babel/core": "^7.25.2" and Metro's transformer chain sits on the
+      # same major, so a Babel 8 install means two majors in one graph and a
+      # bundler that fails at transform time. Lifts when RN's preset lifts.
+      - dependency-name: '@babel/*'
+        update-types:
+          - 'version-update:semver-major'
