@@ -46,7 +46,6 @@
     "ios/**/*.swift",
     "ios/fetch-libmpv.sh",
     "ios/libmpv.pin",
-    "app.plugin.js",
     "*.podspec",
     "README.md",
     "!ios/Frameworks",

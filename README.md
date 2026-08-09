@@ -69,6 +69,35 @@ app. `POST_NOTIFICATIONS` is *not* required for media notifications.
 <array><string>audio</string></array>
 ```
 
+### Expo
+
+Works with the prebuild (managed) workflow — no manual native edits. Add the
+config plugin, which `@rn-media/media-session` ships, and prebuild:
+
+```json
+{
+  "expo": {
+    "plugins": ["@rn-media/media-session"]
+  }
+}
+```
+
+```sh
+npx expo prebuild --clean
+npx expo run:ios    # or run:android / an EAS build
+```
+
+The plugin merges `UIBackgroundModes: audio` into `Info.plist` (idempotently,
+preserving any other modes). Android needs no plugin work — the library manifest
+already merges the permissions and the service. The other two packages need no
+plugin at all. To brand the Android notification, pass
+`{ "androidNotificationIcon": "./assets/ic_notification.xml" }` as plugin
+options — see the
+[media-session README](packages/media-session/README.md#expo-config-plugin).
+
+Expo Go cannot load this library (it has native code); a development build is
+required.
+
 ## Quick start: just play something
 
 ```tsx
