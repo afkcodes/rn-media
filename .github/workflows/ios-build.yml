@@ -92,7 +92,10 @@ jobs:
           path: |
             ~/.cocoapods/repos
             apps/example/ios/Pods
-          key: ${{ runner.os }}-pods-${{ hashFiles('apps/example/ios/Podfile.lock') }}
+          # Podfile.lock is not committed, so hashing it alone would yield a
+          # constant key and a never-invalidated Pods/ cache. Key on what
+          # actually determines the pod graph instead.
+          key: ${{ runner.os }}-pods-${{ hashFiles('packages/*/*.podspec', 'packages/player/ios/libmpv.pin', 'package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-pods-
 
