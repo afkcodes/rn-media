@@ -42,9 +42,6 @@ on:
       - '**/nitro.json'
   workflow_dispatch:
 
-env:
-  USE_CCACHE: 1
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -103,16 +100,65 @@ jobs:
         working-directory: apps/example/ios
         run: pod install
 
+      # `xcpretty` swallows the body of linker diagnostics (the actual list of
+      # undefined symbols never reaches the console), so the raw xcodebuild
+      # output is tee'd to a file that the failure/artifact steps below mine.
       - name: Build App
         working-directory: apps/example/ios
         run: |
           set -o pipefail && xcodebuild \
-            CC=clang CPLUSPLUS=clang++ LD=clang LDPLUSPLUS=clang++ \
-            -derivedDataPath build -UseModernBuildSystem=YES \
+            -derivedDataPath build \
             -workspace RnMediaPlayerExample.xcworkspace \
             -scheme RnMediaPlayerExample \
             -sdk iphonesimulator \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -destination 'generic/platform=iOS Simulator' \
             build \
-            CODE_SIGNING_ALLOWED=NO | xcpretty
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild-raw.log | xcpretty
+
+      - name: Diagnose build failure
+        if: failure()
+        working-directory: apps/example/ios
+        run: |
+          echo "::group::Errors"
+          grep -n -E "error:|Undefined symbols|symbol\(s\) not found|framework not found|ld: " xcodebuild-raw.log | head -100 || true
+          echo "::endgroup::"
+
+          echo "::group::Undefined symbol details"
+          awk '/Undefined symbols/,/ld: symbol\(s\) not found/' xcodebuild-raw.log | head -200 || true
+          echo "::endgroup::"
+
+          echo "::group::Link (Ld) invocation"
+          grep -n -m1 -A 3 "^ *Ld " xcodebuild-raw.log || true
+          awk '/^ *Ld .*RnMediaPlayerExample/{found=1} found{print; if (++n > 12) exit}' xcodebuild-raw.log || true
+          echo "::endgroup::"
+
+          echo "::group::Aggregate xcconfig (linker flags the app target actually gets)"
+          for f in "Pods/Target Support Files/Pods-RnMediaPlayerExample/"*.xcconfig; do
+            echo "----- $f"; cat "$f"
+          done
+          echo "::endgroup::"
+
+          echo "::group::Unpacked XCFramework slices"
+          find build/Build/Products -maxdepth 3 -name '*.framework' -o -maxdepth 3 -name 'XCFrameworkIntermediates' | head -50 || true
+          ls -la build/Build/Products/Debug-iphonesimulator 2>/dev/null | head -60 || true
+          echo "::endgroup::"
+
+          echo "::group::Last 150 lines of raw log"
+          tail -150 xcodebuild-raw.log
+          echo "::endgroup::"
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            apps/example/ios/xcodebuild-raw.log
+            apps/example/ios/Podfile.lock
+            apps/example/ios/Pods/Target Support Files/Pods-RnMediaPlayerExample/*.xcconfig
+            apps/example/ios/Pods/Target Support Files/RnMediaPlayer/*.xcconfig
+            apps/example/ios/Pods/Target Support Files/RnMediaAudioSession/*.xcconfig
+            apps/example/ios/Pods/Target Support Files/RnMediaMediaSession/*.xcconfig
