@@ -174,6 +174,33 @@ describe('init lifecycle', () => {
     expect(native.stopServiceCalls).toBe(1)
   })
 
+  it('comes back fully working after stopService — broadcasts and commands', async () => {
+    // The regression this guards: "stop, then play again" must rebuild a live
+    // session. A half-restored one (broadcasts refused, or commands still
+    // routed to the discarded handler) is how an app ends up playing audio
+    // with no notification and no remote control behind it.
+    const native = new FakeNativeMediaSession()
+    const service = createMediaService(native)
+    const first = new RecordingHandler()
+    await service.init(() => first)
+    service.setPlaybackState(playbackState())
+    await service.stopService()
+
+    const second = new RecordingHandler()
+    const restarted = await service.init(() => second)
+
+    restarted.setQueue([item('a')])
+    restarted.setMediaItem(item('a'))
+    restarted.setPlaybackState(playbackState({ status: 'playing' }))
+    expect(native.playbackStates).toHaveLength(2)
+    expect(native.last.queue).toHaveLength(1)
+
+    native.emit().pause()
+    expect(second.calls).toEqual(['pause'])
+    // The handler from the first session is gone, not merely shadowed.
+    expect(first.calls).toEqual([])
+  })
+
   it('keeps the session up when native stopService fails', async () => {
     const native = new FakeNativeMediaSession()
     native.stopServiceError = new Error('binder died')

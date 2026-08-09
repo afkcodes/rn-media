@@ -416,7 +416,26 @@ class Playback {
   /** Idempotent: safe to call from every mount, and from a Fast Refresh. */
   async start(): Promise<void> {
     await (this.#startingPlayer ??= this.#createPlayer());
-    await (this.#startingService ??= this.#createService());
+    await this.#ensureService();
+  }
+
+  /**
+   * Bring the media session up if it is not up already.
+   *
+   * {@link stop} tears it down — that is what "stop" means here — and the
+   * session contract is explicit that `init` may be called again once
+   * `stopService()` has resolved. So every path that is about to make sound
+   * goes through this first. Without it, playing after a stop would produce
+   * audio with no notification and no remote controls forever, because
+   * {@link #broadcast} drops every broadcast while `#service` is undefined and
+   * nothing else ever calls {@link start} again (the mount effect runs once).
+   *
+   * Callers deliberately do not await it: `#createService` force-broadcasts the
+   * player's current state when it resolves, so the session catches up by
+   * itself rather than holding audio behind a native round trip.
+   */
+  #ensureService(): Promise<void> {
+    return (this.#startingService ??= this.#createService());
   }
 
   async #createPlayer(): Promise<void> {
@@ -481,6 +500,9 @@ class Playback {
       if (this.#player !== undefined) this.#broadcast(this.#player.state, true);
     } catch (cause) {
       console.error('[example] MediaService.init failed:', cause);
+      // Let the next play retry: a failed init must not latch the app into a
+      // permanently session-less state (`#ensureService` keys off this field).
+      this.#startingService = undefined;
     }
     this.#notify();
   }
@@ -561,6 +583,7 @@ class Playback {
   async play(): Promise<void> {
     const player = this.#player;
     if (player === undefined) return;
+    void this.#ensureService();
     if (await AudioSession.activate()) player.play();
     else console.warn('[example] audio focus denied — not starting');
   }
@@ -575,11 +598,15 @@ class Playback {
   }
 
   next(): void {
-    void this.#player?.playlist.next();
+    if (this.#player === undefined) return;
+    void this.#ensureService();
+    void this.#player.playlist.next();
   }
 
   previous(): void {
-    void this.#player?.playlist.previous();
+    if (this.#player === undefined) return;
+    void this.#ensureService();
+    void this.#player.playlist.previous();
   }
 
   /**
@@ -602,6 +629,7 @@ class Playback {
   async jumpTo(index: number): Promise<void> {
     const player = this.#player;
     if (player === undefined) return;
+    void this.#ensureService();
     if (!(await AudioSession.activate())) {
       console.warn('[example] audio focus denied — not starting');
       return;
@@ -623,8 +651,11 @@ class Playback {
   }
 
   /**
-   * The only thing that ends background execution — pause never does. Leaves
-   * the player alive so `start()` can bring the session back.
+   * The only thing that ends background execution — pause never does.
+   *
+   * The player stays alive and so does the app; only the session goes. Clearing
+   * `#startingService` is what re-arms {@link #ensureService}, so the next play
+   * builds a fresh session and the notification comes back.
    */
   async stop(): Promise<void> {
     this.pause();
