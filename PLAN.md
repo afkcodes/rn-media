@@ -284,7 +284,9 @@ Architectural consequences, enforced from day one:
 ## 7.9 IMPLEMENTATION STATUS (2026-08-09)
 
 **Phases 0–3 are COMPLETE and device-verified** (physical Android 16 device;
-iOS code-complete, CI-unverified; Expo config plugin from Phase 3 deferred).
+iOS is code-complete and CI-built — it compiles, links and embeds the libmpv
+xcframeworks — but has never been run on a device; Expo config plugin from
+Phase 3 deferred).
 Phase 4 (video plugin) not started; Phase 5 backlogged. Shipped and proven:
 
 - `@rn-media/player` — multi-instance libmpv Player; typed state/reducer;
@@ -349,7 +351,7 @@ Covered in v1: gapless playlist/queue, metadata→system UI, custom actions+icon
 (Android), live/ICY streams, background+focus, pitch-corrected speed,
 loop modes, all ffmpeg formats the binaries enable.
 
-**HLS — DONE on Android (2026-08-09), still open on iOS.** media-kit's stock
+**HLS — DONE on both platforms (2026-08-09).** media-kit's stock
 *audio* binaries do NOT include ffmpeg's `hls`/`mpegts` demuxers (verified from
 the configure line embedded in libmpv.so, and reproduced on-device as a clean
 `unsupported-format`); `--enable-protocol=hls` is present but that is the
@@ -366,9 +368,32 @@ the allow-list and was checked rather than assumed: `mov` (fMP4 segments),
 `ac3`/`aac*`/`mpegaudio` parsers, the `crypto` protocol for AES-128
 (`CONFIG_CRYPTO_PROTOCOL 1` in the generated config, not just on the command
 line), and id3v2 (compiled unconditionally by libavformat).
-**iOS remains without HLS** — it still uses stock `libmpv-darwin-build`; the
-same two flags need the same treatment there, and that is now the top binary
-task. Also: mpv's playlist demuxer parses `.m3u8` as a plain playlist (queue
+**iOS now has the same treatment**, via the same recipe:
+`afkcodes/libmpv-darwin-build`, branch `rn-media-hls` off `v0.7.2`, released as
+**`v0.7.2-rnmedia.1`** and pinned in `packages/player/ios/libmpv.pin` (repo
+owner is a pin field there too). The delta versus upstream v0.7.2 is again
+exactly `--enable-demuxer=hls --enable-demuxer=mpegts` — same mpv 0.36.0 /
+ffmpeg 6.0 / mbedTLS 3.4.1, still LGPLv3. Verified from the released asset on
+Linux rather than assumed: the configure-line diff is exactly +2 flags / -0;
+the demuxers are genuinely compiled in (HLS's `m3u8_hold_counters` AVOption and
+mpegts's `resync_size` / `skip_unknown_pmt` / `fix_teletext_pts` /
+`merge_pmt_versions` are present and all absent upstream); `Mpv`'s defined
+export set is byte-identical (53 symbols), as are Avcodec/Avfilter/Avutil/
+Mbed*/Swresample/Swscale; only libavformat grew (+67 KB on the device slice),
+adding three `avpriv_mpegts_parse_*` symbols and imports of
+`avpriv_ac3_parse_header` / `avpriv_adts_header_parse` / `avcodec_get_type` /
+`av_buffer_pool_*` — ffmpeg's documented `hls_demuxer_select` chain and nothing
+else. The fork's CI was also trimmed to build just the one
+`ios-universal-audio-default` target (6.5 min instead of the ~40-archive
+matrix).
+
+**The two platforms are not equally proven.** Android HLS was reproduced
+playing on a device; iOS is **link-verified via CI only** — the frameworks
+fetch, pod-install, link and embed, and the demuxers are demonstrably in the
+shipped binary, but **runtime playback on an iOS device remains unverified**.
+That on-device check is now the top iOS task.
+
+Also: mpv's playlist demuxer parses `.m3u8` as a plain playlist (queue
 explosion) unless `demuxer=lavf` is forced for HLS URIs — guard shipped in the
 player.
 
