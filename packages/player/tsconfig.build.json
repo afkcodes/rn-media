@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // `bob build` wipes `lib/typescript` before invoking tsc. An incremental
+    // (`composite`) build would then see an up-to-date .tsbuildinfo and emit
+    // nothing — silently, with exit code 0 — so the publish config turns
+    // incrementality off entirely.
+    "composite": false,
+    "incremental": false,
+    // `composite` normally infers this (it defaults rootDir to the config's
+    // directory). Without it, TS 6 rejects the project with TS5011 because the
+    // common source directory is `./src`, and bob expects declarations under
+    // `lib/typescript/src/**` to match the `types` field.
+    "rootDir": "."
+  },
+  "exclude": [
+    "**/node_modules",
+    "**/lib",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "vitest.config.mts"
+  ]
+}

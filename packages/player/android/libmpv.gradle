@@ -1,0 +1,181 @@
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
+/*
+ * Prebuilt libmpv (audio-only, LGPL flavour) for Android.
+ *
+ * Source of truth: https://github.com/media-kit/libmpv-android-audio-build/releases
+ * Each release ships one `.jar` per ABI containing `lib/<abi>/libmpv.so`.
+ * Flavours are `default` (mpv --enable-lgpl + LGPL ffmpeg), `full` and
+ * `encoders-gpl`. We use `default` only — see CLAUDE.md "Dependency policy".
+ *
+ * The integration mirrors media_kit's proven Gradle pattern
+ * (media-kit/media-kit → libs/android/media_kit_libs_android_audio/android/build.gradle):
+ * download the per-ABI jars at build time, verify a pinned checksum, expose the
+ * `.so`s to the build. Two deliberate departures from that prior art:
+ *   1. SHA-256 instead of MD5 (MD5 collisions are trivially constructible; a
+ *      checksum pin is a supply-chain control, so it must be a real hash).
+ *   2. The `.so`s are *extracted* rather than handed to AGP as a jar
+ *      dependency, because CMake also has to link against them (media_kit
+ *      dlopen()s libmpv at runtime and never links it, so a jar sufficed there).
+ */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE PIN. Bumping libmpv = editing this block and nothing else.
+// Checksums come from the GitHub release asset digests and are re-verified on
+// every download; a mismatch is a hard build failure, never a warning.
+// ─────────────────────────────────────────────────────────────────────────────
+ext.libmpv = [
+    // Release tag of media-kit/libmpv-android-audio-build.
+    release   : 'v1.1.9',
+    // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
+    flavor    : 'default',
+    // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
+    // Must match the tag the headers in cpp/third_party/mpv are vendored from.
+    mpvVersion: '0.35.1',
+    // SHA-256 of `<flavor>-<abi>.jar`.
+    sha256    : [
+        'arm64-v8a'  : '4938a4b6f9d209fa1913a673affe758937b2531e2ae2760e895a3beb6e47f320',
+        'armeabi-v7a': '70be6df2c0ea28a80b05d5684a33d0d1c92d0316a16cac6de80b4dadc9b2f2dc',
+        'x86'        : 'b8a4887b0a798e9ad37692ac56d3d1c7dd9c4807aae7b90e291a4d3401873748',
+        'x86_64'     : '9837c71de3883d70f07eadf91ea7f6b7131e4f4d94ba2569fff35cc3ce3e9810',
+    ],
+]
+
+// Downloaded jars live in the Gradle user home, not in `build/`: they survive
+// `./gradlew clean` and are shared across checkouts, so a clean build is still
+// offline-capable once the artifacts have been fetched a single time.
+def libmpvDownloadCache = new File(gradle.gradleUserHomeDir, "caches/rn-media/libmpv-android-audio/${ext.libmpv.release}")
+
+// Extracted `.so`s. This directory is BOTH a jniLibs source set (→ AAR) and the
+// lookup root CMake imports from (→ link). See build.gradle / CMakeLists.txt.
+def libmpvJniLibsDir = new File(project.buildDir, 'libmpv/jniLibs')
+ext.libmpvJniLibsDir = libmpvJniLibsDir
+
+static def downloadTo(String url, File dest) {
+    // openStream() has no timeouts at all: a stalled GitHub CDN connection would
+    // hang the build forever instead of failing. Set both, and retry — release
+    // asset fetches are the one genuinely flaky step in an otherwise local build.
+    def lastError = null
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        try {
+            def conn = new URL(url).openConnection()
+            conn.setConnectTimeout(30_000)
+            conn.setReadTimeout(120_000)
+            conn.setRequestProperty('Accept', 'application/octet-stream')
+            conn.getInputStream().withStream { input ->
+                dest.withOutputStream { os -> os << input }
+            }
+            return
+        } catch (IOException e) {
+            lastError = e
+            dest.delete()
+            if (attempt < 3) Thread.sleep(2000L * attempt)
+        }
+    }
+    throw new GradleException("libmpv: download failed after 3 attempts: ${url}", lastError)
+}
+
+static def sha256Of(File f) {
+    def digest = MessageDigest.getInstance('SHA-256')
+    f.withInputStream { input ->
+        byte[] buf = new byte[1 << 16]
+        int n
+        while ((n = input.read(buf)) > 0) digest.update(buf, 0, n)
+    }
+    return digest.digest().encodeHex().toString()
+}
+
+// Captured outside the task closure: inside it, `ext` would resolve against the
+// task's own extra-properties extension rather than the project's.
+def pin = project.ext.libmpv
+def abis = reactNativeArchitectures()
+
+def unknownAbis = abis.findAll { !pin.sha256.containsKey(it) }
+if (!unknownAbis.isEmpty()) {
+    throw new GradleException("No pinned libmpv checksum for ABI(s) ${unknownAbis}. " +
+        "Add them to ext.libmpv.sha256 in android/libmpv.gradle.")
+}
+
+def prepareLibmpv = tasks.register('prepareLibmpv') {
+    group = 'build setup'
+    description = "Download, verify and extract prebuilt libmpv ${pin.release} (${pin.flavor})"
+
+    // Re-run when the pin or the requested ABI set changes; skip otherwise.
+    inputs.property('release', pin.release)
+    inputs.property('flavor', pin.flavor)
+    inputs.property('sha256', abis.collectEntries { [(it): pin.sha256[it]] })
+    outputs.dir(libmpvJniLibsDir)
+
+    doLast {
+        // Wipe first: shrinking `-PreactNativeArchitectures` between builds must
+        // not leave a stale libmpv.so for a dropped ABI in the jniLibs source set
+        // (it would be packaged into the AAR without a matching libRnMediaPlayer.so).
+        libmpvJniLibsDir.deleteDir()
+
+        abis.each { abi ->
+            def assetName = "${pin.flavor}-${abi}.jar"
+            def expected = pin.sha256[abi]
+            def jar = new File(libmpvDownloadCache, assetName)
+
+            if (jar.exists() && sha256Of(jar) != expected) {
+                logger.lifecycle("libmpv: checksum mismatch for cached ${assetName}, re-downloading")
+                jar.delete()
+            }
+
+            if (!jar.exists()) {
+                def url = "https://github.com/media-kit/libmpv-android-audio-build/releases/download/${pin.release}/${assetName}"
+                logger.lifecycle("libmpv: downloading ${url}")
+                jar.parentFile.mkdirs()
+                // Download to a temp file first so an interrupted build can never
+                // leave a truncated jar behind that looks cached.
+                def partial = new File(jar.parentFile, "${assetName}.part")
+                partial.delete()
+                downloadTo(url, partial)
+                def actual = sha256Of(partial)
+                if (actual != expected) {
+                    partial.delete()
+                    throw new GradleException(
+                        "libmpv: SHA-256 verification failed for ${assetName}\n" +
+                        "  expected ${expected}\n  actual   ${actual}")
+                }
+                partial.renameTo(jar)
+            }
+
+            def outFile = new File(libmpvJniLibsDir, "${abi}/libmpv.so")
+            outFile.parentFile.mkdirs()
+            def entryName = "lib/${abi}/libmpv.so"
+            new ZipFile(jar).withCloseable { zip ->
+                def entry = zip.getEntry(entryName)
+                if (entry == null) {
+                    throw new GradleException("libmpv: ${assetName} does not contain ${entryName}")
+                }
+                // Only libmpv.so is extracted. The jars also carry
+                // libmediakitandroidhelper.so, which is media_kit's own Flutter
+                // glue (asset copying / content-URI fds) — libmpv.so has no
+                // DT_NEEDED on it and we do not use it.
+                zip.getInputStream(entry).withStream { input ->
+                    outFile.withOutputStream { os -> os << input }
+                }
+            }
+        }
+    }
+}
+
+// The extracted `.so`s go into the AAR as `jni/<abi>/libmpv.so`.
+// No double-packaging risk with the CMake output: externalNativeBuild only
+// packages the targets it builds (libRnMediaPlayer.so), and libmpv is an
+// IMPORTED target, which CMake never copies. The two sets are disjoint.
+android.sourceSets.main.jniLibs.srcDirs += [libmpvJniLibsDir]
+
+tasks.configureEach { t ->
+    // CMake needs libmpv.so on disk to link; the jniLibs merge needs it to package.
+    // `jniLibs.srcDirs += File` carries no task dependency, so wire it explicitly.
+    if (t.name == 'preBuild' ||
+        t.name ==~ /^merge.*JniLibFolders$/ ||
+        t.name ==~ /^merge.*NativeLibs$/ ||
+        t.name ==~ /^(configure|build)CMake.*$/ ||
+        t.name ==~ /^generateJsonModel.*$/) {
+        t.dependsOn(prepareLibmpv)
+    }
+}

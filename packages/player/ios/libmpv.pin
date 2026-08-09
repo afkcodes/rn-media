@@ -1,0 +1,45 @@
+# Pinned prebuilt libmpv binaries for iOS — SINGLE SOURCE OF TRUTH.
+#
+# Consumed by `packages/player/ios/fetch-libmpv.sh` (POSIX `.`-sourced, so:
+# KEY=value only, no spaces around `=`, no shell expansions; quote any value
+# that contains whitespace).
+#
+# Upstream: https://github.com/media-kit/libmpv-darwin-build
+# Flavour:  `audio` + `default`.
+#   - `audio`   → no video codecs / libass / libplacebo (this package is the
+#                 audio core; video ships later as a separate plugin).
+#   - `default` → FFmpeg built WITHOUT `--enable-gpl` (no x264/x265/smbclient),
+#                 i.e. LGPL. Never switch to `full`/`encodersgpl` here: those
+#                 are GPL and would relicense every consuming app (PLAN.md §6).
+#
+# The artifacts are DYNAMIC frameworks (.dylib inside a .framework, embedded and
+# re-signed into the app bundle). Dynamic linking is what satisfies the LGPL
+# relink obligation on iOS and is the App-Store-accepted pattern (PLAN.md §6).
+#
+# To bump: query
+#   https://api.github.com/repos/media-kit/libmpv-darwin-build/releases/latest
+# pick the `ios-universal-audio-default` bundle, recompute the SHA-256 of the
+# downloaded file, and update TAG + SHA256 + the metadata below together.
+
+LIBMPV_DARWIN_BUILD_REPO=media-kit/libmpv-darwin-build
+LIBMPV_DARWIN_BUILD_TAG=v0.7.2
+LIBMPV_DARWIN_BUILD_VARIANT=ios-universal-audio-default
+
+# SHA-256 of
+# libmpv-xcframeworks_${TAG}_${VARIANT}.tar.gz
+# (independently reproduced from the release asset; identical to the pin in
+# media-kit's own `libs/ios/media_kit_libs_ios_audio/ios/Makefile`).
+LIBMPV_DARWIN_BUILD_SHA256=5705705574bad475de5d1d399afccea08b96fbf809643c327a5de1dd156e62dd
+
+# --- metadata (informational; verified by inspecting the binaries) -----------
+# mpv                       0.36.0   (MPV_CLIENT_API_VERSION = 2.1)
+# FFmpeg                    6.0      (LGPL: no --enable-gpl, --enable-version3)
+# mbedTLS                   3.4.1
+# xcframework slices        ios-arm64, ios-arm64_x86_64-simulator
+# MinimumOSVersion          9.0 (device slice) / 14.0 (simulator slice)
+LIBMPV_MPV_VERSION=0.36.0
+LIBMPV_FFMPEG_VERSION=6.0
+LIBMPV_MBEDTLS_VERSION=3.4.1
+
+# Frameworks expected in the bundle (used as a post-extraction sanity check).
+LIBMPV_EXPECTED_FRAMEWORKS="Avcodec Avfilter Avformat Avutil Mbedcrypto Mbedtls Mbedx509 Mpv Swresample Swscale"
