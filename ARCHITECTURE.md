@@ -113,15 +113,25 @@ only via `setMediaItem` — without the merge, media3 marked queue-backed
 timelines unseekable and dropped the scrubber).
 
 ### 11. Binaries: pinned, forked, LGPL, dynamically linked
-Prebuilt libmpv comes from our forks of media-kit's build repos
-(`afkcodes/libmpv-android-audio-build`, `afkcodes/libmpv-darwin-build`),
-pinned by exact tag + SHA-256 (hard build failure on mismatch), cached for
-offline builds. Forking is deliberate: upstream's audio flavor omits the
+Prebuilt libmpv comes from our forks of media-kit's build repos, and as of
+2026-08-09 **both platforms ship rn-media builds** rather than upstream's:
+`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.1` and
+`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.1`. Each is pinned by exact tag +
+SHA-256 (hard build failure on mismatch) and cached for offline builds; the
+repo owner is itself a pin field on both platforms, so re-pointing at upstream
+is a one-line change. Forking is deliberate: upstream's audio flavor omits the
 HLS/mpegts demuxers **by scoping, not oversight** (their video flavor has
-them), so we own the configure flags. LGPL v3 (ffmpeg `--enable-version3`,
-never `--enable-gpl`), dynamically linked on both platforms (`.so` in APK,
-embedded dynamic xcframeworks on iOS) — the App-Store-accepted pattern that
-satisfies the relink obligation. Wrapper code is MIT.
+them), so we own the configure flags. On both platforms the delta versus the
+upstream release is exactly `--enable-demuxer=hls --enable-demuxer=mpegts` —
+same source tree, same patches, identical exported symbol set. LGPL v3 (ffmpeg
+`--enable-version3`, never `--enable-gpl`), dynamically linked on both
+platforms (`.so` in APK, embedded dynamic xcframeworks on iOS) — the
+App-Store-accepted pattern that satisfies the relink obligation. Wrapper code
+is MIT.
+
+The two forks are **not equally verified**: the Android build is confirmed
+playing HLS on a device, the iOS build only compiles, links and embeds in CI.
+See §"Platform truths" and the README's Limitations for the exact standing.
 
 ### 12. Defaults chosen by measurement (each overridable)
 - **User-Agent `rn-media (libmpv)`** — real Shoutcast hosts return 401 for the
