@@ -116,19 +116,22 @@ timelines unseekable and dropped the scrubber).
 Prebuilt libmpv comes from our forks of media-kit's build repos, and as of
 2026-08-09 **both platforms ship rn-media builds** rather than upstream's:
 `afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.2` and
-`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.1`. Each is pinned by exact tag +
+`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.2`. Each is pinned by exact tag +
 SHA-256 (hard build failure on mismatch) and cached for offline builds; the
 repo owner is itself a pin field on both platforms, so re-pointing at upstream
 is a one-line change. Forking is deliberate: upstream's audio flavor omits the
 HLS/mpegts demuxers **by scoping, not oversight** (their video flavor has
 them), so we own the configure flags. The delta versus upstream is additive
-configure flags only — hls+mpegts demuxers (both platforms), plus 16 LGPL audio
-filters + aresample on Android (§18; iOS gains them at its next rebuild) —
-same source tree, same patches, and no change to the libmpv ABI we link
+configure flags only, and **the two platforms now carry the identical delta**:
+hls+mpegts demuxers, plus the same 16 LGPL audio filters incl. aresample (§18)
+— same source tree, same patches, and no change to the libmpv ABI we link
 (Android's `libmpv.so` and iOS's `Mpv.framework` both export exactly what
-upstream did). On iOS, where ffmpeg ships as separate dylibs, `libavformat`
-alone grows: it gains the mpegts demuxer's three `avpriv_mpegts_parse_*` entry
-points and imports the `hls_demuxer_select` chain. LGPL v3 (ffmpeg
+upstream did). On iOS, where ffmpeg ships as separate dylibs, exactly two of
+the ten grow and the export tries of all ten are byte-identical to upstream's:
+`libavformat` gains the mpegts demuxer's three `avpriv_mpegts_parse_*` entry
+points and imports the `hls_demuxer_select` chain, and `libavfilter` gains
++103 KB (device slice) of filter objects plus imports of already-exported
+libavutil surface (`av_tx_*`, `av_fifo_*`, `av_expr_parse_and_eval`). LGPL v3 (ffmpeg
 `--enable-version3`, never `--enable-gpl`), dynamically linked on both
 platforms (`.so` in APK, embedded dynamic xcframeworks on iOS) — the
 App-Store-accepted pattern that satisfies the relink obligation. Wrapper code
@@ -229,11 +232,14 @@ and auto-merge fires while CI is still running (observed 2026-08-10).
 `af` grammar; the raw property stays settable. No C++ was added — mpv resolves
 any filter name it does not implement through `avfilter_get_by_name`, so the
 whole ffmpeg audio-filter set is reachable from TS the moment it is *compiled in*
-(§5 again). The audit found it was not: the audio flavour uses
-`--disable-filters` with an allow-list that held only `overlay` and `equalizer`,
-while `--enable-avfilter` and mpv's lavfi bridge were already present — `af=`
-resolved to nothing. Android pin `v1.1.9-rnmedia.2` adds 16 LGPL filters
-(EQ, dynamics, crossfeed, +104 KB/ABI, symbol set unchanged); **`aresample` is
+(§5 again). The audit found it was not, **on both platforms and for the same
+reason**: the audio flavour disables filters wholesale (`--disable-filters` on
+Android, `--disable-all` on darwin) and its allow-list held only `overlay` and
+`equalizer`, while `--enable-avfilter` and mpv's lavfi bridge were already
+present — `af=` resolved to nothing. Android `v1.1.9-rnmedia.2` and iOS
+`v0.7.2-rnmedia.2` add the same 16 LGPL filters (EQ, dynamics, crossfeed;
++104 KB/ABI on Android, +103 KB on the iOS device slice; export sets
+byte-identical in both cases); **`aresample` is
 among them and is not optional** — libavfilter auto-inserts it whenever two pads
 disagree on sample format, and every one of these filters pins a different one.
 Every GPL-gated filter in ffmpeg n6.0 is a *video* filter, so the LGPL line
@@ -245,8 +251,9 @@ per band, 22 tuned curves + `defineEqualizerPreset` for custom ones). Its one
 non-obvious piece: headroom is computed from the *summed* magnitude response,
 not the largest slider — octave-spaced one-octave bells overlap and add, so
 `Loudness` peaks at +8.8 dB from +7 dB sliders and attenuating by 7 would clip.
-**iOS does not have these filters yet** (darwin binaries not rebuilt); calls
-fail with a typed `mpv` error, which is also the supported availability probe.
+**The two platforms are at parity** as of the pins above, so the API needs no
+per-platform branching; on binaries older than them the call fails with a typed
+`mpv` error (`errno: -11`), which remains the supported availability probe.
 
 ## Platform truths we build around (learned, verified)
 
@@ -266,6 +273,12 @@ fail with a typed `mpv` error, which is also the supported availability probe.
   grace period** — "demote on pause" is not immediate, by design.
 - **`--enable-protocol=hls` in an ffmpeg build proves nothing** — it's the
   deprecated `hls://` protocol; only the `hls`+`mpegts` *demuxers* matter.
+- **Nor does the string `aresample` in libavfilter** — same family, found while
+  verifying the iOS filter build. `libavfilter/formats.c:339` stores
+  `.conversion_filter = "aresample"`, the name the graph *looks up* when two
+  pads disagree, so the literal is in the binary whether or not the filter was
+  compiled. Proof of registration has to come from something only the filter's
+  own object file emits (here `af_aresample.c:164`'s log format).
 - **mpv 0.35.1's manual documents `replaygain-clip` inverted** vs its own
   code; our API maps to behavior (verified in `player/audio.c`).
 - **mpv's waf does not relink `libmpv.so` when ffmpeg's static libs change** —
