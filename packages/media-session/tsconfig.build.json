@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // `bob build` wipes `lib/typescript` before invoking tsc. An incremental
+    // (`composite`) build would then see an up-to-date .tsbuildinfo and emit
+    // nothing, so the publish config turns incrementality off entirely.
+    "composite": false,
+    "incremental": false,
+    // `composite` normally infers this. bob expects declarations under
+    // `lib/typescript/src/**`, so the root has to stay the package directory.
+    "rootDir": "."
+  },
+  "exclude": [
+    "**/node_modules",
+    "**/lib",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "vitest.config.mts"
+  ]
+}

@@ -1,0 +1,63 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+
+  <!--
+    Both permissions are "normal" (granted at install, not revocable), so
+    merging them into every consumer is safe and saves every app the same
+    copy-paste. FOREGROUND_SERVICE has been required since API 28;
+    FOREGROUND_SERVICE_MEDIA_PLAYBACK since API 34, where calling
+    startForeground() without the permission matching the service's
+    foregroundServiceType throws SecurityException.
+    https://developer.android.com/about/versions/14/changes/fgs-types-required#media-playback
+  -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+  <!--
+    POST_NOTIFICATIONS is deliberately NOT declared. media3 posts the media
+    notification through a MediaSession, which is exempt:
+    "POST_NOTIFICATIONS permission is not required for media session related
+    notifications" (MediaNotificationManager.updateNotificationInternal,
+    androidx/media 1.11.0). Declaring a runtime permission on a consumer's
+    behalf would also force a request flow the app never asked for. Apps that
+    post their own notifications declare it themselves.
+  -->
+
+  <application>
+    <!--
+      Declared here rather than in the consumer's manifest so that adding this
+      package is enough to get a working session. The consumer can still
+      override any attribute with tools:replace.
+
+      - exported="true" is required: the binder is what MediaController,
+        Android Auto, Wear and Bluetooth AVRCP connect through, and they are
+        other processes. The intent filter is the entire API surface; there is
+        no data path that does not go through a MediaSession command.
+      - foregroundServiceType="mediaPlayback" is mandatory from API 34 (see the
+        permission comment above). media3 passes the matching
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK at startForeground.
+      - stopWithTask="false": we handle onTaskRemoved ourselves so the app can
+        keep playing after a swipe-away (PLAN §5.6). Letting the system destroy
+        the service on task removal would make that policy unimplementable.
+      - Three actions:
+          MediaLibraryService   — what Android Auto / Wear / System UI playback
+                                  resumption look for.
+          MediaSessionService   — generic MediaController discovery.
+          MediaBrowserService   — legacy MediaBrowserCompat clients (many car
+                                  head units and older Bluetooth stacks).
+        MediaLibraryService.onBind handles all three.
+    -->
+    <service
+      android:name="com.rnmediamediasession.RnMediaMediaSessionService"
+      android:exported="true"
+      android:foregroundServiceType="mediaPlayback"
+      android:stopWithTask="false"
+      tools:ignore="ExportedService">
+      <intent-filter>
+        <action android:name="androidx.media3.session.MediaLibraryService" />
+        <action android:name="androidx.media3.session.MediaSessionService" />
+        <action android:name="android.media.browse.MediaBrowserService" />
+      </intent-filter>
+    </service>
+  </application>
+</manifest>
