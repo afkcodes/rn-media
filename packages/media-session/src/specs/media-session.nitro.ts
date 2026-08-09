@@ -212,7 +212,14 @@ export interface NativeMediaItem {
   album?: string
   /** `http(s)://`, `file://` or `content://`. Loaded async, never on the caller. */
   artworkUri?: string
-  /** Duration in ms. Omit for live/unknown. */
+  /**
+   * Duration in ms. Omit for live/unknown.
+   *
+   * Broadcasting it through `setMediaItem` is enough even when the track also
+   * sits in a queue: for the current entry the two channels are merged (see
+   * `MediaServiceApi.setMediaItem`). Without a duration Android greys out the
+   * scrubber and iOS marks the track as a live stream.
+   */
   duration?: number
   genre?: string
 }
