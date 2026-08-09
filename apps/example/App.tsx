@@ -16,7 +16,14 @@
  * this app pushes on discontinuities only; nothing ticks across the bridge.
  */
 import React, { useEffect, useReducer } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Pressable,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import {
   SafeAreaProvider,
   SafeAreaView,
@@ -41,6 +48,8 @@ import {
   type MediaServiceApi,
   type PlaybackState,
 } from '@rn-media/media-session';
+import { SeekBar, formatTime } from './SeekBar';
+import { COLORS } from './theme';
 
 /* -------------------------------------------------------------------------- */
 /*                                  The queue                                  */
@@ -85,8 +94,12 @@ interface Track extends MediaItem {
  *    Supporting HLS needs a libmpv rebuild with
  *    `--enable-demuxer=hls --enable-demuxer=mpegts`.
  *
- * 3. **Finite MP3** — the only entry with a real duration, and therefore what
- *    proves `trackEnded`, duration reporting and the end-of-queue path.
+ * 3. **Finite MP3, 12 s** — short enough to reach `trackEnded` while you are
+ *    still looking at it, so it is what proves duration reporting and the
+ *    end-of-queue path.
+ * 4. **Finite MP3, ~6 min** — the same shape as 3, but long enough that the
+ *    seek bar (in-app and on the lock screen) is actually usable: a 12-second
+ *    track is under one thumb-width per 15 seconds of travel.
  */
 const TRACKS: readonly Track[] = [
   {
@@ -109,8 +122,15 @@ const TRACKS: readonly Track[] = [
     id: 'mp3-test',
     title: 'MP3 Test File',
     artist: 'Internet Archive',
-    album: 'Finite track',
+    album: 'Finite · 12 s',
     uri: 'https://archive.org/download/testmp3testfile/mpthreetest.mp3',
+  },
+  {
+    id: 'soundhelix-1',
+    title: 'SoundHelix Song 1',
+    artist: 'T. Schürger',
+    album: 'Finite · ~6 min · seek test',
+    uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
   },
 ];
 
@@ -156,7 +176,21 @@ function toPlaybackState(state: PlayerState): PlaybackState {
       state.bufferedPosition === undefined
         ? undefined
         : Math.round(state.bufferedPosition * 1000),
-    controls: ['skipToPrevious', state.playing ? 'pause' : 'play', 'skipToNext'],
+    // The three collapsed slots, in `MediaButtons` terms: SLOT_BACK,
+    // SLOT_CENTRAL, SLOT_FORWARD.
+    //
+    // The central one is a real choice, and this app deliberately does not
+    // spend it on play/pause: Android's own media control already draws a
+    // play/pause of its own from the `play`/`pause` *capabilities* below
+    // (that is the big button top-right of the media card), so listing one
+    // here too just buys a duplicate. `stop` — which ends the foreground
+    // service, the one thing pause never does — is the useful thing to put
+    // there instead.
+    //
+    // Any `MediaControl` works: `state.playing ? 'pause' : 'play'` for the
+    // classic three-button transport, or `fastForward`/`rewind` (those take
+    // the FORWARD/BACK slots, so they pair with dropping next/previous).
+    controls: ['skipToPrevious', 'stop', 'skipToNext'],
     capabilities: [
       'play',
       'pause',
@@ -299,6 +333,18 @@ class Playback {
   #unsubscribeState: (() => void) | undefined;
   /** Last broadcast discontinuity signature — see {@link #onStateChange}. */
   #lastSignature = '';
+  /**
+   * Published duration per track id, in ms, as the player learns them.
+   *
+   * Why the *queue* channel carries durations at all: on Android the media3
+   * timeline — and with it the notification's seek bar — is built from the
+   * queue. A queue entry with no duration is `C.TIME_UNSET`, which media3 reads
+   * as "not seekable", and the scrubber then never appears however seekable the
+   * playback state claims to be. Durations only exist once mpv has opened the
+   * file, so the queue is re-broadcast the first time each one arrives: once
+   * per track, on a discontinuity, never on a timer.
+   */
+  readonly #durations = new Map<string, number>();
   readonly #listeners = new Set<() => void>();
 
   get player(): Player | undefined {
@@ -385,8 +431,8 @@ class Playback {
             console.error(`[example] handler.${method} failed:`, cause),
         },
       );
-      // Channel 3. The queue never changes here, so it is broadcast once.
-      this.#service.setQueue(TRACKS.map(({ uri: _uri, live: _live, ...m }) => m));
+      // Channel 3. The entries never change; only their durations arrive late.
+      this.#publishQueue();
       if (this.#player !== undefined) this.#broadcast(this.#player.state, true);
     } catch (cause) {
       console.error('[example] MediaService.init failed:', cause);
@@ -424,11 +470,33 @@ class Playback {
     this.#broadcast(state, false);
   }
 
+  /** Channel 3, with whatever durations are known so far. See {@link #durations}. */
+  #publishQueue(): void {
+    this.#service?.setQueue(
+      TRACKS.map(({ uri: _uri, live: _live, ...item }) => ({
+        ...item,
+        duration: this.#durations.get(item.id),
+      })),
+    );
+  }
+
   #broadcast(state: PlayerState, force: boolean): void {
     const service = this.#service;
     if (service === undefined) return;
     if (force) this.#lastSignature = '';
     const track = currentTrack(state);
+
+    // A duration we have not published yet: refresh the queue so the timeline
+    // entry becomes seekable. Guarded on the value, so this is one extra
+    // broadcast per track for the whole session.
+    if (track !== undefined) {
+      const ms = durationMs(track, state);
+      if (ms !== undefined && this.#durations.get(track.id) !== ms) {
+        this.#durations.set(track.id, ms);
+        this.#publishQueue();
+      }
+    }
+
     service.setMediaItem(track && toMediaItem(track, state));
     service.setPlaybackState(toPlaybackState(state));
   }
@@ -526,12 +594,6 @@ function usePlayback(): { player: Player | undefined; error: PlayerError | undef
 /*                                    App                                      */
 /* -------------------------------------------------------------------------- */
 
-function formatTime(seconds: number | undefined): string {
-  if (seconds === undefined || !Number.isFinite(seconds)) return '--:--';
-  const total = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
-}
-
 function App(): React.JSX.Element {
   const { player, error } = usePlayback();
   const state = usePlayerState(player);
@@ -545,9 +607,14 @@ function App(): React.JSX.Element {
   // The same duration the media session gets — `undefined` for a live stream,
   // where mpv's raw `state.duration` is just how much it has cached.
   const published = track === undefined ? undefined : durationMs(track, state);
+  const live = progress.isLive || track?.live === true;
 
   return (
     <SafeAreaView style={styles.screen}>
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor={COLORS.background}
+      />
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.kicker}>@rn-media reference integration</Text>
 
@@ -558,10 +625,25 @@ function App(): React.JSX.Element {
 
         <Text style={styles.time}>
           {formatTime(progress.position)} /{' '}
-          {progress.isLive || track?.live === true
+          {live
             ? 'live'
             : formatTime(published === undefined ? undefined : published / 1000)}
         </Text>
+
+        {/*
+          The scrubber reads the *published* duration, not `state.duration`, so
+          it goes to its live presentation on exactly the entries where the
+          notification drops its seek bar. `onSeek` is the same call the remote
+          `seekTo` command makes — one path, one place to break.
+        */}
+        <SeekBar
+          position={progress.position}
+          duration={published === undefined ? undefined : published / 1000}
+          buffered={progress.buffered}
+          live={live}
+          disabled={!ready}
+          onSeek={seconds => playback.seekTo(seconds)}
+        />
 
         <Text style={styles.detail}>
           track {state.playlist.index + 1} of {state.playlist.count} · buffered{' '}
@@ -646,20 +728,34 @@ function App(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
+  screen: { flex: 1, backgroundColor: COLORS.background },
   container: { padding: 24, gap: 10, alignItems: 'center' },
-  kicker: { fontSize: 13, opacity: 0.5 },
-  title: { fontSize: 24, fontWeight: '600', textAlign: 'center' },
-  artist: { fontSize: 15, opacity: 0.7 },
-  status: { fontSize: 15, fontWeight: '600', opacity: 0.8, letterSpacing: 1 },
-  time: { fontSize: 22, fontVariant: ['tabular-nums'] },
-  detail: { fontSize: 12, opacity: 0.7, textAlign: 'center' },
+  kicker: { fontSize: 13, color: COLORS.muted },
+  title: {
+    fontSize: 24,
+    fontWeight: '600',
+    textAlign: 'center',
+    color: COLORS.text,
+  },
+  artist: { fontSize: 15, color: COLORS.muted },
+  status: {
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: 1,
+    color: COLORS.accent,
+  },
+  time: {
+    fontSize: 22,
+    fontVariant: ['tabular-nums'],
+    color: COLORS.text,
+  },
+  detail: { fontSize: 12, color: COLORS.muted, textAlign: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 8 },
   primary: {
     paddingVertical: 14,
     paddingHorizontal: 36,
     borderRadius: 999,
-    backgroundColor: '#1f6feb',
+    backgroundColor: COLORS.accent,
   },
   primaryLabel: { color: 'white', fontSize: 18, fontWeight: '600' },
   secondary: {
@@ -667,17 +763,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#8888',
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
   },
-  secondaryLabel: { fontSize: 15 },
+  secondaryLabel: { fontSize: 15, color: COLORS.text },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
   queue: { alignSelf: 'stretch', marginTop: 12, gap: 6 },
-  queueRow: { padding: 10, borderRadius: 10, backgroundColor: '#8881' },
-  queueRowCurrent: { backgroundColor: '#1f6feb22' },
-  queueTitle: { fontSize: 15, fontWeight: '500' },
-  queueArtist: { fontSize: 12, opacity: 0.6 },
-  error: { marginTop: 12, fontSize: 13, color: '#d1242f', textAlign: 'center' },
+  queueRow: {
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.surface,
+  },
+  queueRowCurrent: { backgroundColor: COLORS.surfaceActive },
+  queueTitle: { fontSize: 15, fontWeight: '500', color: COLORS.text },
+  queueArtist: { fontSize: 12, color: COLORS.muted },
+  error: {
+    marginTop: 12,
+    fontSize: 13,
+    color: COLORS.error,
+    textAlign: 'center',
+  },
 });
 
 /** `SafeAreaProvider` has to sit above anything using the insets. */
