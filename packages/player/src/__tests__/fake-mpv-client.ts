@@ -32,6 +32,16 @@ export class FakeMpvClient implements MpvClient {
   /** Values `getProperty*` should return. */
   readonly readable = new Map<string, MpvPropertyValue>()
 
+  /**
+   * Property names whose `getProperty*` should throw, keyed to the message.
+   *
+   * Native distinguishes "unavailable" (→ `undefined`) from every other mpv
+   * status (→ throw); `readable` covers the first case and this covers the
+   * second — notably `[mpv:-8]` (`MPV_ERROR_PROPERTY_NOT_FOUND`), which is what
+   * mpv answers for a metadata key that is not present.
+   */
+  readonly readErrors = new Map<string, string>()
+
   /** Properties currently observed, and in which format. */
   readonly observations = new Map<string, MpvFormat>()
 
@@ -94,17 +104,17 @@ export class FakeMpvClient implements MpvClient {
   }
 
   getPropertyString(name: string): string | undefined {
-    const value = this.readable.get(name)
+    const value = this.#read(name)
     return typeof value === 'string' ? value : undefined
   }
 
   getPropertyNumber(name: string): number | undefined {
-    const value = this.readable.get(name)
+    const value = this.#read(name)
     return typeof value === 'number' ? value : undefined
   }
 
   getPropertyBool(name: string): boolean | undefined {
-    const value = this.readable.get(name)
+    const value = this.#read(name)
     return typeof value === 'boolean' ? value : undefined
   }
 
@@ -154,6 +164,12 @@ export class FakeMpvClient implements MpvClient {
 
   toString(): string {
     return '[HybridObject FakeMpvClient]'
+  }
+
+  #read(name: string): MpvPropertyValue | undefined {
+    const failure = this.readErrors.get(name)
+    if (failure !== undefined) throw new Error(failure)
+    return this.readable.get(name)
   }
 
   #set(name: string, value: MpvPropertyValue): void {

@@ -639,6 +639,370 @@ describe('Player — playlist API', () => {
   })
 })
 
+describe('Player — shuffle', () => {
+  it('shuffle/unshuffle map to the mpv commands', async () => {
+    const player = await createPlayer()
+    await player.playlist.shuffle()
+    await player.playlist.unshuffle()
+    expect(client.commands).toEqual([
+      ['playlist-shuffle'],
+      ['playlist-unshuffle'],
+    ])
+  })
+
+  it('loadPlaylist shuffles after appending and before the jump', async () => {
+    // Order is the whole point: mpv shuffles every entry, so it must happen
+    // while nothing is playing yet, and the jump must come after it.
+    const player = await createPlayer()
+    await player.loadPlaylist(['a.mp3', 'b.mp3', 'c.mp3'], { shuffle: true })
+    expect(client.commands).toEqual([
+      ['stop'],
+      ['loadfile', 'a.mp3', 'append'],
+      ['loadfile', 'b.mp3', 'append'],
+      ['loadfile', 'c.mp3', 'append'],
+      ['playlist-shuffle'],
+      ['playlist-play-index', '0'],
+    ])
+  })
+
+  it('does not shuffle when the option is absent or false', async () => {
+    const player = await createPlayer()
+    await player.loadPlaylist(['a.mp3'])
+    await player.loadPlaylist(['a.mp3'], { shuffle: false })
+    expect(client.commands.some(([name]) => name === 'playlist-shuffle')).toBe(
+      false
+    )
+  })
+
+  it('rejects shuffle combined with startIndex', async () => {
+    const player = await createPlayer()
+    await expect(
+      player.loadPlaylist(['a.mp3', 'b.mp3'], { shuffle: true, startIndex: 1 })
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    expect(client.commands).toEqual([])
+  })
+
+  it('rejects shuffle with an explicit startIndex of 0 too', async () => {
+    // `startIndex: 0` looks harmless but still asks for a guarantee the shuffle
+    // destroys, so it is rejected rather than quietly reinterpreted.
+    const player = await createPlayer()
+    await expect(
+      player.loadPlaylist(['a.mp3'], { shuffle: true, startIndex: 0 })
+    ).rejects.toBeInstanceOf(PlayerErrorException)
+  })
+
+  it('does not shuffle an empty playlist', async () => {
+    const player = await createPlayer()
+    await player.loadPlaylist([], { shuffle: true })
+    expect(client.commands).toEqual([['stop']])
+  })
+})
+
+describe('Player — ReplayGain', () => {
+  it('maps every field onto the mpv options at init', async () => {
+    await createPlayer({
+      replayGain: { mode: 'album', preamp: -3.5, clip: false, fallback: -6 },
+    })
+    expect(client.initOptions).toMatchObject({
+      'replaygain': 'album',
+      'replaygain-preamp': '-3.5',
+      // `clip` is mpv's "allow clipping" flag, not "prevent clipping": `no`
+      // keeps mpv's automatic peak limiting on (player/audio.c).
+      'replaygain-clip': 'no',
+      'replaygain-fallback': '-6',
+    })
+  })
+
+  it('emits only the fields that were given', async () => {
+    await createPlayer({ replayGain: { mode: 'track' } })
+    expect(client.initOptions?.['replaygain']).toBe('track')
+    expect(client.initOptions).not.toHaveProperty('replaygain-preamp')
+    expect(client.initOptions).not.toHaveProperty('replaygain-clip')
+    expect(client.initOptions).not.toHaveProperty('replaygain-fallback')
+  })
+
+  it('writes replaygain-clip=yes only when clipping is explicitly allowed', async () => {
+    await createPlayer({ replayGain: { mode: 'track', clip: true } })
+    expect(client.initOptions?.['replaygain-clip']).toBe('yes')
+  })
+
+  it('lets raw mpvOptions win over the typed option', async () => {
+    await createPlayer({
+      replayGain: { mode: 'album', preamp: 3 },
+      mpvOptions: { 'replaygain': 'no', 'replaygain-preamp': '0' },
+    })
+    expect(client.initOptions).toMatchObject({
+      'replaygain': 'no',
+      'replaygain-preamp': '0',
+    })
+  })
+
+  it('sets the properties at runtime, only for the fields given', async () => {
+    const player = await createPlayer()
+    player.setReplayGain({ mode: 'album', preamp: 2 })
+    expect(client.written.get('replaygain')).toBe('album')
+    expect(client.written.get('replaygain-preamp')).toBe(2)
+    expect(client.written.has('replaygain-clip')).toBe(false)
+    expect(client.written.has('replaygain-fallback')).toBe(false)
+
+    player.setReplayGain({ mode: 'no', clip: true, fallback: -9 })
+    expect(client.written.get('replaygain')).toBe('no')
+    expect(client.written.get('replaygain-clip')).toBe(true)
+    expect(client.written.get('replaygain-fallback')).toBe(-9)
+  })
+
+  it.each([
+    ['bad mode', { mode: 'loud' as never }],
+    ['preamp above mpv’s range', { mode: 'track' as const, preamp: 151 }],
+    ['preamp below mpv’s range', { mode: 'track' as const, preamp: -151 }],
+    ['non-finite preamp', { mode: 'track' as const, preamp: Number.NaN }],
+    ['fallback above mpv’s range', { mode: 'track' as const, fallback: 61 }],
+    ['fallback below mpv’s range', { mode: 'track' as const, fallback: -201 }],
+  ])('rejects %s at create time, before a core exists', async (_label, gain) => {
+    await expect(createPlayer({ replayGain: gain })).rejects.toMatchObject({
+      playerError: { code: 'invalid-state' },
+    })
+    expect(client.initialized).toBe(false)
+    expect(client.destroyCount).toBe(0)
+  })
+
+  it.each([
+    ['bad mode', { mode: 'loud' as never }],
+    ['preamp out of range', { mode: 'track' as const, preamp: 200 }],
+    ['fallback out of range', { mode: 'track' as const, fallback: -500 }],
+  ])('rejects %s at runtime without writing anything', async (_label, gain) => {
+    const player = await createPlayer()
+    expect(() => player.setReplayGain(gain)).toThrowError(PlayerErrorException)
+    expect(client.written.has('replaygain')).toBe(false)
+  })
+
+  it.each([-150, 150, 0])('accepts preamp %s (mpv’s boundary)', async (preamp) => {
+    const player = await createPlayer()
+    player.setReplayGain({ mode: 'track', preamp })
+    expect(client.written.get('replaygain-preamp')).toBe(preamp)
+  })
+
+  it.each([-200, 60])('accepts fallback %s (mpv’s boundary)', async (fallback) => {
+    const player = await createPlayer()
+    player.setReplayGain({ mode: 'track', fallback })
+    expect(client.written.get('replaygain-fallback')).toBe(fallback)
+  })
+})
+
+describe('Player — prefetch and cache options', () => {
+  it('maps prefetchPlaylist onto mpv’s yes/no flag', async () => {
+    await createPlayer({ prefetchPlaylist: true })
+    expect(client.initOptions?.['prefetch-playlist']).toBe('yes')
+    client = new FakeMpvClient()
+    await createPlayer({ prefetchPlaylist: false })
+    expect(client.initOptions?.['prefetch-playlist']).toBe('no')
+  })
+
+  it('omits prefetch-playlist entirely when the option is unset', async () => {
+    await createPlayer()
+    expect(client.initOptions).not.toHaveProperty('prefetch-playlist')
+  })
+
+  it('lets raw mpvOptions win over prefetchPlaylist', async () => {
+    await createPlayer({
+      prefetchPlaylist: true,
+      mpvOptions: { 'prefetch-playlist': 'no' },
+    })
+    expect(client.initOptions?.['prefetch-playlist']).toBe('no')
+  })
+
+  it('overrides the 30 s cache default with cacheSecs', async () => {
+    await createPlayer({ cacheSecs: 120 })
+    expect(client.initOptions?.['cache-secs']).toBe('120')
+  })
+
+  it('lets raw mpvOptions win over cacheSecs', async () => {
+    await createPlayer({ cacheSecs: 120, mpvOptions: { 'cache-secs': '5' } })
+    expect(client.initOptions?.['cache-secs']).toBe('5')
+  })
+
+  it('accepts 0, which is mpv’s lower bound', async () => {
+    await createPlayer({ cacheSecs: 0 })
+    expect(client.initOptions?.['cache-secs']).toBe('0')
+  })
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects cacheSecs %s before a core exists',
+    async (cacheSecs) => {
+      await expect(createPlayer({ cacheSecs })).rejects.toMatchObject({
+        playerError: { code: 'invalid-state' },
+      })
+      expect(client.initialized).toBe(false)
+    }
+  )
+})
+
+describe('Player — metadata', () => {
+  /** Seed the fake with mpv's documented `metadata/list/…` sub-properties. */
+  function seedMetadata(entries: ReadonlyArray<readonly [string, string]>) {
+    client.readable.set(MpvProperty.metadataCount, entries.length)
+    entries.forEach(([key, value], index) => {
+      client.readable.set(`metadata/list/${index}/key`, key)
+      client.readable.set(`metadata/list/${index}/value`, value)
+    })
+  }
+
+  it('observes `metadata` as a string change-edge', async () => {
+    await createPlayer()
+    // The value is never parsed — mpv's manual says a raw string read of the
+    // map "doesn't work" — but the observation is what tells us it changed.
+    expect(client.observations.get(MpvProperty.metadata)).toBe('string')
+  })
+
+  it('builds the map from metadata/list, never from the map property', async () => {
+    const player = await createPlayer()
+    seedMetadata([
+      ['title', 'Windowlicker'],
+      ['artist', 'Aphex Twin'],
+      ['icy-title', 'Aphex Twin - Windowlicker'],
+    ])
+    const spy = vi.spyOn(client, 'getPropertyString')
+
+    expect(player.getMetadata()).toEqual({
+      'title': 'Windowlicker',
+      'artist': 'Aphex Twin',
+      'icy-title': 'Aphex Twin - Windowlicker',
+    })
+    expect(spy.mock.calls.map(([name]) => name)).not.toContain(
+      MpvProperty.metadata
+    )
+  })
+
+  it('returns an empty map when nothing is loaded', async () => {
+    const player = await createPlayer()
+    // mpv reports the whole property unavailable without a demuxer, which the
+    // native binding turns into `undefined`.
+    expect(player.getMetadata()).toEqual({})
+  })
+
+  it.each([0, -1, Number.NaN])(
+    'returns an empty map for a count of %s',
+    async (count) => {
+      const player = await createPlayer()
+      client.readable.set(MpvProperty.metadataCount, count)
+      expect(player.getMetadata()).toEqual({})
+    }
+  )
+
+  it('skips entries whose key vanished mid-walk', async () => {
+    const player = await createPlayer()
+    seedMetadata([
+      ['title', 'A'],
+      ['artist', 'B'],
+    ])
+    // The walk is not atomic; a key that is gone answers PROPERTY_NOT_FOUND.
+    client.readErrors.set(
+      'metadata/list/1/key',
+      '[mpv:-8] mpv_get_property("metadata/list/1/key", STRING): property not found'
+    )
+    expect(player.getMetadata()).toEqual({ title: 'A' })
+  })
+
+  it('treats a missing value as an empty string, not a missing key', async () => {
+    const player = await createPlayer()
+    client.readable.set(MpvProperty.metadataCount, 1)
+    client.readable.set('metadata/list/0/key', 'comment')
+    expect(player.getMetadata()).toEqual({ comment: '' })
+  })
+
+  it('reads a single tag through metadata/by-key', async () => {
+    const player = await createPlayer()
+    client.readable.set('metadata/by-key/icy-title', 'Now: Boards of Canada')
+    expect(player.getMetadataValue('icy-title')).toBe('Now: Boards of Canada')
+  })
+
+  it('returns undefined for a tag mpv does not have', async () => {
+    const player = await createPlayer()
+    client.readErrors.set(
+      'metadata/by-key/nope',
+      '[mpv:-8] mpv_get_property("metadata/by-key/nope", STRING): property not found'
+    )
+    expect(player.getMetadataValue('nope')).toBeUndefined()
+  })
+
+  it('still throws for any other mpv failure', async () => {
+    const player = await createPlayer()
+    client.readErrors.set(
+      'metadata/by-key/title',
+      '[mpv:-9] mpv_get_property("metadata/by-key/title", STRING): property format error'
+    )
+    expect(() => player.getMetadataValue('title')).toThrowError(
+      PlayerErrorException
+    )
+  })
+
+  it('emits metadataChanged once per batch, for either trigger', async () => {
+    const player = await createPlayer()
+    seedMetadata([['title', 'A']])
+    const changed = vi.fn()
+    player.on('metadataChanged', changed)
+
+    client.emit([
+      propertyEvent(MpvProperty.metadata, '{"title":"A"}'),
+      propertyEvent(MpvProperty.mediaTitle, 'A'),
+    ])
+
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(changed).toHaveBeenCalledWith({ title: 'A' })
+  })
+
+  it('emits on a media-title-only change (ICY now-playing)', async () => {
+    const player = await createPlayer()
+    seedMetadata([['icy-title', 'Track 2']])
+    const changed = vi.fn()
+    player.on('metadataChanged', changed)
+    client.emit([propertyEvent(MpvProperty.mediaTitle, 'Track 2')])
+    expect(changed).toHaveBeenCalledWith({ 'icy-title': 'Track 2' })
+  })
+
+  it('does not emit for unrelated property changes', async () => {
+    const player = await createPlayer()
+    const changed = vi.fn()
+    player.on('metadataChanged', changed)
+    client.emit([propertyEvent(MpvProperty.volume, 50)])
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('reads nothing while nobody is listening', async () => {
+    await createPlayer()
+    const numbers = vi.spyOn(client, 'getPropertyNumber')
+    const strings = vi.spyOn(client, 'getPropertyString')
+    client.emit([propertyEvent(MpvProperty.metadata, '{"title":"A"}')])
+    expect(numbers.mock.calls.map(([name]) => name)).not.toContain(
+      MpvProperty.metadataCount
+    )
+    expect(strings).not.toHaveBeenCalled()
+  })
+
+  it('skips the emission rather than throwing when the read fails', async () => {
+    const player = await createPlayer()
+    const changed = vi.fn()
+    player.on('metadataChanged', changed)
+    client.readErrors.set(
+      MpvProperty.metadataCount,
+      '[mpv:-9] mpv_get_property("metadata/list/count", INT64): property format error'
+    )
+    expect(() =>
+      client.emit([propertyEvent(MpvProperty.mediaTitle, 'x')])
+    ).not.toThrow()
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('unsubscribes metadata listeners', async () => {
+    const player = await createPlayer()
+    seedMetadata([['title', 'A']])
+    const changed = vi.fn()
+    player.on('metadataChanged', changed)()
+    client.emit([propertyEvent(MpvProperty.mediaTitle, 'A')])
+    expect(changed).not.toHaveBeenCalled()
+  })
+})
+
 describe('Player — raw escape hatches', () => {
   it('forwards arbitrary commands', async () => {
     const player = await createPlayer()
@@ -661,17 +1025,17 @@ describe('Player — raw escape hatches', () => {
 
   it('adds and removes extra observations', async () => {
     const player = await createPlayer()
-    player.observeProperty('metadata', 'string')
-    expect(client.observations.get('metadata')).toBe('string')
-    player.unobserveProperty('metadata')
-    expect(client.observations.has('metadata')).toBe(false)
+    player.observeProperty('chapter-metadata', 'string')
+    expect(client.observations.get('chapter-metadata')).toBe('string')
+    player.unobserveProperty('chapter-metadata')
+    expect(client.observations.has('chapter-metadata')).toBe(false)
   })
 
   it('ignores unknown observed properties in the reducer', async () => {
     const player = await createPlayer()
     const before = player.state
-    player.observeProperty('metadata', 'string')
-    client.emit([propertyEvent('metadata', 'x')])
+    player.observeProperty('chapter-metadata', 'string')
+    client.emit([propertyEvent('chapter-metadata', 'x')])
     expect(player.state).toBe(before)
   })
 
@@ -746,6 +1110,9 @@ describe('Player — destroy', () => {
       ['getVolume', () => player.getVolume()],
       ['setMuted', () => player.setMuted(true)],
       ['setLoop', () => player.setLoop('off')],
+      ['setReplayGain', () => player.setReplayGain({ mode: 'track' })],
+      ['getMetadata', () => player.getMetadata()],
+      ['getMetadataValue', () => player.getMetadataValue('title')],
       ['getPropertyString', () => player.getPropertyString('x')],
       ['getPropertyNumber', () => player.getPropertyNumber('x')],
       ['getPropertyBool', () => player.getPropertyBool('x')],
@@ -773,6 +1140,8 @@ describe('Player — destroy', () => {
       player.playlist.next(),
       player.playlist.previous(),
       player.playlist.clear(),
+      player.playlist.shuffle(),
+      player.playlist.unshuffle(),
     ]
     for (const promise of async_) {
       await expect(promise).rejects.toMatchObject({

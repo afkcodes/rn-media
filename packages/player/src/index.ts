@@ -60,6 +60,10 @@ export {
   MPV_VOLUME_SCALE,
   MpvProperty,
   OBSERVED_PROPERTIES,
+  isMetadataProperty,
+  metadataByKeyProperty,
+  metadataKeyProperty,
+  metadataValueProperty,
 } from './properties'
 export type { ObservedProperty } from './properties'
 
@@ -84,12 +88,15 @@ export { Player } from './player'
 export type {
   LoadOptions,
   LoadPlaylistOptions,
+  Metadata,
   MpvClientFactory,
   PlayerEventMap,
   PlayerEventName,
   PlayerLogLevel,
   PlayerOptions,
   PlaylistApi,
+  ReplayGainMode,
+  ReplayGainOptions,
   TrackChangedEvent,
   TrackEndedEvent,
   Unsubscribe,
