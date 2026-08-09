@@ -293,12 +293,12 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
 
 - **HLS: both platforms — but verified to different depths.** Both platforms
   now ship our own libmpv builds, each of which is the matching media-kit
-  release plus exactly two ffmpeg flags (`--enable-demuxer=hls`,
+  release plus two ffmpeg flags (`--enable-demuxer=hls`,
   `--enable-demuxer=mpegts`); stock media-kit *audio* binaries omit both, so
   `.m3u8` used to fail with a clean `unsupported-format` error.
-  - Android — [`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.1`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.1)
+  - Android — [`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.2`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.2)
     — **device-verified**: HLS confirmed playing on real hardware.
-  - iOS — [`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.1`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.1)
+  - iOS — [`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.2`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.2)
     — **link-verified via CI only**. The demuxers are present in the shipped
     binary and the frameworks compile, link and embed, but **runtime HLS
     playback on an iOS device remains unverified**. Treat iOS HLS as expected
@@ -307,6 +307,15 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
   HTTPS, ICY/Icecast, and direct files work on both. (On both platforms the
   player forces `demuxer=lavf` for `.m3u8`/`.m3u` so mpv's playlist demuxer
   can't explode your queue with segment entries.)
+- **EQ/DSP: both platforms, identical filter set.** The same two pins also add
+  16 LGPL audio filters (`volume`, the biquads, `anequalizer` /
+  `superequalizer` / `firequalizer`, `acompressor`, `alimiter`, `dynaudnorm`,
+  `loudnorm`, `crossfeed`, plus the non-optional `aresample`) — stock
+  media-kit audio builds compile in only `overlay` and `equalizer`, so `af=`
+  resolved to nothing. `setAudioFilters` needs no platform branching. On an
+  older or overridden binary the call fails honestly with `{ code: 'mpv',
+  errno: -11 }`, which is the supported availability probe. Verified in the
+  shipped iOS binary; like HLS, not yet exercised on an iOS device.
 - **No DRM**, by construction — libmpv has no Widevine/FairPlay. This library
   cannot power a licensed-catalog streaming app.
 - **iOS is code-complete and CI-built, but never run on a device** — it
@@ -328,9 +337,11 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
   [`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/tree/rn-media-hls)
   and
   [`libmpv-darwin-build`](https://github.com/afkcodes/libmpv-darwin-build/tree/rn-media-hls)
-  — and in each the only change is the same two ffmpeg demuxer flags. Both
-  forks are public and both are forks of public upstreams, which covers the
-  source + relink obligations.
+  — and in each the only change is the same set of additive ffmpeg configure
+  flags (two demuxers + 16 audio filters; every GPL-gated ffmpeg filter is a
+  *video* filter, so the LGPL line is untouched). Both forks are public and
+  both are forks of public upstreams, which covers the source + relink
+  obligations.
 
 ## Development
 
@@ -349,10 +360,11 @@ to audio-only users.
 
 ## Roadmap (next)
 
-1. **On-device iOS verification** — HLS-capable binaries now ship on both
-   platforms (`v0.7.2-rnmedia.1` for iOS, `v1.1.9-rnmedia.1` for Android), but
-   iOS has only ever been compiled and linked, never run: actual playback,
-   background audio and lock-screen controls are still unobserved.
+1. **On-device iOS verification** — HLS- and filter-capable binaries now ship
+   on both platforms (`v0.7.2-rnmedia.2` for iOS, `v1.1.9-rnmedia.2` for
+   Android), but iOS has only ever been compiled and linked, never run: actual
+   playback, background audio, lock-screen controls and the EQ chain are still
+   unobserved.
 2. Typed shuffle, ICY now-playing metadata, ReplayGain, prefetch controls
 3. iOS CI verification + first published release
 4. Android Auto / CarPlay browse trees; typed EQ/DSP; FFT visualizer taps

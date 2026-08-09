@@ -1175,13 +1175,16 @@ export class Player {
    * **Availability is a property of the binary, not of this API.** mpv resolves
    * any name it does not implement itself through
    * `avfilter_get_by_name()`, so a filter exists only if it was compiled into
-   * that platform's libmpv. On Android (pin `v1.1.9-rnmedia.2`) the full EQ/DSP
-   * set is present. On **iOS it is not yet** — the darwin binaries still carry
-   * the old two-filter allow-list, so every call here fails with
-   * `code: 'mpv', errno: -11` and mpv logs `Option af: <name> doesn't exist.`
-   * at error level (visible through `PlayerOptions.onLog`). That is the honest
-   * signal, and it is also the supported way to probe support: try the chain,
-   * catch, fall back.
+   * that platform's libmpv. **Both platforms ship the same EQ/DSP set** from
+   * the pinned binaries — Android `v1.1.9-rnmedia.2` and later, iOS
+   * `v0.7.2-rnmedia.2` and later — so no per-platform branching is needed.
+   *
+   * On binaries **older than those pins** (an app that overrode the pin, or a
+   * stock media-kit build, whose audio flavour compiles in only `overlay` and
+   * `equalizer`) a call here fails with `code: 'mpv', errno: -11` and mpv logs
+   * `Option af: <name> doesn't exist.` at error level (visible through
+   * `PlayerOptions.onLog`). That is the honest signal, and it is also the
+   * supported way to probe support: try the chain, catch, fall back.
    *
    * Applying filters mid-playback rebuilds mpv's filter chain in place; it does
    * not reload the file, reset the position, or drop the audio device. The
