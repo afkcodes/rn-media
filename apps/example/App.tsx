@@ -230,11 +230,35 @@ function durationMs(track: Track, state: PlayerState): number | undefined {
   return Math.round(state.duration) * 1000;
 }
 
+/**
+ * The ICY "now playing" line for a live entry, when the station sends one.
+ *
+ * `PlayerState.title` observes mpv's `media-title`, which resolves
+ * `service_name` → `title` → `icy-title` → filename (mpv 0.35.1
+ * `player/command.c`, `mp_property_media_title`). On a Shoutcast/Icecast
+ * station that lands on the ICY `StreamTitle` — the song currently on air.
+ * Verified on Diverse FM: `icy-title: Lata Mangeshkar & Udit Narayan - Dil To
+ * Pagal Hai`, arriving ~1.7 s after the stream opened and again on every song
+ * change.
+ *
+ * Read only for live entries, because the same chain bottoms out at the
+ * *filename* for a plain file, and `SoundHelix-Song-1.mp3` is not an upgrade
+ * on a curated title.
+ */
+function nowPlaying(track: Track, state: PlayerState): string | undefined {
+  if (track.live !== true) return undefined;
+  const title = state.title;
+  return title !== undefined && title !== track.title ? title : undefined;
+}
+
 function toMediaItem(track: Track, state: PlayerState): MediaItem {
+  const song = nowPlaying(track, state);
   return {
     id: track.id,
-    title: track.title,
-    artist: track.artist,
+    // On air, the song is the headline and the station becomes the subtitle —
+    // what a listener expects to read on the lock screen.
+    title: song ?? track.title,
+    artist: song === undefined ? track.artist : track.title,
     album: track.album,
     // Omitting duration is what tells the lock screen to render a live
     // indicator rather than a seek bar to nowhere.
@@ -292,7 +316,7 @@ class DemoMediaHandler extends BaseMediaHandler {
   }
   override skipToQueueItem(index: number): void {
     this.#log('skipToQueueItem');
-    this.target().jumpTo(index);
+    return void this.target().jumpTo(index);
   }
   override setRate(rate: number): void {
     this.#log('setRate');
@@ -462,6 +486,11 @@ class Playback {
       // The *published* duration, not `state.duration`: on a live stream mpv's
       // raw duration is the cache length and grows forever. See `durationMs`.
       track === undefined ? undefined : durationMs(track, state),
+      // The ICY now-playing line: changes once per song, so it is a genuine
+      // discontinuity and not a ticker. Without it in the signature the
+      // notification would keep showing whatever was on air when the station
+      // was tuned in.
+      track === undefined ? undefined : nowPlaying(track, state),
       state.seeking,
       state.positionAnchor.timestamp,
       state.error?.message,
@@ -534,8 +563,36 @@ class Playback {
     void this.#player?.playlist.previous();
   }
 
-  jumpTo(index: number): void {
-    void this.#player?.playlist.jumpTo(index);
+  /**
+   * Tapping a queue row means "play this one".
+   *
+   * Two things this deliberately does that a naive `playlist.jumpTo` would not:
+   *
+   * 1. **Focus first.** `playlist.jumpTo` starts playback (its `autoPlay`
+   *    default), so it is a sound-making call and goes through the same audio
+   *    focus gate as {@link play}.
+   * 2. **Never restart the entry that is already current.** mpv's
+   *    `playlist-play-index` faithfully *restarts* it — which for a live
+   *    stream means throwing away a warm, fully-buffered connection and paying
+   *    TCP + TLS + probe again to hear exactly what was already in the cache.
+   *    Measured on this device over LTE: 1.5–2.3 s to first audio for the
+   *    re-open (1.1–1.5 s of it TCP+TLS alone), against 10–24 ms for the
+   *    resume. A row that is *not* playable any more (errored, or ended)
+   *    still gets the real jump, so this is a shortcut, never a dead end.
+   */
+  async jumpTo(index: number): Promise<void> {
+    const player = this.#player;
+    if (player === undefined) return;
+    if (!(await AudioSession.activate())) {
+      console.warn('[example] audio focus denied — not starting');
+      return;
+    }
+    const state = player.state;
+    const alreadyOpen =
+      index === state.playlist.index &&
+      (state.status === 'ready' || state.status === 'buffering');
+    if (alreadyOpen) player.play();
+    else await player.playlist.jumpTo(index);
   }
 
   seekTo(seconds: number): void {
@@ -609,6 +666,7 @@ function App(): React.JSX.Element {
   // The same duration the media session gets — `undefined` for a live stream,
   // where mpv's raw `state.duration` is just how much it has cached.
   const published = track === undefined ? undefined : durationMs(track, state);
+  const song = track === undefined ? undefined : nowPlaying(track, state);
   const live = progress.isLive || track?.live === true;
 
   return (
@@ -622,6 +680,11 @@ function App(): React.JSX.Element {
 
         <Text style={styles.title}>{track?.title ?? '—'}</Text>
         <Text style={styles.artist}>{track?.artist ?? ''}</Text>
+
+        {/* What is actually on air right now, straight from the ICY stream. */}
+        {song === undefined ? null : (
+          <Text style={styles.nowPlaying}>♪ {song}</Text>
+        )}
 
         <Text style={styles.status}>{state.status}</Text>
 
@@ -694,7 +757,7 @@ function App(): React.JSX.Element {
               key={item.id}
               accessibilityRole="button"
               disabled={!ready}
-              onPress={() => playback.jumpTo(index)}
+              onPress={() => void playback.jumpTo(index)}
               style={[
                 styles.queueRow,
                 index === state.playlist.index && styles.queueRowCurrent,
@@ -740,6 +803,12 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
   artist: { fontSize: 15, color: COLORS.muted },
+  nowPlaying: {
+    fontSize: 15,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    color: COLORS.accent,
+  },
   status: {
     fontSize: 15,
     fontWeight: '600',

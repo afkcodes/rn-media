@@ -81,6 +81,16 @@ player.destroy();
   `createMpvClient()` exposes the raw binding directly.
 - **Init option order is not preserved** — `profile` and `include` are not
   supported in `mpvOptions`; set them after creation.
+- **Jumping plays.** `playlist.jumpTo(i)` clears `pause` by default, like
+  `load()`'s `autoPlay`. mpv's `playlist-play-index` restarts the entry but
+  leaves the global `pause` property alone, so without this a player loaded
+  with `autoPlay: false` would open the entry, fill its cache and stay silent.
+  Pass `{ autoPlay: false }` to keep the current pause state.
+- **The demuxer cache is bounded to 30 s** (`cache-secs`). mpv's default is
+  1000 hours, capped only by the 150 MiB `demuxer-max-bytes` — which on a radio
+  stream means downloading for hours, even while paused. Startup is unaffected
+  (`cache-pause-initial` is `no`, so playback never waits on the cache).
+  Override with `mpvOptions: { 'cache-secs': '…' }`.
 
 ## Credits
 
