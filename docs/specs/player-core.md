@@ -183,9 +183,10 @@ chain over mpv's `af` property (one mpv entry per filter, mpv's own serializer
 incl. `%N%` UTF-8 byte-count escaping), factories range-validated against ffmpeg
 n6.0 AVOptions, 22 EQ presets with summed-response headroom pre-amp. NOTE: `af`
 is a GLOBAL option, not per-entry — filters survive track changes by design.
-Requires Android binaries ≥ v1.1.9-rnmedia.2; on binaries without the filters
-(current iOS) calls fail honestly with `{code:'mpv', errno:-11}` (documented as
-the availability probe).
+Requires Android binaries ≥ v1.1.9-rnmedia.2 or iOS binaries ≥ v0.7.2-rnmedia.2
+— both pins now carry the identical 16-filter set, so no platform branching. On
+binaries older than those, calls fail honestly with `{code:'mpv', errno:-11}`
+(documented as the availability probe).
 
 ## 4. Acceptance criteria (both tasks)
 - `nitrogen` codegen + strict `tsc` pass; TS tests green (reducer, projection,
