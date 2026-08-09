@@ -45,11 +45,11 @@
     "*.podspec",
     "README.md"
   ],
-  "repository": "https://github.com/ashishkumar/rn-media.git",
+  "repository": "https://github.com/afkcodes/rn-media.git",
   "author": "Ashish Kumar",
   "license": "MIT",
-  "bugs": "https://github.com/ashishkumar/rn-media/issues",
-  "homepage": "https://github.com/ashishkumar/rn-media#readme",
+  "bugs": "https://github.com/afkcodes/rn-media/issues",
+  "homepage": "https://github.com/afkcodes/rn-media#readme",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
