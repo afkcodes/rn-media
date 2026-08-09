@@ -98,7 +98,7 @@ interface Track extends MediaItem {
  *    alongside 2 because a build can get one right and the other wrong.
  *
  *    Both HLS entries work on Android since the libmpv pin moved to
- *    `v1.1.9-rnmedia.1` (packages/player/android/libmpv.gradle): media-kit's
+ *    `v1.1.9-rnmedia.2` (packages/player/android/libmpv.gradle): media-kit's
  *    stock audio binaries configure ffmpeg with `--disable-demuxers` plus an
  *    allow-list that carried neither `hls` nor `mpegts`, so they used to fail
  *    with `unsupported-format` no matter what — `--enable-protocol=hls` was

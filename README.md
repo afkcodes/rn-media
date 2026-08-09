@@ -367,5 +367,5 @@ to audio-only users.
    unobserved.
 2. Typed shuffle, ICY now-playing metadata, ReplayGain, prefetch controls
 3. iOS CI verification + first published release
-4. Android Auto / CarPlay browse trees; typed EQ/DSP; FFT visualizer taps
+4. Android Auto / CarPlay browse trees; FFT visualizer taps
 5. Expo config plugin

@@ -358,7 +358,7 @@ the configure line embedded in libmpv.so, and reproduced on-device as a clean
 deprecated `hls://` protocol and is useless without the demuxer. Fixed by
 forking the build scripts as §6 always planned:
 `afkcodes/libmpv-android-audio-build`, branch `rn-media-hls` off `v1.1.9`,
-released as **`v1.1.9-rnmedia.1`** and pinned in
+released as **`v1.1.9-rnmedia.1`** (now superseded by `v1.1.9-rnmedia.2`, which adds the audio-filter set — see ARCHITECTURE §18) and pinned in
 `packages/player/android/libmpv.gradle` (owner is now a pin field). The delta
 versus the shipped v1.1.9 binaries is exactly
 `--enable-demuxer=hls --enable-demuxer=mpegts` — same mpv 0.35.1 / ffmpeg n6.0
