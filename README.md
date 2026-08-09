@@ -291,19 +291,27 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
 
 ## Limitations (current, honest)
 
-- **HLS: Android yes, iOS not yet.** Android ships our own libmpv build
-  ([`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.1`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.1)),
-  which is media-kit's v1.1.9 with ffmpeg's `hls` and `mpegts` demuxers enabled
-  — stock media-kit audio binaries omit both, so `.m3u8` used to fail with a
-  clean `unsupported-format` error. iOS still uses the stock
-  `libmpv-darwin-build` binaries and therefore still cannot play HLS; rebuilding
-  those the same way is the next binary task. HTTPS, ICY/Icecast, and direct
-  files work on both. (On both platforms the player forces `demuxer=lavf` for
-  `.m3u8`/`.m3u` so mpv's playlist demuxer can't explode your queue with
-  segment entries.)
+- **HLS: both platforms — but verified to different depths.** Both platforms
+  now ship our own libmpv builds, each of which is the matching media-kit
+  release plus exactly two ffmpeg flags (`--enable-demuxer=hls`,
+  `--enable-demuxer=mpegts`); stock media-kit *audio* binaries omit both, so
+  `.m3u8` used to fail with a clean `unsupported-format` error.
+  - Android — [`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.1`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.1)
+    — **device-verified**: HLS confirmed playing on real hardware.
+  - iOS — [`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.1`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.1)
+    — **link-verified via CI only**. The demuxers are present in the shipped
+    binary and the frameworks compile, link and embed, but **runtime HLS
+    playback on an iOS device remains unverified**. Treat iOS HLS as expected
+    to work, not as proven.
+
+  HTTPS, ICY/Icecast, and direct files work on both. (On both platforms the
+  player forces `demuxer=lavf` for `.m3u8`/`.m3u` so mpv's playlist demuxer
+  can't explode your queue with segment entries.)
 - **No DRM**, by construction — libmpv has no Widevine/FairPlay. This library
   cannot power a licensed-catalog streaming app.
-- **iOS is code-complete but unverified** — no CI run has compiled it yet.
+- **iOS is code-complete and CI-built, but never run on a device** — it
+  compiles, links and embeds the frameworks in CI; no on-device playback,
+  background-audio or lock-screen behaviour has been observed yet.
 - Chromecast is out of scope (use the Cast SDK app-side); AirPlay audio works
   through normal iOS routing.
 - App-killed → media-button playback resumption is not implemented in v1.
@@ -315,11 +323,14 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
   components, `--enable-version3`). They are **dynamically linked** (`.so` in
   the APK, embedded dynamic xcframeworks on iOS — the App Store-accepted
   pattern), which is what the LGPL's relink requirement needs. Ship your app's
-  licenses screen with the mpv/FFmpeg notices. Android binaries are built by
-  [our fork of media-kit's build scripts](https://github.com/afkcodes/libmpv-android-audio-build/tree/rn-media-hls)
-  (the only change is two ffmpeg demuxer flags); iOS binaries come from
-  [media-kit's `libmpv-darwin-build`](https://github.com/media-kit/libmpv-darwin-build).
-  Both script sets are public, which covers the source + relink obligations.
+  licenses screen with the mpv/FFmpeg notices. Both platforms' binaries are
+  built by our forks of media-kit's build scripts —
+  [`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/tree/rn-media-hls)
+  and
+  [`libmpv-darwin-build`](https://github.com/afkcodes/libmpv-darwin-build/tree/rn-media-hls)
+  — and in each the only change is the same two ffmpeg demuxer flags. Both
+  forks are public and both are forks of public upstreams, which covers the
+  source + relink obligations.
 
 ## Development
 
@@ -338,8 +349,10 @@ to audio-only users.
 
 ## Roadmap (next)
 
-1. HLS-capable **iOS** binaries (`libmpv-darwin-build` fork; Android already
-   ships ours with the `hls`+`mpegts` demuxers)
+1. **On-device iOS verification** — HLS-capable binaries now ship on both
+   platforms (`v0.7.2-rnmedia.1` for iOS, `v1.1.9-rnmedia.1` for Android), but
+   iOS has only ever been compiled and linked, never run: actual playback,
+   background audio and lock-screen controls are still unobserved.
 2. Typed shuffle, ICY now-playing metadata, ReplayGain, prefetch controls
 3. iOS CI verification + first published release
 4. Android Auto / CarPlay browse trees; typed EQ/DSP; FFT visualizer taps

@@ -4,7 +4,12 @@
 # KEY=value only, no spaces around `=`, no shell expansions; quote any value
 # that contains whitespace).
 #
-# Upstream: https://github.com/media-kit/libmpv-darwin-build
+# Source of truth: https://github.com/afkcodes/libmpv-darwin-build/releases
+# — our fork of media-kit/libmpv-darwin-build, which exists only so the ffmpeg
+# configure flags are ours (upstream's audio flavour ships no HLS demuxer). The
+# repo owner is a field in the pin below, not a constant, exactly as on Android
+# (`packages/player/android/libmpv.gradle` → `owner`); upstream is 'media-kit'.
+#
 # Flavour:  `audio` + `default`.
 #   - `audio`   → no video codecs / libass / libplacebo (this package is the
 #                 audio core; video ships later as a separate plugin).
@@ -17,21 +22,52 @@
 # relink obligation on iOS and is the App-Store-accepted pattern (PLAN.md §6).
 #
 # To bump: query
-#   https://api.github.com/repos/media-kit/libmpv-darwin-build/releases/latest
+#   https://api.github.com/repos/${LIBMPV_DARWIN_BUILD_REPO}/releases/latest
 # pick the `ios-universal-audio-default` bundle, recompute the SHA-256 of the
 # downloaded file, and update TAG + SHA256 + the metadata below together.
+# Bumping the *upstream* version means rebasing the fork's `rn-media-hls` branch
+# onto the new tag and cutting a new `-rnmedia.N` release; the two demuxer flags
+# must survive the rebase or `.m3u8` silently regresses to `unsupported-format`.
 
-LIBMPV_DARWIN_BUILD_REPO=media-kit/libmpv-darwin-build
-LIBMPV_DARWIN_BUILD_TAG=v0.7.2
+# GitHub owner/repo of the darwin build scripts. Part of the pin, not a
+# constant: we ship from our own fork so the ffmpeg configure flags are under
+# our control (see TAG below).
+LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
+
+# v0.7.2-rnmedia.1 = upstream v0.7.2 with exactly two ffmpeg configure flags
+# added (`--enable-demuxer=hls --enable-demuxer=mpegts`) on branch
+# `rn-media-hls`. Upstream's audio flavour builds ffmpeg with `--disable-all`
+# plus an allow-list that carried neither, so every `.m3u8` failed with
+# `unsupported-format` — `--enable-protocol=hls` was present but that is the
+# deprecated `hls://` protocol, useless without the demuxer.
+#
+# Verified against the released asset on a Linux host (see the PR that
+# introduced this pin):
+#   - configure-line delta vs upstream v0.7.2 is exactly +2 flags / -0;
+#   - the demuxers are genuinely compiled in, not merely requested: the HLS
+#     AVOption `m3u8_hold_counters` and the mpegts AVOptions `resync_size`,
+#     `skip_unknown_pmt`, `fix_teletext_pts`, `merge_pmt_versions` are present
+#     and are all absent from upstream;
+#   - Mpv's defined export set is byte-identical to upstream (53 symbols), as
+#     are Avcodec/Avfilter/Avutil/Mbed*/Swresample/Swscale — so this is not an
+#     ABI change for anything we link against;
+#   - only libavformat grew (+67 KB device slice): +3 `avpriv_mpegts_parse_*`
+#     symbols and imports of `avpriv_ac3_parse_header` / `avpriv_adts_header_parse`
+#     / `avcodec_get_type` / `av_buffer_pool_*` — precisely ffmpeg's documented
+#     `hls_demuxer_select` chain and nothing else.
+# Still LGPLv3: no `--enable-gpl`, no `--enable-nonfree`, no new dependency.
+LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.1
 LIBMPV_DARWIN_BUILD_VARIANT=ios-universal-audio-default
 
 # SHA-256 of
 # libmpv-xcframeworks_${TAG}_${VARIANT}.tar.gz
-# (independently reproduced from the release asset; identical to the pin in
-# media-kit's own `libs/ios/media_kit_libs_ios_audio/ios/Makefile`).
-LIBMPV_DARWIN_BUILD_SHA256=5705705574bad475de5d1d399afccea08b96fbf809643c327a5de1dd156e62dd
+# (computed from the published release asset; re-verified on every download,
+# and a mismatch is a hard build failure rather than a warning).
+LIBMPV_DARWIN_BUILD_SHA256=adfcf434b69ec0d5df79be899aab70130180c0aab06ee55491fbfb022f23ae8b
 
 # --- metadata (informational; verified by inspecting the binaries) -----------
+# All three versions are UNCHANGED from upstream v0.7.2 — the fork's delta is
+# two ffmpeg configure flags, not a dependency bump.
 # mpv                       0.36.0   (MPV_CLIENT_API_VERSION = 2.1)
 # FFmpeg                    6.0      (LGPL: no --enable-gpl, --enable-version3)
 # mbedTLS                   3.4.1
