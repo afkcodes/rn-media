@@ -1,0 +1,18 @@
+<!--
+  Notification small icon, named in App.tsx's `MediaService.init` config.
+
+  Android renders a notification small icon as a mask: only the alpha channel
+  survives, everything opaque is painted white. So this is a flat white glyph on
+  a transparent square — a launcher icon here would come out as a white blob.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+  <!-- Material "music_note" -->
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
+</vector>
