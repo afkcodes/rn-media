@@ -123,15 +123,20 @@ is a one-line change. Forking is deliberate: upstream's audio flavor omits the
 HLS/mpegts demuxers **by scoping, not oversight** (their video flavor has
 them), so we own the configure flags. On both platforms the delta versus the
 upstream release is exactly `--enable-demuxer=hls --enable-demuxer=mpegts` —
-same source tree, same patches, identical exported symbol set. LGPL v3 (ffmpeg
+same source tree, same patches, and no change to the libmpv ABI we link
+(Android's `libmpv.so` and iOS's `Mpv.framework` both export exactly what
+upstream did). On iOS, where ffmpeg ships as separate dylibs, `libavformat`
+alone grows: it gains the mpegts demuxer's three `avpriv_mpegts_parse_*` entry
+points and imports the `hls_demuxer_select` chain. LGPL v3 (ffmpeg
 `--enable-version3`, never `--enable-gpl`), dynamically linked on both
 platforms (`.so` in APK, embedded dynamic xcframeworks on iOS) — the
 App-Store-accepted pattern that satisfies the relink obligation. Wrapper code
 is MIT.
 
 The two forks are **not equally verified**: the Android build is confirmed
-playing HLS on a device, the iOS build only compiles, links and embeds in CI.
-See §"Platform truths" and the README's Limitations for the exact standing.
+playing HLS on a device; the iOS build is link-verified via CI only, and
+runtime playback on an iOS device remains unverified. README → Limitations
+carries the exact standing.
 
 ### 12. Defaults chosen by measurement (each overridable)
 - **User-Agent `rn-media (libmpv)`** — real Shoutcast hosts return 401 for the
