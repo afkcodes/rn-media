@@ -1,0 +1,18 @@
+{
+  "name": "rn-media",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix packages/player run build",
+    "codegen": "npm --prefix packages/player run codegen",
+    "typecheck": "npm --prefix packages/player run typecheck",
+    "test": "npm --prefix packages/player run test",
+    "release": "npm --prefix packages/player run release"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ]
+}
