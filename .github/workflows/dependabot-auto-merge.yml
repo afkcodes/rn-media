@@ -1,0 +1,49 @@
+# Auto-merge Dependabot's low-risk updates so the weekly grouped PRs do not
+# need a human. Deliberately narrow: patch/minor DEV dependencies only.
+# Majors and anything that ships to users (production dependencies) stay
+# manual — see ARCHITECTURE §17.
+#
+# PREREQUISITE, and it is not optional: `gh pr merge --auto` only means "merge
+# when green" if `main` has branch protection with the Build Android / Build
+# iOS checks marked REQUIRED. Verified the hard way on 2026-08-10 — with no
+# required checks, a PR is mergeable the instant it opens and auto-merge fires
+# immediately, CI still running. Without protection this workflow is
+# "auto-merge", not "auto-merge on green".
+name: Dependabot auto-merge
+
+on: pull_request
+
+# Workflow runs triggered by Dependabot get a read-only GITHUB_TOKEN by
+# default; these two are the minimum needed to approve and to queue the merge.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Auto-merge patch/minor dev-dependency updates
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v3.1.0
+        with:
+          github-token: '${{ secrets.GITHUB_TOKEN }}'
+
+      # For a GROUPED PR, fetch-metadata aggregates: dependency-type is
+      # 'direct:development' only when every dependency in the group is a dev
+      # dependency, and update-type is the HIGHEST semver bump in the group.
+      # So one production dep or one major anywhere in the group is enough to
+      # send the whole PR to manual review, which is the behaviour we want.
+      - name: Approve and enable auto-merge
+        if: >-
+          steps.meta.outputs.dependency-type == 'direct:development' &&
+          (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+           steps.meta.outputs.update-type == 'version-update:semver-minor')
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
