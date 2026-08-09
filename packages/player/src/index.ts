@@ -57,6 +57,44 @@ export type {
 } from './errors'
 
 export {
+  EQUALIZER_BANDS,
+  EQUALIZER_BAND_COUNT,
+  EQUALIZER_PRESETS,
+  EQUALIZER_PRESET_LIST,
+  defineEqualizerPreset,
+  equalizerPresetChain,
+  peakResponseDb,
+} from './equalizer-presets'
+export type {
+  EqualizerPreset,
+  EqualizerPresetChainOptions,
+  EqualizerPresetId,
+} from './equalizer-presets'
+
+export {
+  AudioFilters,
+  GRAPHIC_EQUALIZER_BANDS,
+  assertValidAudioFilters,
+  compileAudioFilters,
+  escapeAfParam,
+} from './filters'
+export type {
+  AudioFilter,
+  AudioFilterOption,
+  BiquadWidthType,
+  CompressorOptions,
+  CrossfeedOptions,
+  DynamicNormalizerOptions,
+  EqualizerOptions,
+  GraphicEqualizerOptions,
+  LimiterOptions,
+  LoudnormOptions,
+  PassOptions,
+  ShelfOptions,
+  VolumeOptions,
+} from './filters'
+
+export {
   MPV_VOLUME_SCALE,
   MpvProperty,
   OBSERVED_PROPERTIES,

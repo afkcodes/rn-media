@@ -107,6 +107,22 @@ export const MpvProperty = {
    * the current entry is ending (default: no)" (`options.rst`).
    */
   prefetchPlaylist: 'prefetch-playlist',
+  /**
+   * `af` — the audio filter chain (mpv `options.rst` "Audio Filters").
+   *
+   * Runtime-settable: mpv lists `af` explicitly among the options it allows to
+   * change during playback (`options/options.c`, the runtime-updatable name
+   * table), and setting it rebuilds the filter chain in place rather than
+   * reloading the file. The value is an ordered list; see
+   * `compileAudioFilters` in `filters.ts` for the exact grammar, which is
+   * mpv's own (`options/m_option.c: print_obj_settings_list`).
+   *
+   * Setting it is *atomic and validating*: mpv parses the whole string first
+   * (`parse_obj_settings`, which rejects an unknown filter name outright with
+   * "Option af: <name> doesn't exist.") and leaves the existing chain untouched
+   * if any entry fails.
+   */
+  audioFilters: 'af',
 } as const
 
 /**

@@ -35,17 +35,34 @@ ext.libmpv = [
     owner     : 'afkcodes',
     // Release tag in `<owner>/libmpv-android-audio-build`.
     //
-    // v1.1.9-rnmedia.1 = upstream v1.1.9 with exactly two ffmpeg configure flags
-    // added (`--enable-demuxer=hls --enable-demuxer=mpegts`) on branch
-    // `rn-media-hls`. Upstream's audio flavour builds ffmpeg with
-    // `--disable-demuxers` plus an allow-list that carried neither, so every
-    // `.m3u8` failed with `unsupported-format` on-device — `--enable-protocol=hls`
-    // was present but that is the deprecated `hls://` protocol, useless without
-    // the demuxer. Same source tree otherwise (mpv 0.35.1, ffmpeg n6.0, NDK
-    // 27.1.12297006, all upstream patches incl. `mpv_lavc_set_java_vm`); the
-    // exported symbol set is identical to v1.1.9, so this is not an ABI change.
-    // Still LGPLv3: no `--enable-gpl`, no `--enable-nonfree`, no new libraries.
-    release   : 'v1.1.9-rnmedia.1',
+    // v1.1.9-rnmedia.2 = upstream v1.1.9 with ffmpeg *configure flags* added on
+    // branch `rn-media-hls`. Same source tree throughout (mpv 0.35.1, ffmpeg
+    // n6.0, NDK 27.1.12297006, all upstream patches incl. `mpv_lavc_set_java_vm`);
+    // the exported symbol set is byte-for-byte identical to upstream v1.1.9, so
+    // none of this is an ABI change. Still LGPLv3: no `--enable-gpl`, no
+    // `--enable-nonfree`, no new external library.
+    //
+    // …rnmedia.1 — `--enable-demuxer=hls --enable-demuxer=mpegts`.
+    //   Upstream's audio flavour builds ffmpeg with `--disable-demuxers` plus an
+    //   allow-list that carried neither, so every `.m3u8` failed with
+    //   `unsupported-format` on-device. `--enable-protocol=hls` was present, but
+    //   that is the deprecated `hls://` *protocol* and is useless without the
+    //   demuxer.
+    //
+    // …rnmedia.2 — 16 `--enable-filter=` flags (the EQ/DSP set behind
+    //   `Player.setAudioFilters`). Exactly the same trap one layer up:
+    //   `--disable-filters` plus an allow-list that held only `overlay` and
+    //   `equalizer`, while `--enable-avfilter` and mpv's lavfi bridge were
+    //   already compiled — `af=` resolved through `avfilter_get_by_name()` and
+    //   found nothing. Added: aresample, aformat, anull, volume, bass, treble,
+    //   lowpass, highpass, anequalizer, superequalizer, firequalizer,
+    //   acompressor, alimiter, dynaudnorm, loudnorm, crossfeed.
+    //   `aresample` is not a convenience: libavfilter auto-inserts it whenever
+    //   two pads cannot agree a sample format, and every filter above pins a
+    //   different one — without it a chain fails with "'aresample' filter not
+    //   present, cannot convert formats". +104 KB/ABI stripped (+1.7 %).
+    //   All 16 are LGPL: every GPL-gated filter in ffmpeg n6.0 is a video filter.
+    release   : 'v1.1.9-rnmedia.2',
     // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
     flavor    : 'default',
     // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
@@ -54,10 +71,10 @@ ext.libmpv = [
     mpvVersion: '0.35.1',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
-        'arm64-v8a'  : 'f3aebbbf24a12c01cbdd38d18894edc0c0575e949ee036a53b1c0f13976f6e07',
-        'armeabi-v7a': '25824cd12561086a9f9c317918d46e91773ea18d4178c53d63f7c324ce2fcd1e',
-        'x86'        : 'fd2d715ecc7d9566c23b203a015e3246a717fc9f2348651a984bc721b49f54ff',
-        'x86_64'     : 'd821715f4cf4a2ba6ee0d54c0fa50b356025e90c9c035b5f468fbbac30beb14d',
+        'arm64-v8a'  : 'fa978932c2ed03739573f647fccba7ba2abc00a5a27bfd1e519956791ffc9ada',
+        'armeabi-v7a': '4ab075bc572330d47c22113c77226a390b15715c4f83730e4b3c4ba206ede954',
+        'x86'        : '23443af26320fbbb057df547317dd4c889fc18ad87c9f295fdc0be90fa1bfe41',
+        'x86_64'     : '38021d3c17e9be880033fa255e6a74fbcc1cbfef714b0f216cc9e335cbc57436',
     ],
 ]
 

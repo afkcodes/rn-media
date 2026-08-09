@@ -29,10 +29,17 @@ import {
   SafeAreaView,
 } from 'react-native-safe-area-context';
 import {
+  AudioFilters,
+  EQUALIZER_BANDS,
+  EQUALIZER_PRESET_LIST,
   Player,
+  defineEqualizerPreset,
+  equalizerPresetChain,
   toPlayerError,
   usePlayerState,
   useProgress,
+  type AudioFilter,
+  type EqualizerPreset,
   type PlayerError,
   type PlayerState,
 } from '@rn-media/player';
@@ -103,9 +110,11 @@ interface Track extends MediaItem {
  * 4. **Finite MP3, 12 s** — short enough to reach `trackEnded` while you are
  *    still looking at it, so it is what proves duration reporting and the
  *    end-of-queue path.
- * 5. **Finite MP3, ~6 min** — the same shape as 4, but long enough that the
- *    seek bar (in-app and on the lock screen) is actually usable: a 12-second
- *    track is under one thumb-width per 15 seconds of travel.
+ * 5. **Finite AAC-in-MP4, full length** — a real commercial-CDN asset, so it
+ *    covers the `mov` demuxer + `aac` decoder path that a plain `.mp3` does
+ *    not, and it is long enough that the seek bar (in-app and on the lock
+ *    screen) is actually usable: a 12-second track is under one thumb-width
+ *    per 15 seconds of travel. Also the track the EQ presets are judged on.
  */
 const TRACKS: readonly Track[] = [
   {
@@ -150,11 +159,16 @@ const TRACKS: readonly Track[] = [
     uri: 'https://archive.org/download/testmp3testfile/mpthreetest.mp3',
   },
   {
-    id: 'soundhelix-1',
-    title: 'SoundHelix Song 1',
-    artist: 'T. Schürger',
-    album: 'Finite · ~6 min · seek test',
-    uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+    id: 'aari-aari',
+    title: 'Aari Aari (Dhurandhar 2)',
+    artist: 'Dhurandhar: The Revenge',
+    // AAC in an MP4/M4A container, which is the shape every commercial music
+    // CDN serves — so it also covers the `mov` demuxer + `aac` decoder path
+    // that a plain `.mp3` does not.
+    album: 'Finite · AAC/MP4 · seek + EQ test',
+    uri: 'https://aac.saavncdn.com/905/f968ceef36dde517a2aee1b74e119166_160.mp4',
+    artworkUri:
+      'https://c.saavncdn.com/905/Dhurandhar-The-Revenge-Aari-Aari-From-Dhurandhar-The-Revenge-Hindi-2026-20260312141004-500x500.jpg',
   },
 ];
 
@@ -700,6 +714,57 @@ function usePlayback(): { player: Player | undefined; error: PlayerError | undef
 }
 
 /* -------------------------------------------------------------------------- */
+/*                              EQ / DSP demo                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the picker offers: every tuned preset the library ships, plus two
+ * entries this app builds itself to show the two escape hatches.
+ *
+ * `equalizerPresetChain` is what turns a curve into filters — it adds the
+ * exact pre-amp needed to keep the loudest band at unity and a limiter behind
+ * it, so no preset here can clip however hard it boosts.
+ */
+type FilterChoice = {
+  readonly id: string;
+  readonly label: string;
+  readonly filters: readonly AudioFilter[];
+};
+
+/** A user-defined curve, exactly as an app with EQ sliders would build one. */
+const CUSTOM_PRESET: EqualizerPreset = defineEqualizerPreset(
+  'custom-smile',
+  'Custom (smile)',
+  // 31  62  125 250 500  1k   2k  4k  8k  16k
+  [8, 7, 5, 2, -1, -2, -1, 2, 5, 6],
+);
+
+const FILTER_CHOICES: readonly FilterChoice[] = [
+  ...EQUALIZER_PRESET_LIST.map(preset => ({
+    id: preset.id,
+    label: preset.name,
+    filters: equalizerPresetChain(preset),
+  })),
+  { id: CUSTOM_PRESET.id, label: CUSTOM_PRESET.name, filters: equalizerPresetChain(CUSTOM_PRESET) },
+  {
+    // Not an EQ — a *measurement*. `aformat` forces the chain to one channel,
+    // which mpv has to propagate to the audio output, so
+    // `adb shell dumpsys audio` flips from `channelMask=0x3` (stereo) to mono.
+    // That is externally observable proof that the filter chain is genuinely
+    // processing samples, not merely accepted by the option parser.
+    id: 'mono',
+    label: 'Mono (proof)',
+    filters: [AudioFilters.custom('aformat', { channel_layouts: 'mono' })],
+  },
+  {
+    // The rest of the DSP set, none of which is an equaliser.
+    id: 'headphone',
+    label: 'Crossfeed + comp',
+    filters: [AudioFilters.crossfeed({ strength: 0.6 }), AudioFilters.compressor()],
+  },
+];
+
+/* -------------------------------------------------------------------------- */
 /*                                    App                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -707,6 +772,29 @@ function App(): React.JSX.Element {
   const { player, error } = usePlayback();
   const state = usePlayerState(player);
   const progress = useProgress(player);
+  const [eqPreset, setEqPreset] = React.useState('flat');
+  // What mpv says the chain is, read straight back from the `af` property.
+  // Not a mirror of local state: if mpv rejected the chain (as it will on iOS
+  // until the darwin binaries carry these filters) this stays on the old value,
+  // and `eqError` says why.
+  const [eqApplied, setEqApplied] = React.useState('');
+  const [eqError, setEqError] = React.useState<string | undefined>(undefined);
+
+  const applyEq = React.useCallback(
+    (preset: FilterChoice) => {
+      if (player === undefined) return;
+      try {
+        player.setAudioFilters(preset.filters);
+        setEqPreset(preset.id);
+        setEqError(undefined);
+      } catch (thrown) {
+        const failure = toPlayerError(thrown);
+        setEqError(`${failure.code}: ${failure.message}`);
+      }
+      setEqApplied(player.getAudioFilters());
+    },
+    [player],
+  );
 
   /* --- UI -------------------------------------------------------------- */
 
@@ -821,6 +909,35 @@ function App(): React.JSX.Element {
           ))}
         </View>
 
+        <View style={styles.queue}>
+          <Text style={styles.detail}>
+            Equaliser · {EQUALIZER_BANDS.length}-band ({EQUALIZER_BANDS[0]} Hz –{' '}
+            {(EQUALIZER_BANDS[EQUALIZER_BANDS.length - 1] as number) / 1000} kHz)
+          </Text>
+          <View style={styles.eqRow}>
+            {FILTER_CHOICES.map(preset => (
+              <Pressable
+                key={preset.id}
+                accessibilityRole="button"
+                disabled={!ready}
+                onPress={() => applyEq(preset)}
+                style={[
+                  styles.eqChip,
+                  preset.id === eqPreset && styles.eqChipActive,
+                ]}
+              >
+                <Text style={styles.eqChipLabel}>{preset.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={styles.detail} selectable>
+            af = {eqApplied === '' ? '(none)' : eqApplied}
+          </Text>
+          {eqError !== undefined ? (
+            <Text style={styles.error}>{eqError}</Text>
+          ) : null}
+        </View>
+
         <Pressable
           accessibilityRole="button"
           disabled={!ready}
@@ -891,6 +1008,16 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
   queue: { alignSelf: 'stretch', marginTop: 12, gap: 6 },
+  eqRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center' },
+  eqChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: COLORS.muted,
+  },
+  eqChipActive: { borderColor: COLORS.text, backgroundColor: COLORS.surface },
+  eqChipLabel: { fontSize: 13, color: COLORS.text },
   queueRow: {
     padding: 10,
     borderRadius: 10,
