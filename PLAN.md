@@ -281,6 +281,38 @@ Architectural consequences, enforced from day one:
   change to core code.
 - Apps without the plugin pay zero video cost (binary size, permissions, code).
 
+## 7.9 IMPLEMENTATION STATUS (2026-08-09)
+
+**Phases 0–3 are COMPLETE and device-verified** (physical Android 16 device;
+iOS code-complete, CI-unverified; Expo config plugin from Phase 3 deferred).
+Phase 4 (video plugin) not started; Phase 5 backlogged. Shipped and proven:
+
+- `@rn-media/player` — multi-instance libmpv Player; typed state/reducer;
+  position projection; gapless playlists; typed errors; live-stream detection
+  (`isLive`, honest duration); HLS playlist-demuxer guard; default HTTP
+  user-agent (`rn-media (libmpv)` — mpv's bare `libmpv` UA is 401-blocklisted
+  by real Shoutcast hosts, found on-device); log-level name mapping; raw mpv
+  escape hatches; `usePlayer`/`usePlayerState`/`useProgress`. 224 TS + 26 C++
+  tests.
+- `@rn-media/audio-session` — focus/AVAudioSession arbiter, interruption/
+  noisy/route events, music/speech presets, `wireAudioSession`. 41 tests.
+- `@rn-media/media-session` — media3 1.11 MediaLibraryService +
+  SimpleBasePlayer facade; monotonic position anchors (zero bridge traffic);
+  native-first commands; FGS lifecycle incl. Android 12/13/14 edge cases;
+  channel-priority merge (setMediaItem over current queue entry);
+  `onTaskRemoved`; dev-reload teardown; iOS MPRemoteCommandCenter/NowPlaying
+  with tracked target removal + artwork cache. 68 tests.
+- Example app = reference integration: queue, in-app seekbar + notification
+  scrubber, dark theme, focus wiring, media handler, Shoutcast AAC+ live radio
+  (Diverse FM), typed-error demo (HLS entry).
+- On-device proven: audiotrack output via `mpv_lavc_set_java_vm`;
+  notification/lock-screen fan-in to JS; activity-death + swipe-kill survival;
+  lock-screen seek; live-vs-finite display.
+- Infra: SHA-256-pinned binaries both platforms; CI workflows; monorepo;
+  phase-wise git history; root README.
+
+## 8. Roadmap
+
 **Phase 0 — Spike (de-risk)**
 Nitro C++ HybridObject that creates an mpv core and plays an audio URL on Android +
 iOS using prebuilt binaries. Proves: CMake link, xcframework link, event thread → JS

@@ -45,22 +45,41 @@ beforeEach(() => {
 })
 
 describe('Player.create', () => {
-  it('initializes the core with the default log level', async () => {
+  it('initializes the core with the default log level and user agent', async () => {
     await createPlayer()
     expect(client.initialized).toBe(true)
-    expect(client.initOptions).toEqual({ 'log-level': 'warn' })
+    expect(client.initOptions).toEqual({
+      'log-level': 'warn',
+      'user-agent': 'rn-media (libmpv)',
+    })
+  })
+
+  it('maps TS log level names to the strings mpv actually accepts', async () => {
+    // `verbose`/`debugging` are TS-side renames (macro collisions); mpv only
+    // understands `v`/`debug`. Passing the TS name raw makes initialize throw.
+    await createPlayer({ logLevel: 'debugging' })
+    expect(client.initOptions?.['log-level']).toBe('debug')
+    client = new FakeMpvClient()
+    await createPlayer({ logLevel: 'verbose' })
+    expect(client.initOptions?.['log-level']).toBe('v')
   })
 
   it('passes raw mpv options through and lets them override', async () => {
     await createPlayer({
-      logLevel: 'debugging',
-      mpvOptions: { 'cache-secs': '30', 'audio-display': 'attachment' },
+      userAgent: 'my-app/1.0',
+      mpvOptions: { 'cache-secs': '30', 'user-agent': 'raw-wins/2.0' },
     })
     expect(client.initOptions).toEqual({
-      'log-level': 'debugging',
+      'log-level': 'warn',
       'cache-secs': '30',
-      'audio-display': 'attachment',
+      // The raw escape hatch beats the typed option.
+      'user-agent': 'raw-wins/2.0',
     })
+  })
+
+  it('honours the typed userAgent option', async () => {
+    await createPlayer({ userAgent: 'my-radio-app/3.1' })
+    expect(client.initOptions?.['user-agent']).toBe('my-radio-app/3.1')
   })
 
   it('installs every observation from the table and no others', async () => {
