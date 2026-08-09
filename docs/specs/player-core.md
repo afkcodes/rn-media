@@ -177,6 +177,16 @@ type PlayerError =
 - `usePlayerState(player, selector?)` — subscription with selector to limit re-renders.
 - `useProgress(player, intervalMs?)`.
 
+### AS-BUILT (2026-08-10): audio filters
+`setAudioFilters(filters)` / `clearAudioFilters()` / `getAudioFilters()` — typed
+chain over mpv's `af` property (one mpv entry per filter, mpv's own serializer
+incl. `%N%` UTF-8 byte-count escaping), factories range-validated against ffmpeg
+n6.0 AVOptions, 22 EQ presets with summed-response headroom pre-amp. NOTE: `af`
+is a GLOBAL option, not per-entry — filters survive track changes by design.
+Requires Android binaries ≥ v1.1.9-rnmedia.2; on binaries without the filters
+(current iOS) calls fail honestly with `{code:'mpv', errno:-11}` (documented as
+the availability probe).
+
 ## 4. Acceptance criteria (both tasks)
 - `nitrogen` codegen + strict `tsc` pass; TS tests green (reducer, projection,
   coalescing, error mapping — with fixtures, no device).
