@@ -115,14 +115,15 @@ timelines unseekable and dropped the scrubber).
 ### 11. Binaries: pinned, forked, LGPL, dynamically linked
 Prebuilt libmpv comes from our forks of media-kit's build repos, and as of
 2026-08-09 **both platforms ship rn-media builds** rather than upstream's:
-`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.1` and
+`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.2` and
 `afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.1`. Each is pinned by exact tag +
 SHA-256 (hard build failure on mismatch) and cached for offline builds; the
 repo owner is itself a pin field on both platforms, so re-pointing at upstream
 is a one-line change. Forking is deliberate: upstream's audio flavor omits the
 HLS/mpegts demuxers **by scoping, not oversight** (their video flavor has
-them), so we own the configure flags. On both platforms the delta versus the
-upstream release is exactly `--enable-demuxer=hls --enable-demuxer=mpegts` —
+them), so we own the configure flags. The delta versus upstream is additive
+configure flags only — hls+mpegts demuxers (both platforms), plus 16 LGPL audio
+filters + aresample on Android (§18; iOS gains them at its next rebuild) —
 same source tree, same patches, and no change to the libmpv ABI we link
 (Android's `libmpv.so` and iOS's `Mpv.framework` both export exactly what
 upstream did). On iOS, where ffmpeg ships as separate dylibs, `libavformat`
