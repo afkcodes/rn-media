@@ -78,7 +78,7 @@ jobs:
       # same script itself, but priming it here gives us a cached download and a
       # dedicated, readable failure when the pinned artifact/checksum is wrong.
       - name: Cache prebuilt libmpv
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: packages/player/ios/.cache/libmpv
           key: ${{ runner.os }}-libmpv-ios-${{ hashFiles('packages/player/ios/libmpv.pin') }}
@@ -87,7 +87,7 @@ jobs:
         run: ./packages/player/ios/fetch-libmpv.sh
 
       - name: Cache CocoaPods
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cocoapods/repos
