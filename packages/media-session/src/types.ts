@@ -126,9 +126,37 @@ export interface MediaServiceConfig {
 export interface MediaServiceApi {
   /** Broadcast channel 1 of 3. */
   setPlaybackState(state: PlaybackState): void
-  /** Broadcast channel 2 of 3. Omit `item` to clear the metadata. */
+  /**
+   * Broadcast channel 2 of 3: **what is playing right now**. Omit `item` to
+   * clear the metadata.
+   *
+   * ## Channel priority
+   * When a queue is in play, this channel and {@link setQueue} both describe the
+   * current track, and this one is the more specific statement — it is what you
+   * send once the track is actually prepared. So for the **current entry only**,
+   * and only when `item.id` matches the id at the broadcast `queueIndex`, this
+   * item is merged over the queue entry field by field: a field you set here
+   * wins, a field you omit falls back to the queue entry. Every other queue
+   * entry is untouched.
+   *
+   * In practice this is how `duration` reaches the lock screen and the
+   * notification: apps rarely know durations for queue items up front, so
+   * `setQueue` carries none and the real duration arrives here. Without a
+   * duration Android cannot draw a scrubber and iOS treats the track as a live
+   * stream.
+   *
+   * If `item.id` does **not** match the current queue entry, the queue entry
+   * wins unchanged (and Android logs a warning) — that combination means the
+   * two broadcasts have got out of step.
+   */
   setMediaItem(item?: MediaItem): void
-  /** Broadcast channel 3 of 3. */
+  /**
+   * Broadcast channel 3 of 3: the whole queue, for controllers that render one.
+   *
+   * Pair it with `queueIndex` on {@link setPlaybackState} to say which entry is
+   * current. Queue entries may be sparse — id and title are usually enough;
+   * see {@link setMediaItem} for how the current entry gets enriched.
+   */
   setQueue(items: MediaItem[]): void
   /**
    * End background execution. The ONLY thing that does — `pause()` never does

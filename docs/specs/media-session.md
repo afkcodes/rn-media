@@ -123,6 +123,12 @@ service.stopService();     // ONLY way to end background execution; pause never 
   converted wall→monotonic ONCE at broadcast receipt (NTP-clamped).
 - Dev-reload safety: `ReactHost.addBeforeDestroyListener` tears the session down
   before the runtime dies.
+- **Channel priority, per timeline entry**: for the CURRENT entry only, a
+  `setMediaItem` whose `id` matches `queue[queueIndex]` is merged over the queue
+  entry field-by-field (item field present wins, absent falls back) — this is how
+  `duration`, and therefore the scrubber, reaches a queue-backed timeline;
+  mismatched ids leave the queue entry alone and log a warning
+  (`Snapshot.enrichedWith`).
 - **Deferred from v1** (documented, needs its own on-device budget): cold-starting
   the JS runtime from the service (app-killed → media-button resume is a dead end).
 

@@ -3,6 +3,7 @@ package com.rnmediamediasession
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -80,6 +81,9 @@ internal class BroadcastPlayer(
    */
   private val pending = mutableListOf<SettableFuture<Any?>>()
 
+  /** Last value passed to [warnOnce]; see it for why only one is remembered. */
+  private var warnedMismatch: String? = null
+
   /**
    * Publish a new snapshot. Main thread only.
    *
@@ -116,6 +120,10 @@ internal class BroadcastPlayer(
     val current = snapshot
     val builder = State.Builder().setAvailableCommands(MediaButtons.commands(current))
 
+    warnOnce(current.itemQueueMismatch)
+
+    // Already carries the `setMediaItem` overlay on the current entry; see
+    // `Snapshot.timeline` / `enrichedWith`.
     val timeline = current.timeline
     if (timeline.isEmpty()) {
       // media3 asserts this pairing: "If the playlist is empty, the state must
@@ -172,6 +180,26 @@ internal class BroadcastPlayer(
     }
 
     return builder.build()
+  }
+
+  /**
+   * Report a `setMediaItem`/queue disagreement once per distinct combination.
+   *
+   * `getState()` runs many times per broadcast, so an unguarded log would be a
+   * flood. Only the last reported combination is remembered: mismatches are
+   * sticky in practice (they persist until the app fixes its broadcast), and a
+   * genuine flip-flop between two combinations is itself worth seeing twice.
+   * Main-thread confined like the rest of this class, hence no synchronisation.
+   */
+  private fun warnOnce(mismatch: String?) {
+    if (mismatch == null || mismatch == warnedMismatch) return
+    warnedMismatch = mismatch
+    Log.w(
+      RnMediaMediaSessionService.TAG,
+      "setMediaItem does not describe the current queue entry ($mismatch); the queue " +
+        "entry wins and the item's fields — including its duration — are ignored. " +
+        "Broadcast the matching queueIndex, or an item whose id matches it.",
+    )
   }
 
   private fun mediaItemData(item: NativeMediaItem, index: Int, snapshot: Snapshot): MediaItemData {

@@ -97,7 +97,7 @@ internal data class Snapshot(
   val queue: List<NativeMediaItem>,
 ) {
   /**
-   * The timeline media3 should show, and which entry of it is current.
+   * The timeline before the `setMediaItem` channel is overlaid onto it.
    *
    * Three cases, in priority order:
    * 1. A valid [queueIndex] into a non-empty [queue] — the normal case; the
@@ -108,18 +108,69 @@ internal data class Snapshot(
    * 3. Nothing at all — an empty timeline, which media3 requires to be paired
    *    with `STATE_IDLE`/`STATE_ENDED`.
    */
-  val timeline: List<NativeMediaItem>
+  private val baseTimeline: List<NativeMediaItem>
     get() = when {
       queueIndex in queue.indices -> queue
       item != null -> listOf(item)
       else -> queue
     }
 
+  /**
+   * The timeline media3 should show — [baseTimeline] with the **current** entry
+   * enriched by the `setMediaItem` channel (see [enrichedWith] for the rule and
+   * the defect that motivates it).
+   *
+   * Only the current entry is touched: `setMediaItem` describes what is playing
+   * now and says nothing about the rest of the queue, so every other entry is
+   * passed through untouched (and by reference — the list is only copied when
+   * an overlay actually applies).
+   *
+   * Computed once per snapshot. Snapshots are immutable and `getState()` is
+   * called at media3's discretion, so caching keeps the overlay off a path that
+   * runs on the main thread.
+   */
+  val timeline: List<NativeMediaItem> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+    val base = baseTimeline
+    val override = item ?: return@lazy base
+    val current = base.getOrNull(timelineIndex) ?: return@lazy base
+    when {
+      // Case 2 above: the timeline *is* the item, nothing to merge into.
+      current === override -> base
+      // Ids differ — the item describes something that is not at the current
+      // queue position, so the queue entry stands. See [itemQueueMismatch].
+      current.id != override.id -> base
+      else -> base.toMutableList().apply { this[timelineIndex] = current.enrichedWith(override) }
+    }
+  }
+
   val timelineIndex: Int
     get() = when {
       queueIndex in queue.indices -> queueIndex
       item != null -> 0
       else -> 0
+    }
+
+  /**
+   * A stable, human-readable key describing a `setMediaItem`/queue disagreement,
+   * or `null` when the two channels agree (the normal case).
+   *
+   * Non-null means the app has broadcast an item whose id is not the id at
+   * [timelineIndex], so everything the item carries — typically the duration —
+   * is being dropped rather than merged. That is almost always an app bug (a
+   * `setMediaItem` and the `setPlaybackState` carrying the matching `queueIndex`
+   * got out of step), and it is invisible from the outside: the notification
+   * simply shows the wrong metadata and no scrubber.
+   *
+   * Reported as data rather than logged here so this class stays free of
+   * `android.util.Log` and therefore unit-testable on a plain JVM. The caller
+   * ([BroadcastPlayer]) logs it once per distinct value.
+   */
+  val itemQueueMismatch: String?
+    get() {
+      val override = item ?: return null
+      val current = baseTimeline.getOrNull(timelineIndex) ?: return null
+      return if (current === override || current.id == override.id) null
+      else "item id '${override.id}' vs queue[$timelineIndex] id '${current.id}'"
     }
 
   val isSeekable: Boolean
@@ -142,6 +193,49 @@ internal data class Snapshot(
     )
   }
 }
+
+/**
+ * Overlay the `setMediaItem` channel onto the queue entry describing the same
+ * track: **a field the item carries wins; a field the item omits falls back to
+ * the queue entry.** Pure — same inputs, same output, no Android types.
+ *
+ * ## The channel-priority rule
+ * The three broadcast channels are not ranked as a whole; they are ranked
+ * per-entry. For the entry that is *currently playing*, `setMediaItem` is the
+ * more specific statement — it is what the app sends when it knows something
+ * concrete about the track it just started — so it takes priority over the same
+ * track's queue entry. Every other queue entry is untouched: `setMediaItem`
+ * says nothing about them. The receiver is the queue entry (the base), the
+ * argument is the item (the override).
+ *
+ * ## The defect this fixes
+ * Before this existed, a broadcast queue with a valid `queueIndex` made the
+ * timeline *purely* queue-derived, and everything `setMediaItem` carried was
+ * silently dropped. Apps rarely know durations for queue items up front — they
+ * learn the duration when the track is prepared and send it through
+ * `setMediaItem` — so in the common case duration reached the queue-backed
+ * timeline through no channel at all. `durationUs` stayed `C.TIME_UNSET`,
+ * `setIsSeekable(false)` followed, and the notification and lock screen showed
+ * no scrubber even though the app had broadcast a complete current track.
+ *
+ * The caller must check id equality first; merging across different ids would
+ * paste one track's metadata onto another. See [Snapshot.itemQueueMismatch].
+ */
+internal fun NativeMediaItem.enrichedWith(item: NativeMediaItem): NativeMediaItem =
+  NativeMediaItem(
+    // Equal by precondition; taking the receiver's keeps the queue's identity
+    // authoritative for the timeline it belongs to.
+    id = id,
+    // `title` is the one non-nullable field, so "absent" cannot be expressed as
+    // null. A blank title is not information — it would blank out a perfectly
+    // good queue title — so it is treated as absent.
+    title = item.title.ifBlank { title },
+    artist = item.artist ?: artist,
+    album = item.album ?: album,
+    artworkUri = item.artworkUri ?: artworkUri,
+    duration = item.duration ?: duration,
+    genre = item.genre ?: genre,
+  )
 
 /**
  * Fold a `setPlaybackState` broadcast into the previous snapshot.
