@@ -179,15 +179,81 @@ What that does **not** cover:
   Artwork loads off the main thread and is cached.
 - There is **no service**. The process lives while audio plays, which requires
   `UIBackgroundModes: audio` in *your* Info.plist (a library cannot merge
-  Info.plist keys). Force-quitting from the app switcher kills everything —
-  that is iOS policy, not a bug here.
+  Info.plist keys — the Expo config plugin below writes it for you).
+  Force-quitting from the app switcher kills everything — that is iOS policy,
+  not a bug here.
 - `skipToQueueItem` and custom actions have no iOS remote surface. They still
   work from your own UI.
+
+## Expo config plugin
+
+This package ships the config plugin for the whole library — it is the package
+that owns background playback, and it is the only one that needs anything an
+Expo app cannot express by itself. `@rn-media/player` and
+`@rn-media/audio-session` need no plugin.
+
+```json
+{
+  "expo": {
+    "plugins": ["@rn-media/media-session"]
+  }
+}
+```
+
+```sh
+npx expo prebuild --clean
+```
+
+What it does:
+
+| Platform | Change | Why |
+| --- | --- | --- |
+| iOS | merges `audio` into `UIBackgroundModes` | without it iOS suspends the app on backgrounding and the audio session is torn down mid-track |
+| Android | nothing | this package's own manifest already merges the foreground-service permissions and the `mediaPlayback` service into the app |
+
+The merge is additive and idempotent: existing modes such as `voip` survive, and
+a plist that already lists `audio` is left alone, so re-running prebuild is a
+no-op. The plugin is wrapped in `createRunOncePlugin`, so listing it twice (say,
+directly and through another library) applies it once.
+
+### Options
+
+Everything above needs no options. One is available:
+
+```json
+{
+  "expo": {
+    "plugins": [
+      ["@rn-media/media-session", { "androidNotificationIcon": "./assets/ic_notification.xml" }]
+    ]
+  }
+}
+```
+
+`androidNotificationIcon` — path, relative to the project root, of the drawable
+to install as the notification small icon. It exists because a prebuild app has
+no other way to add an Android resource: `android/` is generated, so
+`android.notificationIcon` in `MediaService.init` would have nothing to resolve
+and media3 would silently fall back to its own icon.
+
+- A **vector drawable** (`.xml`) is copied to `res/drawable/`; a `.png`/`.webp`
+  is copied to `res/drawable-xxxhdpi/`, where a 96×96 px white-on-transparent
+  source is the 24 dp the platform asks for (a raster in unqualified
+  `drawable/` would be read as mdpi and upscaled 4×).
+- The file name without its extension is the resource name — pass that same
+  string as `android.notificationIcon`. It must be a valid Android resource
+  name (lowercase, digits, `_`, letter-first); the plugin fails the prebuild
+  rather than letting `aapt2` do it later.
+
+Bare React Native projects do not need the plugin at all: add
+`UIBackgroundModes` to `Info.plist` and drop the drawable into
+`android/app/src/main/res` yourself.
 
 ## Development
 
 ```sh
-npm run codegen    # nitrogen + bob build
-npm run typecheck  # tsc --noEmit (strict)
-npm test           # vitest
+npm run codegen       # nitrogen + bob build
+npm run typecheck     # tsc --noEmit (strict), src + plugin
+npm test              # vitest — src and plugin suites
+npm run build:plugin  # tsc -p plugin → plugin/build (what app.plugin.js loads)
 ```

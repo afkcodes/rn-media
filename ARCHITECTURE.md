@@ -159,6 +159,30 @@ queue with variant/segment entries (measured 3→23). The player forces
 - Final authority: a **physical Android device** (user rule: never an
   emulator). iOS compiles on CI only; runtime iOS verification awaits a device.
 
+### 16. Expo support is one config plugin, owned by `media-session`
+An Expo prebuild app needs exactly one thing it cannot express for itself:
+`UIBackgroundModes: audio` in Info.plist. Android needs nothing — the
+media-session manifest already merges the FGS permissions and the service, and
+RN 0.86's version catalog (which `expo-root-project` reads) hands a prebuild app
+compileSdk 36 / minSdk 24 / Kotlin 2.1.20, exactly what media3 1.11 requires. So:
+one plugin, in the package that owns background playback, not the standalone
+`packages/expo-plugin` PLAN §7 sketched — Expo resolves a library plugin from
+`app.plugin.js` at the *package* root, so a separate package would have to be
+installed and listed for no gain (`player`'s stale `files` entry for a
+nonexistent `app.plugin.js` is deleted). Authored in TS under `plugin/src`,
+compiled to CommonJS `plugin/build`, importing from `expo/config-plugins` (the
+`expo` re-export — the app's own SDK version wins, and `expo` stays an *optional*
+peer so bare apps are unaffected): Expo's documented library layout, matching
+what `@react-native-firebase/app` and `react-native-google-mobile-ads` ship.
+The Info.plist mod **merges** rather than assigns — idempotent across repeated
+prebuilds, and a sibling mode like `voip` survives — under `createRunOncePlugin`.
+One option, `androidNotificationIcon`, exists because prebuild regenerates
+`android/`: without it the runtime `android.notificationIcon` is unreachable for
+Expo apps and media3 silently falls back to its own icon. Vectors go to
+`res/drawable`, rasters to `res/drawable-xxxhdpi` (a raster in unqualified
+`drawable/` is read as mdpi and upscaled 4×). Files are copied, never resized —
+resizing would mean depending on `@expo/image-utils` for every consumer.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
