@@ -100,6 +100,33 @@ jobs:
         working-directory: apps/example/ios
         run: pod install
 
+      # The libmpv xcframeworks are vendored by `RnMediaPlayer.podspec` and are
+      # the one part of the graph a podspec mistake can silently drop (CocoaPods
+      # filters `vendored_frameworks` through `exclude_files`, so an over-broad
+      # exclude pattern removes them without a word). Assert here rather than
+      # discovering it four minutes later as a wall of undefined `mpv_*`.
+      - name: Verify libmpv is linked into the app target
+        working-directory: apps/example/ios
+        run: |
+          xcconfig="Pods/Target Support Files/Pods-RnMediaPlayerExample/Pods-RnMediaPlayerExample.debug.xcconfig"
+          missing=0
+          for framework in Mpv Avcodec Avformat Avutil Swresample; do
+            grep -q -- "-framework \"${framework}\"" "$xcconfig" || {
+              echo "::error::${xcconfig} is missing -framework \"${framework}\" — RnMediaPlayer's vendored xcframeworks did not reach the app target"
+              missing=1
+            }
+          done
+          grep -q 'PODS_XCFRAMEWORKS_BUILD_DIR}/RnMediaPlayer' "$xcconfig" || {
+            echo "::error::${xcconfig} has no \${PODS_XCFRAMEWORKS_BUILD_DIR}/RnMediaPlayer framework search path"
+            missing=1
+          }
+          if [ "$missing" -ne 0 ]; then
+            echo "--- OTHER_LDFLAGS / FRAMEWORK_SEARCH_PATHS as generated:"
+            grep -E '^(OTHER_LDFLAGS|FRAMEWORK_SEARCH_PATHS)' "$xcconfig"
+            exit 1
+          fi
+          echo "libmpv xcframeworks are linked into the app target."
+
       # `xcpretty` swallows the body of linker diagnostics (the actual list of
       # undefined symbols never reaches the console), so the raw xcodebuild
       # output is tee'd to a file that the failure/artifact steps below mine.
