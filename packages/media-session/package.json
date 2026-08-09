@@ -8,12 +8,13 @@
   "react-native": "src/index",
   "source": "src/index",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p plugin/tsconfig.test.json",
     "clean": "git clean -dfX",
     "release": "semantic-release",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "npm run typecheck && bob build",
+    "build": "npm run typecheck && bob build && npm run build:plugin",
+    "build:plugin": "tsc -p plugin",
     "codegen": "nitrogen --logLevel=\"debug\" && npm run build",
     "pod": "npm --prefix ../../apps/example run pod"
   },
@@ -30,6 +31,8 @@
     "src",
     "!src/__tests__",
     "lib",
+    "app.plugin.js",
+    "plugin/build",
     "nitrogen",
     "nitro.json",
     "android/build.gradle",
@@ -58,8 +61,10 @@
     "@jamesacarr/eslint-formatter-github-actions": "^0.2.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
+    "@types/node": "^26.2.0",
     "@types/react": "19.2.0",
     "conventional-changelog-conventionalcommits": "^10.2.1",
+    "expo": "^57.0.11",
     "nitrogen": "^0.36.1",
     "react": "19.2.3",
     "react-native": "0.86.0",
@@ -70,9 +75,15 @@
     "vitest": "^4.1.10"
   },
   "peerDependencies": {
+    "expo": ">=55.0.0",
     "react": "*",
     "react-native": ">=0.82.0",
     "react-native-nitro-modules": "*"
+  },
+  "peerDependenciesMeta": {
+    "expo": {
+      "optional": true
+    }
   },
   "eslintConfig": {
     "root": true,

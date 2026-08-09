@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'plugin/**/*.test.ts'],
     environment: 'node',
     // `src/native.ts` imports `react-native-nitro-modules` (which pulls in
     // react-native) purely to construct the singleton lazily. Tests never touch

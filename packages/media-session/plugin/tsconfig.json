@@ -1,0 +1,29 @@
+{
+  // Standalone on purpose: the package tsconfig targets the React Native
+  // bundler (ESM, `moduleResolution: bundler`), while `app.plugin.js` is
+  // `require`d by the Expo CLI in a plain Node process and must be CommonJS.
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    // `node16` (not `commonjs`/`node10`, which TypeScript 6 deprecates) with no
+    // `"type": "module"` in package.json emits CommonJS — what `app.plugin.js`
+    // `require`s.
+    "module": "node16",
+    "types": ["node"],
+    "outDir": "build",
+    "rootDir": "src",
+    "declaration": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false
+  },
+  "include": ["src"]
+}
