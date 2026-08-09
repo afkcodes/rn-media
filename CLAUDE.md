@@ -2,7 +2,10 @@
 
 React Native audio (+ later video-as-plugin) playback library built on **libmpv**,
 with a player-agnostic media-session layer inspired by Flutter's `audio_service`.
-Read `PLAN.md` for the full analysis, architecture, and decisions. Decisions in
+Read `ARCHITECTURE.md` FIRST — it is the living record of every decision and its
+why, plus the platform traps we build around; report contradictions rather than
+silently diverging, and any change that alters a decision updates that file in
+the same commit. `PLAN.md` holds the full analysis and roadmap. Decisions in
 PLAN.md §7.5 (video is additive, never in core) are settled — do not revisit.
 
 ## Working model (mandatory)
