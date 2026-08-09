@@ -56,7 +56,23 @@ Pod::Spec.new do |s|
   # `ios/Frameworks` is script-generated; never compile anything found in it.
   # `cpp/tests` is host-only (Linux/CI unit tests) and must never reach an
   # iOS target.
-  s.exclude_files = ["ios/Frameworks/**/*", "ios/.cache/**/*", "cpp/tests/**/*"]
+  #
+  # The `ios/Frameworks` pattern is deliberately narrowed to compilable
+  # extensions instead of a bare `ios/Frameworks/**/*`. CocoaPods applies
+  # `exclude_files` to *every* file attribute, `vendored_frameworks` included
+  # (`Sandbox::FileAccessor#paths_for_attribute` passes
+  # `spec_consumer.exclude_files` for all of them), and `**/*` matches the
+  # `.xcframework` bundle directories themselves. That silently emptied
+  # `vendored_frameworks`: the app target got no `-framework Mpv` and no
+  # `${PODS_XCFRAMEWORKS_BUILD_DIR}/RnMediaPlayer` search path, so every
+  # `mpv_*` symbol was undefined at link time (CI run 31320994997).
+  # Nothing under `ios/Frameworks` is matched by `source_files` anyway — this
+  # pattern is only a guard.
+  s.exclude_files = [
+    "ios/Frameworks/**/*.{swift,m,mm}",
+    "ios/.cache/**/*",
+    "cpp/tests/**/*",
+  ]
 
   # Prebuilt libmpv (audio flavour, LGPL `default` build) — see ios/libmpv.pin.
   #
