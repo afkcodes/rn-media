@@ -1,0 +1,118 @@
+name: Build iOS
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/ios-build.yml'
+      - 'apps/example/ios/**'
+      - 'apps/example/Gemfile'
+      - 'apps/example/Gemfile.lock'
+      - '**/nitrogen/generated/shared/**'
+      - '**/nitrogen/generated/ios/**'
+      - 'packages/player/cpp/**'
+      - 'packages/player/ios/**'
+      - 'packages/audio-session/ios/**'
+      - 'packages/media-session/ios/**'
+      - '**/Podfile.lock'
+      - '**/package-lock.json'
+      - '**/*.podspec'
+      - '**/react-native.config.js'
+      - '**/nitro.json'
+  pull_request:
+    paths:
+      - '.github/workflows/ios-build.yml'
+      - 'apps/example/ios/**'
+      - 'apps/example/Gemfile'
+      - 'apps/example/Gemfile.lock'
+      - '**/nitrogen/generated/shared/**'
+      - '**/nitrogen/generated/ios/**'
+      - 'packages/player/cpp/**'
+      - 'packages/player/ios/**'
+      - 'packages/audio-session/ios/**'
+      - 'packages/media-session/ios/**'
+      - '**/Podfile.lock'
+      - '**/package-lock.json'
+      - '**/*.podspec'
+      - '**/react-native.config.js'
+      - '**/nitro.json'
+  workflow_dispatch:
+
+env:
+  USE_CCACHE: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build iOS Example App
+    runs-on: macOS-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 16.4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Ruby (bundle)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: apps/example
+
+      - name: Install xcpretty
+        run: gem install xcpretty
+
+      # Prebuilt libmpv (audio, LGPL "default" flavour). `pod install` runs this
+      # same script itself, but priming it here gives us a cached download and a
+      # dedicated, readable failure when the pinned artifact/checksum is wrong.
+      - name: Cache prebuilt libmpv
+        uses: actions/cache@v4
+        with:
+          path: packages/player/ios/.cache/libmpv
+          key: ${{ runner.os }}-libmpv-ios-${{ hashFiles('packages/player/ios/libmpv.pin') }}
+
+      - name: Fetch prebuilt libmpv
+        run: ./packages/player/ios/fetch-libmpv.sh
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cocoapods/repos
+            apps/example/ios/Pods
+          key: ${{ runner.os }}-pods-${{ hashFiles('apps/example/ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+
+      - name: Install Pods
+        working-directory: apps/example/ios
+        run: pod install
+
+      - name: Build App
+        working-directory: apps/example/ios
+        run: |
+          set -o pipefail && xcodebuild \
+            CC=clang CPLUSPLUS=clang++ LD=clang LDPLUSPLUS=clang++ \
+            -derivedDataPath build -UseModernBuildSystem=YES \
+            -workspace RnMediaPlayerExample.xcworkspace \
+            -scheme RnMediaPlayerExample \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            build \
+            CODE_SIGNING_ALLOWED=NO | xcpretty
