@@ -383,6 +383,15 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * nothing useful left to do but stop.
    */
   private fun stopWithoutEverBecomingForeground() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+      // Pre-O there is no startForeground() contract to satisfy —
+      // `startForegroundService` itself is API 26+ — and the two-arg
+      // `Notification.Builder(Context, String)` below does not exist either
+      // (lint NewApi). A plain stop is already safe here.
+      stopSelf()
+      return
+    }
+
     val channelId = MediaSessionController.androidConfig?.notificationChannelId
       ?: PLACEHOLDER_CHANNEL_ID
     createNotificationChannel(
