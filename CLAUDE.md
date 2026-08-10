@@ -62,6 +62,15 @@ PLAN.md §7.5 (video is additive, never in core) are settled — do not revisit.
 
 ## Dependency policy (mandatory)
 
+- **Currency rule (owner-mandated): we do not lag upstream.** Engine pieces
+  (mpv, ffmpeg via our binary forks), media3, the Nitro pair, and the tested RN
+  version track **latest stable**: evaluate within two weeks of an upstream
+  stable release, ship after the full verification playbook (shipped-artifact
+  proofs, option-semantics audit against the new manuals, patch-series rebase,
+  device re-verification). Never blind-bump the engine; never silently lag it
+  either. A scheduled CI watcher compares our pins to upstream latest and opens
+  a tracking issue when we fall behind.
+
 - **Never write a dependency version from model memory.** Before adding or pinning
   anything, resolve the latest stable from the source of truth:
   - npm: `npm view <pkg> version` / `npm view <pkg> dist-tags`
