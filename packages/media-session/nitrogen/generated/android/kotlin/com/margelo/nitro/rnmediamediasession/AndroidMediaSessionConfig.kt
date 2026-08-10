@@ -29,7 +29,10 @@ data class AndroidMediaSessionConfig(
   val notificationIcon: String?,
   @DoNotStrip
   @Keep
-  val stopForegroundOnPause: Boolean
+  val stopForegroundOnPause: Boolean,
+  @DoNotStrip
+  @Keep
+  val stopForegroundTimeoutMs: Double?
 ) {
   /* primary constructor */
 
@@ -40,6 +43,7 @@ data class AndroidMediaSessionConfig(
       && Objects.deepEquals(this.notificationChannelName, other.notificationChannelName)
       && Objects.deepEquals(this.notificationIcon, other.notificationIcon)
       && Objects.deepEquals(this.stopForegroundOnPause, other.stopForegroundOnPause)
+      && Objects.deepEquals(this.stopForegroundTimeoutMs, other.stopForegroundTimeoutMs)
   }
 
   override fun hashCode(): Int {
@@ -47,7 +51,8 @@ data class AndroidMediaSessionConfig(
       notificationChannelId,
       notificationChannelName,
       notificationIcon,
-      stopForegroundOnPause
+      stopForegroundOnPause,
+      stopForegroundTimeoutMs
     ).contentDeepHashCode()
   }
 
@@ -59,8 +64,8 @@ data class AndroidMediaSessionConfig(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Boolean): AndroidMediaSessionConfig {
-      return AndroidMediaSessionConfig(notificationChannelId, notificationChannelName, notificationIcon, stopForegroundOnPause)
+    private fun fromCpp(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Boolean, stopForegroundTimeoutMs: Double?): AndroidMediaSessionConfig {
+      return AndroidMediaSessionConfig(notificationChannelId, notificationChannelName, notificationIcon, stopForegroundOnPause, stopForegroundTimeoutMs)
     }
   }
 }

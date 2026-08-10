@@ -8,6 +8,7 @@
 import Foundation
 import MediaPlayer
 import NitroModules
+import QuartzCore
 import UIKit
 
 /**
@@ -62,6 +63,16 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
   private var artworkGeneration = 0
 
   private var nowPlayingCenter: MPNowPlayingInfoCenter { .default() }
+
+  /**
+   * The native sleep timer. `lazy` rather than a stored `let` only because it
+   * captures `self`; every method that touches it (`setSleepTimer`,
+   * `cancelSleepTimer`, `getSleepTimerRemaining`) is called by Nitro on the JS
+   * thread, so the lazy initialisation is not racing anything.
+   */
+  private lazy var sleepTimer = SleepTimer { [weak self] in
+    self?.onSleepTimerFired()
+  }
 
   // MARK: - Spec
 
@@ -131,6 +142,9 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
   }
 
   func stopService() throws -> Promise<Void> {
+    // Synchronously, before the hop: `stopService` discards the handlers, and a
+    // timer left armed would fire into them.
+    sleepTimer.cancel()
     let promise = Promise<Void>()
     DispatchQueue.main.async { [weak self] in
       guard let self else {
@@ -149,6 +163,67 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       promise.resolve(withResult: ())
     }
     return promise
+  }
+
+  // MARK: - Sleep timer
+
+  func setSleepTimer(seconds: Double) throws {
+    sleepTimer.arm(seconds: seconds)
+  }
+
+  func cancelSleepTimer() throws {
+    sleepTimer.cancel()
+  }
+
+  func getSleepTimerRemaining() throws -> Double? {
+    sleepTimer.remainingSeconds()
+  }
+
+  /**
+   * The sleep timer elapsed. Main queue (see ``SleepTimer``).
+   *
+   * **Native-first**, the same contract as Android's — but reached differently,
+   * because iOS has no facade `Player` to drive. There the timer pauses media3's
+   * player and media3 routes that back out to the JS `pause` handler; here the
+   * two halves are done explicitly and in the same order:
+   *
+   * 1. The now-playing state is moved to `paused` *locally*, so the lock screen,
+   *    Control Center and any connected accessory stop the scrubber immediately
+   *    rather than at the app's next broadcast. This is also what keeps a
+   *    headset `togglePlayPause` (which reads ``isPlaying``) from being deaf to
+   *    a pause the app has not confirmed yet.
+   * 2. The app's `pause` handler is invoked to actually stop the audio.
+   *
+   * Only then is `onSleepTimer` fired. As on Android, it is a notification of
+   * something already done. The app's next `setPlaybackState` supersedes the
+   * local state, exactly like any other command.
+   */
+  private func onSleepTimerFired() {
+    if let state = playbackState {
+      // The struct's properties are read-only projections of a C++ struct, so
+      // "paused" is expressed by rebuilding it rather than mutating it.
+      playbackState = NativePlaybackState(
+        status: .paused,
+        position: state.position,
+        bufferedPosition: state.bufferedPosition,
+        controls: state.controls,
+        capabilities: state.capabilities,
+        customActions: state.customActions,
+        compactControlIndices: state.compactControlIndices,
+        queueIndex: state.queueIndex,
+        errorMessage: state.errorMessage
+      )
+      // Freeze the projection where it had actually reached, so re-posting does
+      // not rewind the scrubber (see ``PositionProjection``).
+      projection = PositionProjection(
+        valueSeconds: projection.projectedSeconds(),
+        origin: CACurrentMediaTime(),
+        rate: 0
+      )
+      publishNowPlayingInfo()
+    }
+    handlers?.pause()
+    handlers?.onSleepTimer()
   }
 
   // MARK: - Command wiring

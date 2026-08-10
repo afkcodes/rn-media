@@ -66,6 +66,9 @@ namespace margelo::nitro::rnmediamediasession {
       virtual void setMediaItem(const std::optional<NativeMediaItem>& item) = 0;
       virtual void setQueue(const std::vector<NativeMediaItem>& items) = 0;
       virtual std::shared_ptr<Promise<void>> stopService() = 0;
+      virtual void setSleepTimer(double seconds) = 0;
+      virtual void cancelSleepTimer() = 0;
+      virtual std::optional<double> getSleepTimerRemaining() = 0;
 
     protected:
       // Hybrid Setup

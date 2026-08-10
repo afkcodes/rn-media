@@ -132,6 +132,66 @@ service.stopService();     // ONLY way to end background execution; pause never 
 - **Deferred from v1** (documented, needs its own on-device budget): cold-starting
   the JS runtime from the service (app-killed → media-button resume is a dead end).
 
+## AS-BUILT ADDENDUM (2026-08-10, background hardening — architect-reviewed)
+
+Three additions, all answering "a paused, demoted service is killable". Full
+rationale in ARCHITECTURE §19; the contract deltas are here.
+
+### Queue/position persistence — TS only, zero dependencies
+
+- `withPersistence(service, storage, options?) → PersistedMediaService` tees the
+  three broadcast setters into `storage` and adds `save()` + `flush()`.
+  `restorePersisted(storage, options?) → Promise<RestoreResult>`,
+  `applyPersisted(service, session)`, `clearPersisted(storage, options?)`.
+- **`MediaSessionStorage` is structural** — `{ getItem, setItem }`, sync *or*
+  async — so AsyncStorage/MMKV/anything fits and none becomes a dependency.
+  Deliberately no `removeItem`: `clearPersisted` writes a channel-less record of
+  the current version instead, which reads back as `empty`.
+- **Writes only on discontinuities**, which the broadcasts already are. No timer
+  was added, and none may be. The cost is explicit: a track played straight
+  through produces no write, so `save()` exists for the app to checkpoint at a
+  moment it chooses (`AppState` leaving `active`, `onTaskRemoved`).
+- **Anchor policy**: projected to the write instant, `rate → 0`,
+  `playing|buffering → paused`, clamped to a known `duration`, `at` re-stamped
+  on restore. A **live entry (no `duration` on either channel) persists position
+  `0`** — same discriminator as `isDynamic`/`IsLiveStream` (§13).
+- **Schema `v: 1`**, versioned and tolerant: `empty` / `unsupportedVersion` /
+  `corrupt` are values, not throws; only a failing storage engine rejects.
+  Restored payloads go through `normalizePlaybackState`/`validateMediaItem`/
+  `validateQueue` — the same choke point a live broadcast uses.
+- Not persisted: handlers (code), the `stopService` lifecycle (stop ends
+  background execution, not the user's place), and the sleep timer.
+
+### Native sleep timer
+
+- Spec: `setSleepTimer(seconds)`, `cancelSleepTimer()`,
+  `getSleepTimerRemaining(): number | undefined`, plus `onSleepTimer` on the
+  handlers struct (nitrogen regenerated the struct cleanly; no enum members were
+  added, so the casing rule is untouched).
+- Android `Handler.postDelayed` on the main looper; iOS `DispatchWorkItem` via
+  `DispatchQueue.main.asyncAfter`. Neither is Activity-scoped.
+- **Fire order is the contract**: native pause first — on Android through the
+  facade player's own `Player.pause()`, i.e. byte-for-byte the notification-pause
+  path — then `onSleepTimer` fire-and-forget. `BaseMediaHandler.onSleepTimer` is
+  a no-op and that is correct, not a stub.
+- Cancelled by `stopService()` and by the `ReactHost` before-destroy hook (dev
+  reload). Does not survive process death; not persisted.
+- `getSleepTimerRemaining` reads the clock the timer was *scheduled* against
+  (`uptimeMillis` / `DispatchTime`), never a wall clock.
+
+### `android.stopForegroundTimeoutMs`
+
+- New optional field on `AndroidMediaSessionConfig`, milliseconds, validated
+  `>= 0` and finite. Applied in `RnMediaMediaSessionService.onCreate` (after
+  `setMediaNotificationProvider`) via
+  `MediaSessionService.setForegroundServiceTimeoutMs(long)` — `@UnstableApi`,
+  media3 1.11.0, verified by `javap` on the shipped AAR.
+- Omitted ⇒ media3's default. `0` ⇒ demote on pause. `> 600000` ⇒ media3 clamps
+  down (the default is also the ceiling). Negative ⇒ rejected in TS, because
+  media3 would clamp it to `0` silently.
+- Applied at service creation only; a later `init` does not retro-fit a running
+  service.
+
 ## Explicitly out of scope for v1 (interface reserved, no implementation)
 Android Auto browse tree beyond returning empty, CarPlay, cast, ratings, search.
 

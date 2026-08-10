@@ -136,6 +136,26 @@ namespace margelo::nitro::rnmediamediasession {
       auto __value = std::move(__result.value());
       return __value;
     }
+    inline void setSleepTimer(double seconds) override {
+      auto __result = _swiftPart.setSleepTimer(std::forward<decltype(seconds)>(seconds));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void cancelSleepTimer() override {
+      auto __result = _swiftPart.cancelSleepTimer();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline std::optional<double> getSleepTimerRemaining() override {
+      auto __result = _swiftPart.getSleepTimerRemaining();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+      auto __value = std::move(__result.value());
+      return __value;
+    }
 
   private:
     RnMediaMediaSession::HybridRnMediaMediaSessionSpec_cxx _swiftPart;

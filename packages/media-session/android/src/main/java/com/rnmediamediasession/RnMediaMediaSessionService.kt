@@ -103,6 +103,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       // foreground-service start down with it.
       ?.let(provider::setSmallIcon)
     setMediaNotificationProvider(provider)
+    applyForegroundServiceTimeout(config?.stopForegroundTimeoutMs)
 
     setListener(object : Listener {
       override fun onForegroundServiceStartNotAllowedException() {
@@ -198,9 +199,11 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * minutes — and only then posts the demotion. `dumpsys activity services`
    * therefore still shows `isForeground=true` immediately after a pause; that
    * is media3's Android 14+ behaviour, not a missing transition here.
-   * `setForegroundServiceTimeoutMs(0)` would restore instant demotion; whether
-   * this package should do that is an open decision, because the grace period
-   * is what makes a resume-from-notification survivable.
+   * That grace period is now configurable rather than fixed: see
+   * [applyForegroundServiceTimeout] and the `stopForegroundTimeoutMs` config
+   * option. It is left at media3's default when the app does not set it,
+   * because the grace period is what makes a resume-from-notification
+   * survivable.
    *
    * `false` forces `startInForegroundRequired`, keeping the service in the
    * foreground while paused. More robust, at the cost of an ongoing
@@ -215,6 +218,51 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   ): ListenableFuture<Void?> {
     val stopOnPause = MediaSessionController.androidConfig?.stopForegroundOnPause ?: true
     return super.onUpdateNotificationAsync(session, startInForegroundRequired || !stopOnPause)
+  }
+
+  /**
+   * `stopForegroundTimeoutMs` → `MediaSessionService.setForegroundServiceTimeoutMs`.
+   *
+   * media3 1.11 does not demote a paused service straight away; it keeps it
+   * foreground for a "user engaged" grace period and only then runs
+   * [onUpdateNotificationAsync] again. That period is
+   * `DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS` = **600 000 ms**, and this setter is
+   * the only public lever on it (`MediaNotificationManager.shouldRunInForeground`
+   * and `isAnySessionUserEngaged` are both package-private/private).
+   *
+   * Verified against the shipped 1.11.0 AAR (`javap`:
+   * `public final void setForegroundServiceTimeoutMs(long)`, `@UnstableApi`,
+   * and `DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS` with `ConstantValue: long
+   * 600000l`) and against
+   * https://github.com/androidx/media/blob/1.11.0/libraries/session/src/main/java/androidx/media3/session/MediaSessionService.java#L643-L668
+   *
+   * Three properties of the media3 implementation this code depends on:
+   * - **It must be called once the service context exists**, i.e. from
+   *   `onCreate` after `super.onCreate()`, on the main thread — the setter
+   *   dereferences `getMediaNotificationManager()`, which `checkNotNull`s the
+   *   base context.
+   * - **It is called after `setMediaNotificationProvider`.** In media3 < 1.6.1
+   *   the reverse order force-created the notification manager with the default
+   *   provider and silently discarded ours (androidx/media#2305). 1.11.0
+   *   contains the fix; the ordering is kept anyway because it costs nothing.
+   * - **The value is `Util.constrainValue(v, 0, 600_000)`** — a bigger number is
+   *   clamped *down*, a negative one is clamped up to 0 with no complaint. The
+   *   TS layer rejects negatives so that clamp is never reached silently; the
+   *   `coerceIn` here is belt-and-braces for a value that arrived some other way.
+   *
+   * Applied when the service is created, which is the first `playing`
+   * broadcast — a later `init` with a different value does not retro-fit a
+   * running service.
+   */
+  private fun applyForegroundServiceTimeout(timeoutMs: Double?) {
+    val requested = timeoutMs ?: return
+    val clamped = requested.toLong().coerceIn(0L, DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS)
+    setForegroundServiceTimeoutMs(clamped)
+    Log.i(
+      TAG,
+      "Foreground-service timeout set to $clamped ms " +
+        "(media3 default ${DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS} ms).",
+    )
   }
 
   /**

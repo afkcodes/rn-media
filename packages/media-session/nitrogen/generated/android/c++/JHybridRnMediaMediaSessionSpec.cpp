@@ -33,10 +33,10 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/JPromise.hpp>
 #include <NitroModules/JUnit.hpp>
+#include <optional>
 #include "MediaSessionConfig.hpp"
 #include "JMediaSessionConfig.hpp"
 #include "AndroidMediaSessionConfig.hpp"
-#include <optional>
 #include "JAndroidMediaSessionConfig.hpp"
 #include <string>
 #include "IosMediaSessionConfig.hpp"
@@ -147,6 +147,19 @@ namespace margelo::nitro::rnmediamediasession {
       });
       return __promise;
     }();
+  }
+  void JHybridRnMediaMediaSessionSpec::setSleepTimer(double seconds) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* seconds */)>("setSleepTimer");
+    method(_javaPart, seconds);
+  }
+  void JHybridRnMediaMediaSessionSpec::cancelSleepTimer() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void()>("cancelSleepTimer");
+    method(_javaPart);
+  }
+  std::optional<double> JHybridRnMediaMediaSessionSpec::getSleepTimerRemaining() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<jni::JDouble>()>("getSleepTimerRemaining");
+    auto __result = method(_javaPart);
+    return __result != nullptr ? std::make_optional(__result->value()) : std::nullopt;
   }
 
 } // namespace margelo::nitro::rnmediamediasession

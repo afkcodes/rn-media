@@ -14,13 +14,31 @@ export { createMediaService, MediaService } from './media-service'
 export type { MediaServiceController } from './media-service'
 
 export {
+  applyPersisted,
+  clearPersisted,
+  DEFAULT_PERSISTENCE_KEY,
+  PERSISTENCE_SCHEMA_VERSION,
+  restorePersisted,
+  withPersistence,
+} from './persistence'
+export type {
+  MediaSessionStorage,
+  PersistedMediaService,
+  PersistedSession,
+  PersistenceOptions,
+  RestoreResult,
+} from './persistence'
+
+export {
   DEFAULT_STOP_FOREGROUND_ON_PAUSE,
   MAX_COMPACT_CONTROLS,
+  MAX_STOP_FOREGROUND_TIMEOUT_MS,
   normalizeConfig,
   normalizePlaybackState,
   validateAnchor,
   validateMediaItem,
   validateQueue,
+  validateSleepTimerSeconds,
 } from './validate'
 
 export type {
