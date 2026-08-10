@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { MediaSessionError } from '../errors'
 import {
   MAX_COMPACT_CONTROLS,
+  MAX_STOP_FOREGROUND_TIMEOUT_MS,
   normalizeConfig,
   normalizePlaybackState,
   validateAnchor,
   validateMediaItem,
   validateQueue,
+  validateSleepTimerSeconds,
 } from '../validate'
 import type { PlaybackState } from '../types'
 import { playbackState } from './fakes'
@@ -240,5 +242,100 @@ describe('normalizeConfig', () => {
 
   it('is fine with no config at all', () => {
     expect(normalizeConfig()).toEqual({ android: undefined, ios: undefined })
+  })
+
+  describe('stopForegroundTimeoutMs', () => {
+    const base = {
+      notificationChannelId: 'playback',
+      notificationChannelName: 'Playback',
+    }
+
+    it('stays undefined when unset, so media3 keeps its own default', () => {
+      expect(
+        normalizeConfig({ android: base }).android?.stopForegroundTimeoutMs
+      ).toBeUndefined()
+    })
+
+    it('passes a value through unchanged, including 0', () => {
+      expect(
+        normalizeConfig({
+          android: { ...base, stopForegroundTimeoutMs: 0 },
+        }).android?.stopForegroundTimeoutMs
+      ).toBe(0)
+      expect(
+        normalizeConfig({
+          android: { ...base, stopForegroundTimeoutMs: 15_000 },
+        }).android?.stopForegroundTimeoutMs
+      ).toBe(15_000)
+    })
+
+    it('rejects a negative timeout rather than letting media3 clamp it to 0', () => {
+      expect(() =>
+        normalizeConfig({ android: { ...base, stopForegroundTimeoutMs: -1 } })
+      ).toThrowError(/stopForegroundTimeoutMs must be >= 0/)
+    })
+
+    it('rejects non-finite values', () => {
+      for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(() =>
+          normalizeConfig({
+            android: { ...base, stopForegroundTimeoutMs: value },
+          })
+        ).toThrowError(/stopForegroundTimeoutMs must be a finite number/)
+      }
+    })
+
+    it('accepts media3 ceiling values; the clamp above it is media3’s, not ours', () => {
+      expect(
+        normalizeConfig({
+          android: {
+            ...base,
+            stopForegroundTimeoutMs: MAX_STOP_FOREGROUND_TIMEOUT_MS,
+          },
+        }).android?.stopForegroundTimeoutMs
+      ).toBe(MAX_STOP_FOREGROUND_TIMEOUT_MS)
+      // Documented behaviour: not rejected here — media3 constrains it down.
+      expect(
+        normalizeConfig({
+          android: {
+            ...base,
+            stopForegroundTimeoutMs: MAX_STOP_FOREGROUND_TIMEOUT_MS * 2,
+          },
+        }).android?.stopForegroundTimeoutMs
+      ).toBe(MAX_STOP_FOREGROUND_TIMEOUT_MS * 2)
+    })
+  })
+})
+
+describe('validateSleepTimerSeconds', () => {
+  it('accepts any strictly positive finite duration', () => {
+    expect(validateSleepTimerSeconds(0.5)).toBe(0.5)
+    expect(validateSleepTimerSeconds(1800)).toBe(1800)
+  })
+
+  it('rejects zero — "cancel" and "pause now" both already have names', () => {
+    expect(() => validateSleepTimerSeconds(0)).toThrowError(
+      /seconds must be > 0/
+    )
+  })
+
+  it('rejects negatives', () => {
+    expect(() => validateSleepTimerSeconds(-30)).toThrowError(
+      /seconds must be > 0/
+    )
+  })
+
+  it('rejects NaN and Infinity before they become a 0 ms native delay', () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => validateSleepTimerSeconds(value)).toThrowError(
+        /seconds must be a finite number/
+      )
+    }
+  })
+
+  it('rejects non-numbers from plain-JS callers', () => {
+    expect(() =>
+      validateSleepTimerSeconds('30' as unknown as number)
+    ).toThrowError(MediaSessionError)
   })
 })

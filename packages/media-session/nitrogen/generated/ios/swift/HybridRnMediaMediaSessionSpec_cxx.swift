@@ -194,4 +194,44 @@ open class HybridRnMediaMediaSessionSpec_cxx {
       return bridge.create_Result_std__shared_ptr_Promise_void___(__exceptionPtr)
     }
   }
+  
+  @inline(__always)
+  public final func setSleepTimer(seconds: Double) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setSleepTimer(seconds: seconds)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func cancelSleepTimer() -> bridge.Result_void_ {
+    do {
+      try self.__implementation.cancelSleepTimer()
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func getSleepTimerRemaining() -> bridge.Result_std__optional_double__ {
+    do {
+      let __result = try self.__implementation.getSleepTimerRemaining()
+      let __resultCpp = { () -> bridge.std__optional_double_ in
+        if let __unwrappedValue = __result {
+          return bridge.create_std__optional_double_(__unwrappedValue)
+        } else {
+          return .init()
+        }
+      }()
+      return bridge.create_Result_std__optional_double__(__resultCpp)
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_std__optional_double__(__exceptionPtr)
+    }
+  }
 }

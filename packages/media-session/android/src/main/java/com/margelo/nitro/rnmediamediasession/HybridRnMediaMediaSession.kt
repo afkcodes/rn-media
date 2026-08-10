@@ -63,4 +63,15 @@ class HybridRnMediaMediaSession : HybridRnMediaMediaSessionSpec() {
     MediaSessionController.stop { promise.resolve(Unit) }
     return promise
   }
+
+  override fun setSleepTimer(seconds: Double) {
+    MediaSessionController.setSleepTimer(seconds)
+  }
+
+  override fun cancelSleepTimer() {
+    MediaSessionController.cancelSleepTimer()
+  }
+
+  override fun getSleepTimerRemaining(): Double? =
+    MediaSessionController.sleepTimerRemaining()
 }

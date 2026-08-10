@@ -49,6 +49,18 @@ abstract class HybridRnMediaMediaSessionSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun stopService(): Promise<Unit>
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setSleepTimer(seconds: Double): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun cancelSleepTimer(): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun getSleepTimerRemaining(): Double?
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

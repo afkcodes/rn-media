@@ -83,6 +83,26 @@ export interface MediaHandler {
     name: string,
     extras?: Record<string, unknown>
   ): void | Promise<void>
+  /**
+   * The native sleep timer elapsed.
+   *
+   * **Playback is already paused when this runs.** The timer fires on a
+   * platform timer (`Handler.postDelayed` / `DispatchQueue.main.asyncAfter`),
+   * pauses natively on the same path a notification pause takes, and only then
+   * calls this — the ordering is deliberate and is the reason the feature is
+   * native at all: your `setTimeout` would not have fired (see the README's
+   * background-playback limits).
+   *
+   * So this is where a timer *badge* is cleared, an analytics event is logged,
+   * or `stopService()` is called if you would rather end background execution
+   * than sit paused. Pausing again here is harmless but redundant.
+   *
+   * Optional: the pause has already happened natively by the time this fires,
+   * so a handler with nothing to add can simply omit it — structural
+   * implementors of this interface (the player-agnostic contract) must not
+   * break when the library grows an informational callback.
+   */
+  onSleepTimer?(): void | Promise<void>
 
   /* --- Android Auto / CarPlay browse: reserved, not wired to native in v1 --- */
 
@@ -109,6 +129,19 @@ export interface MediaServiceConfig {
      * @default true
      */
     stopForegroundOnPause?: boolean
+    /**
+     * How long a paused service stays foreground before media3 demotes it, in
+     * milliseconds. Omit for media3's default of 10 minutes; `0` demotes
+     * immediately.
+     *
+     * Maps to `MediaSessionService.setForegroundServiceTimeoutMs`. Must be
+     * `>= 0`; media3 clamps anything above 600 000 back down to 600 000, so
+     * that is the real ceiling. Shorter = the process (and your JS handler)
+     * becomes reclaimable sooner after a pause; longer = a resume from the
+     * notification is more likely to find everything still alive. Pair a short
+     * timeout with `withPersistence`.
+     */
+    stopForegroundTimeoutMs?: number
   }
   ios?: {
     /** Decoded-artwork cache capacity. @default 8 */
@@ -163,6 +196,37 @@ export interface MediaServiceApi {
    * (PLAN §5.4). After this resolves, `init` may be called again.
    */
   stopService(): Promise<void>
+
+  /**
+   * Pause playback in `seconds`, on a **native** timer. Re-arming replaces any
+   * timer already set.
+   *
+   * Do not build this on `setTimeout`: JS timers freeze once the Activity is
+   * gone (and on Samsung even before that), which is precisely when a sleep
+   * timer has to work. This one is a main-looper `Handler.postDelayed` on
+   * Android and a `DispatchQueue.main.asyncAfter` work item on iOS, so it is
+   * unaffected by the React lifecycle.
+   *
+   * When it fires, playback is paused natively — the same path a notification
+   * pause takes — and then {@link MediaHandler.onSleepTimer} is called. The
+   * timer does not survive process death, and is cancelled by
+   * {@link stopService} and by a dev reload.
+   *
+   * @param seconds strictly positive and finite.
+   * @throws {MediaSessionError} `invalidArgument` for `0`, negatives, `NaN`,
+   * `Infinity` or a non-number.
+   */
+  setSleepTimer(seconds: number): void
+  /** Disarm the sleep timer. A no-op when none is armed. */
+  cancelSleepTimer(): void
+  /**
+   * Seconds until the sleep timer fires, or `undefined` when none is armed.
+   *
+   * Synchronous and cheap — meant to be polled by a visible UI, which is the
+   * one place JS timers do work. Read from the platform's own timer clock, so
+   * it cannot disagree with when the pause will actually happen.
+   */
+  getSleepTimerRemaining(): number | undefined
 }
 
 export type {

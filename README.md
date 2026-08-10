@@ -255,9 +255,42 @@ JS involvement.
 - On Android, the media3 foreground service keeps the process — and with it
   the JS runtime — alive. Your handlers keep working after the Activity is
   destroyed. Verified on-device.
+- **A paused service is eventually demoted, and a demoted service is
+  killable.** media3 holds it in the foreground for a grace period first (10
+  minutes by default; `android.stopForegroundTimeoutMs` changes it, `0` demotes
+  at once). When Android does reclaim the process, the JS runtime and your
+  handler go with it — so the queue, the track and the position have to live
+  somewhere else. That is what persistence is for:
+
+  ```ts
+  import { withPersistence, restorePersisted, applyPersisted } from '@rn-media/media-session';
+
+  const service = withPersistence(await MediaService.init(…), storage);   // saves on every broadcast
+  // next launch:
+  const restored = await restorePersisted(storage);
+  if (restored.status === 'restored') applyPersisted(service, restored.session);
+  ```
+
+  `storage` is anything with `{ getItem, setItem }` — AsyncStorage, MMKV, your
+  own — and the library depends on none of them. The position always comes back
+  **paused**, never running, because a saved anchor with a live rate would claim
+  a position that grew while the process was dead. Details and the honest limits
+  are in the
+  [media-session README](packages/media-session/README.md#surviving-process-death-withpersistence).
 - **JS timers freeze in the background** (an RN platform behavior). Handlers,
   promises, and network callbacks work; `setTimeout`-based logic does not.
-  Keep timing on the native side (this library already does).
+  Anything timing-critical has to be native — which is why the **sleep timer is
+  a library feature, not something you build**:
+
+  ```ts
+  service.setSleepTimer(30 * 60);      // native Handler / DispatchQueue timer
+  service.getSleepTimerRemaining();    // seconds, or undefined
+  service.cancelSleepTimer();
+  ```
+
+  When it fires, playback is paused **natively first** — the same path a
+  notification pause takes — and only then is `onSleepTimer` called on your
+  handler. Verified on-device with the Activity destroyed.
 - An unhandled exception in a JS handler can take down the whole JS runtime
   mid-playback — `MediaService` wraps handler dispatch and reports errors
   instead of letting them propagate.
@@ -279,10 +312,14 @@ MediaService.init(() => new WithAnalytics(new PlaybackHandler()), config);
 ## The example app
 
 [`apps/example`](apps/example) is the reference integration — a queue of live
-streams and files with transport controls, focus wiring, and full media-session
-integration. One structural lesson it encodes: **keep the player and session at
-module scope, not inside a React component** — component-owned playback dies
-with the Activity.
+streams and files with transport controls, focus wiring, EQ presets, a native
+sleep timer, and session persistence across process death. One structural lesson
+it encodes: **keep the player and session at module scope, not inside a React
+component** — component-owned playback dies with the Activity.
+
+It carries one dependency the library does not: `react-native-mmkv`, used purely
+as the persistence storage. That is the point of the injected-storage contract —
+the app picks the engine, and `@rn-media/media-session` depends on none of them.
 
 ```sh
 npm install
@@ -323,7 +360,17 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
   background-audio or lock-screen behaviour has been observed yet.
 - Chromecast is out of scope (use the Cast SDK app-side); AirPlay audio works
   through normal iOS routing.
-- App-killed → media-button playback resumption is not implemented in v1.
+- **App-killed → media-button playback resumption is not implemented in v1.**
+  The *state* now survives — `withPersistence` saves queue, track and a paused
+  position, and the next launch restores them — but nothing revives a dead
+  process from a media button; the user has to open the app. Two honest edges
+  of persistence itself: writes happen only on broadcasts (so a track played
+  straight through saves nothing until you call `service.save()`, e.g. when the
+  app leaves the foreground), and a live stream saves position `0` because an
+  offset into a live stream has nothing to seek back to.
+- The **sleep timer** is native on both platforms, but on iOS a timer armed over
+  silence may never fire: iOS suspends a backgrounded process shortly after
+  audio stops. Armed during playback it fires, which is the case that matters.
 
 ## Licensing
 

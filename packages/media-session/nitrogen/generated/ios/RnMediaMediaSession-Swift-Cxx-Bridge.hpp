@@ -122,21 +122,6 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     return optional.value();
   }
   
-  // pragma MARK: std::optional<AndroidMediaSessionConfig>
-  /**
-   * Specialized version of `std::optional<AndroidMediaSessionConfig>`.
-   */
-  using std__optional_AndroidMediaSessionConfig_ = std::optional<AndroidMediaSessionConfig>;
-  inline std::optional<AndroidMediaSessionConfig> create_std__optional_AndroidMediaSessionConfig_(const AndroidMediaSessionConfig& value) noexcept {
-    return std::optional<AndroidMediaSessionConfig>(value);
-  }
-  inline bool has_value_std__optional_AndroidMediaSessionConfig_(const std::optional<AndroidMediaSessionConfig>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline AndroidMediaSessionConfig get_std__optional_AndroidMediaSessionConfig_(const std::optional<AndroidMediaSessionConfig>& optional) noexcept {
-    return optional.value();
-  }
-  
   // pragma MARK: std::optional<double>
   /**
    * Specialized version of `std::optional<double>`.
@@ -149,6 +134,21 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     return optional.has_value();
   }
   inline double get_std__optional_double_(const std::optional<double>& optional) noexcept {
+    return optional.value();
+  }
+  
+  // pragma MARK: std::optional<AndroidMediaSessionConfig>
+  /**
+   * Specialized version of `std::optional<AndroidMediaSessionConfig>`.
+   */
+  using std__optional_AndroidMediaSessionConfig_ = std::optional<AndroidMediaSessionConfig>;
+  inline std::optional<AndroidMediaSessionConfig> create_std__optional_AndroidMediaSessionConfig_(const AndroidMediaSessionConfig& value) noexcept {
+    return std::optional<AndroidMediaSessionConfig>(value);
+  }
+  inline bool has_value_std__optional_AndroidMediaSessionConfig_(const std::optional<AndroidMediaSessionConfig>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline AndroidMediaSessionConfig get_std__optional_AndroidMediaSessionConfig_(const std::optional<AndroidMediaSessionConfig>& optional) noexcept {
     return optional.value();
   }
   
@@ -324,6 +324,15 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
   }
   inline Result_void_ create_Result_void_(const std::exception_ptr& error) noexcept {
     return Result<void>::withError(error);
+  }
+  
+  // pragma MARK: Result<std::optional<double>>
+  using Result_std__optional_double__ = Result<std::optional<double>>;
+  inline Result_std__optional_double__ create_Result_std__optional_double__(std::optional<double> value) noexcept {
+    return Result<std::optional<double>>::withValue(std::move(value));
+  }
+  inline Result_std__optional_double__ create_Result_std__optional_double__(const std::exception_ptr& error) noexcept {
+    return Result<std::optional<double>>::withError(error);
   }
 
 } // namespace margelo::nitro::rnmediamediasession::bridge::swift

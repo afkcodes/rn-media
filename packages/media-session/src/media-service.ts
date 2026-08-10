@@ -5,6 +5,7 @@ import {
   normalizePlaybackState,
   validateMediaItem,
   validateQueue,
+  validateSleepTimerSeconds,
 } from './validate'
 import type {
   MediaSessionHandlers,
@@ -125,6 +126,7 @@ export function createMediaService(
       const parsed = parseExtras(extras)
       dispatch('customAction', (h) => h.customAction(name, parsed))
     },
+    onSleepTimer: () => dispatch('onSleepTimer', (h) => h.onSleepTimer?.()),
   }
 
   function assertReady(call: string): void {
@@ -150,6 +152,21 @@ export function createMediaService(
     setQueue(items: MediaItem[]): void {
       assertReady('setQueue()')
       native.setQueue(validateQueue(items))
+    },
+
+    setSleepTimer(seconds: number): void {
+      assertReady('setSleepTimer()')
+      native.setSleepTimer(validateSleepTimerSeconds(seconds))
+    },
+
+    cancelSleepTimer(): void {
+      assertReady('cancelSleepTimer()')
+      native.cancelSleepTimer()
+    },
+
+    getSleepTimerRemaining(): number | undefined {
+      assertReady('getSleepTimerRemaining()')
+      return native.getSleepTimerRemaining()
     },
 
     async stopService(): Promise<void> {
@@ -215,5 +232,8 @@ export const MediaService: MediaServiceController = {
   setPlaybackState: (state) => resolveSingleton().setPlaybackState(state),
   setMediaItem: (item) => resolveSingleton().setMediaItem(item),
   setQueue: (items) => resolveSingleton().setQueue(items),
+  setSleepTimer: (seconds) => resolveSingleton().setSleepTimer(seconds),
+  cancelSleepTimer: () => resolveSingleton().cancelSleepTimer(),
+  getSleepTimerRemaining: () => resolveSingleton().getSleepTimerRemaining(),
   stopService: () => resolveSingleton().stopService(),
 }

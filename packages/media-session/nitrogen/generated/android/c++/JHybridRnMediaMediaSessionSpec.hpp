@@ -59,6 +59,9 @@ namespace margelo::nitro::rnmediamediasession {
     void setMediaItem(const std::optional<NativeMediaItem>& item) override;
     void setQueue(const std::vector<NativeMediaItem>& items) override;
     std::shared_ptr<Promise<void>> stopService() override;
+    void setSleepTimer(double seconds) override;
+    void cancelSleepTimer() override;
+    std::optional<double> getSleepTimerRemaining() override;
 
   private:
     jni::global_ref<JHybridRnMediaMediaSessionSpec::JavaPart> _javaPart;

@@ -98,6 +98,39 @@ export interface AndroidMediaSessionConfig {
    * notification slot.
    */
   stopForegroundOnPause: boolean
+  /**
+   * How long a paused service stays in the foreground before media3 demotes it,
+   * in **milliseconds**.
+   *
+   * media3 1.11 does not demote on pause; it keeps the service foreground for a
+   * "user engaged" grace period —
+   * `MediaSessionService.DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS`, **10 minutes** —
+   * and only then applies `stopForegroundOnPause`. This maps 1:1 onto
+   * `@UnstableApi public final void
+   * MediaSessionService.setForegroundServiceTimeoutMs(long)`, called from the
+   * service's `onCreate` (media3 1.11.0; verified by `javap` on the shipped AAR
+   * and against
+   * https://github.com/androidx/media/blob/1.11.0/libraries/session/src/main/java/androidx/media3/session/MediaSessionService.java#L643-L668).
+   *
+   * Omit to keep media3's default. `0` demotes immediately on pause.
+   *
+   * **10 minutes is also the ceiling.** media3 runs the value through
+   * `Util.constrainValue(v, 0, DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS)`, so a
+   * larger number is silently clamped down rather than honoured. Values below
+   * zero are rejected here before they can be clamped up to `0` in silence.
+   *
+   * The trade-off runs both ways and neither end is free:
+   * - **Shorter** — the process stops being protected sooner, so the OS may
+   *   reclaim it (and with it the JS runtime and the app's handler) minutes
+   *   after a pause. Better for battery/memory pressure; pair it with
+   *   `withPersistence` so the session can be rebuilt.
+   * - **Longer** — a resume from the notification is far more likely to find
+   *   the runtime still alive, at the cost of holding a foreground service
+   *   (and its process) for that whole window.
+   *
+   * Ignored on iOS: there is no service to demote.
+   */
+  stopForegroundTimeoutMs?: number
 }
 
 /** iOS half of {@link MediaSessionConfig}. Ignored on Android. */
@@ -236,7 +269,7 @@ export interface NativeMediaItem {
  * turns each function type into a `Func_*` wrapper either way, and one struct
  * makes "the handler set is replaced atomically" true by construction.
  *
- * All ten are **required** — an optional callback would push "did the app
+ * All of them are **required** — an optional callback would push "did the app
  * implement this?" into native, when the answer is already carried by
  * {@link NativePlaybackState.capabilities}. `BaseMediaHandler` supplies no-ops.
  *
@@ -279,6 +312,18 @@ export interface MediaSessionHandlers {
    * bridge type trivial and the failure mode visible.
    */
   customAction: (name: string, extras: string) => void
+  /**
+   * The sleep timer set by {@link RnMediaMediaSession.setSleepTimer} elapsed.
+   *
+   * **The pause has already happened** by the time this runs — natively, on the
+   * same path a notification pause takes (ARCHITECTURE §9). This callback is a
+   * *notification*, not a request: it is where an app clears its own timer UI,
+   * logs, fades out, or calls `stopService()`. Doing nothing is correct.
+   *
+   * Fired at most once per armed timer, and never after
+   * {@link RnMediaMediaSession.cancelSleepTimer}.
+   */
+  onSleepTimer: () => void
 }
 
 /* -------------------------------------------------------------------------- */
@@ -331,4 +376,56 @@ export interface RnMediaMediaSession
    * process then lives or dies on whether audio is still playing.
    */
   stopService(): Promise<void>
+
+  /* ------------------------------- Sleep timer ------------------------------ */
+
+  /**
+   * Pause playback in `seconds`. Replaces any timer already armed.
+   *
+   * ## Why this is native and not `setTimeout`
+   * A JS sleep timer is broken by construction on Android: RN's
+   * `JavaTimerManager` gates timers on the Activity lifecycle plus headless
+   * tasks, so with no Activity they simply stop firing — and Samsung freezes
+   * them even *with* one (RN #56324). A sleep timer is the one feature whose
+   * entire job happens after the user has put the phone down, i.e. exactly when
+   * JS timers do not run. So it lives on a platform timer: a main-looper
+   * `Handler.postDelayed` on Android, a `DispatchQueue.main.asyncAfter` work
+   * item on iOS. Neither is tied to an Activity, and neither is a JS timer.
+   *
+   * ## What happens when it fires
+   * 1. **Playback is paused natively**, on the identical path a notification
+   *    pause takes — the facade `Player` is paused, so the session, the
+   *    notification and the lock screen all go to `paused` immediately, and the
+   *    app's `pause` handler is invoked to actually stop the audio.
+   * 2. {@link MediaSessionHandlers.onSleepTimer} is invoked fire-and-forget.
+   *
+   * The timer is armed even with no Activity alive; it does **not** survive
+   * process death (nothing does — see the README's background-playback limits)
+   * and it is cancelled by {@link stopService} and by a dev reload.
+   *
+   * iOS note, stated honestly: iOS suspends a backgrounded process shortly
+   * after audio *stops*, and a suspended process runs no timers. That is not a
+   * problem for this feature — while audio is playing the process is not
+   * suspended, so a timer armed during playback fires. What cannot be relied on
+   * is a timer armed (or still pending) while nothing is playing.
+   *
+   * @param seconds strictly positive; the TS layer rejects `0`, negatives and
+   * non-finite values before they reach here.
+   */
+  setSleepTimer(seconds: number): void
+
+  /** Disarm the sleep timer. A no-op when none is armed. */
+  cancelSleepTimer(): void
+
+  /**
+   * Seconds until the armed timer fires, or `undefined` when none is armed.
+   *
+   * Read from **the same clock the timer was scheduled against** —
+   * `SystemClock.uptimeMillis()` on Android (what `Handler.postDelayed` uses)
+   * and `DispatchTime.now()` on iOS — so it can never disagree with when the
+   * pause will actually happen, and a wall-clock change cannot move it.
+   * Synchronous and cheap: it is meant to be polled by a UI that is on screen,
+   * which is the one place a JS timer *does* work.
+   */
+  getSleepTimerRemaining(): number | undefined
 }
