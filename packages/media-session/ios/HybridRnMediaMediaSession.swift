@@ -141,6 +141,21 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     }
   }
 
+  /// Android-only, and deliberately not emulated.
+  ///
+  /// The mirror exists so a *service* created after process death can rebuild a
+  /// session with no JavaScript in the process. iOS has no service and nothing
+  /// that can restart a terminated app for playback: a force-quit ends
+  /// playback, full stop, and `MPNowPlayingInfoCenter` belongs to a process
+  /// that has to already be running. Writing the snapshot here would produce a
+  /// file nothing on this platform could ever read.
+  ///
+  /// The app's own `withPersistence` storage still works on iOS exactly as it
+  /// does on Android — that is the copy the *next launch* restores from.
+  func setResumptionSnapshot(snapshot: String?) throws {
+    // No-op by design. See above.
+  }
+
   func stopService() throws -> Promise<Void> {
     // Synchronously, before the hop: `stopService` discards the handlers, and a
     // timer left armed would fire into them.

@@ -18,7 +18,7 @@ public extension AndroidMediaSessionConfig {
   /**
    * Create a new instance of `AndroidMediaSessionConfig`.
    */
-  init(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Bool, stopForegroundTimeoutMs: Double?) {
+  init(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Bool, stopForegroundTimeoutMs: Double?, playbackResumption: Bool) {
     self.init(std.string(notificationChannelId), std.string(notificationChannelName), { () -> bridge.std__optional_std__string_ in
       if let __unwrappedValue = notificationIcon {
         return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
@@ -31,7 +31,7 @@ public extension AndroidMediaSessionConfig {
       } else {
         return .init()
       }
-    }())
+    }(), playbackResumption)
   }
 
   @inline(__always)
@@ -71,5 +71,10 @@ public extension AndroidMediaSessionConfig {
         return nil
       }
     }()
+  }
+  
+  @inline(__always)
+  var playbackResumption: Bool {
+    return self.__playbackResumption
   }
 }

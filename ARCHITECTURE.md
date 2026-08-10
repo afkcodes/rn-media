@@ -92,7 +92,11 @@ callbacks are thread-agnostic, so JS handlers keep working with no Activity.
 `HeadlessJsTaskService` was deliberately **not** forked — headless tasks don't
 pin the runtime, they only keep JS *timers* warm, and this design has no JS
 timers (see Platform truths). audio_service tried a second execution context
-and abandoned it; we never built one.
+and abandoned it; we never built one. What that file *did* leave behind is its
+cold-start shape — register a `ReactInstanceEventListener`, then `start()`, then
+re-check `currentReactContext`, because the listener does not replay for an
+instance that already exists — which is exactly how §20 boots a runtime from
+inside the service.
 
 ### 9. Commands are native-first; JS is notified, never awaited
 A notification pause acts on the media3 state machine immediately; the JS
@@ -331,6 +335,106 @@ the notification) and neither side is ours to choose; omitted, media3's default
 stands. Device evidence: configured to 15 000 ms, `isForeground` held for 14 s
 after the pause and was gone by 16 s.
 
+### 20. Playback resumption: the session is rebuilt natively first, and JavaScript is booted behind it
+The last background limitation — *the app was killed; the user presses play* —
+is answered, opt-in (`android.playbackResumption`, default `false`), and
+verified on device (POCO/Android 16, release build, 2026-08-10).
+
+**The feature is not "Android-only"; the *consumer* is.** §19's persistence is
+the cross-platform layer and is identical on both platforms. What differs is who
+reads the record: on Android the OS does, automatically, through the resumption
+card / Bluetooth / a media button; on iOS the user does, by launching the app,
+where `restorePersisted` puts them back on the same track at the same position,
+paused. An automatic iOS twin cannot be built — a terminated iOS app stays
+terminated, because force-quit is read as user intent and nothing may resurrect a
+process for playback. That is platform policy, of the same family as "force-quit
+kills playback", so the flag lives in the `android` config namespace and
+`IosMediaSessionConfig` documents `ios.playbackResumption` as its home if Apple
+ever ships a mechanism — the asymmetry is a recorded decision, not an oversight
+for someone to hoist away later.
+
+**The state half was already solved by §19; what was missing was a reader.**
+`withPersistence` writes a versioned record into the app's storage engine, and
+the app's storage engine is JavaScript — precisely the thing a resumed process
+does not have. So the same serialized string is *also* handed to native
+(`setResumptionSnapshot`) and kept in this package's own `SharedPreferences`:
+survives process death, reads back **synchronously** on the service's main
+thread, no bridge. One string, two destinations, so the copies cannot drift.
+Written on a private thread with `commit()` rather than `apply()` — `apply()`'s
+flush is only guaranteed at lifecycle transitions, and the process this feature
+exists for is the one that gets none. Config is mirrored the same way, because a
+cold service needs the app's notification channel, icon and grace period before
+JavaScript can supply them.
+
+**Ordering is the whole design, and it is dictated by a deadline.** Whoever
+wakes the service used `startForegroundService()`, which is a ~5-second promise
+whose breach is an uncatchable process kill. media3 cannot keep it here: it
+promotes on `playWhenReady && (STATE_READY || STATE_BUFFERING)`, and until the
+app's runtime is up `SimpleBasePlayer` shows an optimistic placeholder that
+keeps `STATE_IDLE`. So: **(1)** post a real `MediaStyle` notification built from
+the mirror, bound to the session's platform token (which is also what exempts it
+from `POST_NOTIFICATIONS`) under media3's own notification id
+(`DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID`), so media3's first
+real notification *replaces* it rather than appearing beside it; **(2)** only
+then `ReactHost.start()`; **(3)** flip the seeded snapshot to `buffering`, which
+hands promotion back to media3 for every transition after the first. That flip
+is *posted*, not applied inline, and acknowledges the pending command: it runs
+inside media3's own play dispatch, where `invalidateState()` early-returns while
+an operation is pending, so completing the future is the only way to get
+`buffering` in front of media3 in milliseconds instead of at the 3-second
+acknowledgement deadline.
+
+**The handover is a non-event because the player never owned the handlers.**
+`BroadcastPlayer` used to capture a `MediaSessionHandlers`; it now asks a
+`CommandDispatcher` per command. The service builds the player and the session
+with no JavaScript in the process; `MediaService.init` later installs handlers on
+the *same* instance. Commands that arrive in between (the `play` that started the
+whole thing) are held — bounded at 8, oldest dropped — and replayed after
+`onPlaybackResumption` fires, so the app can be ready for the replay rather than
+told about it afterwards. That is the opposite ordering to the sleep timer's, and
+for the opposite reason: there the work was already done, here it is about to be.
+
+Four decisions worth the words:
+1. **The seeded snapshot is forced to `stopped`, not `paused`.** `paused` maps to
+   `STATE_READY`, and media3 shows a notification for any session that is not
+   `STATE_IDLE` — which would put one on screen the instant the System UI merely
+   *binds* us to look at its resumption card. `stopped` is also what
+   `MediaLibrarySessionImpl.onGetChildrenOnHandler` requires before it will ask
+   for the full recent item.
+2. **A sticky restart is not a resumption.** `am kill` on a started service earns
+   `Scheduling restart of crashed service … for start-requested` a second later
+   (observed). Reviving there would boot the whole app minutes after a kill with
+   nobody asking, so a null start intent abandons and stops. A resumption is
+   always someone pressing something.
+3. **`MediaButtonReceiver` is not merged in from this library.** media3 reads that
+   manifest declaration as the app's promise that it can resume
+   (`MediaSessionLegacyStub.canResumePlaybackOnStart` is literally "is there a
+   receiver for `ACTION_MEDIA_BUTTON`"), and it changes how media buttons are
+   routed for *every* app that installs the package. It stays a documented
+   copy-paste, and its absence is a log line at `init`.
+4. **Failure is bounded and says which half broke.** 10 s covers a React cold
+   start several times over; on expiry the log distinguishes "the runtime never
+   started" from "the runtime started but `MediaService.init` was never called",
+   because the second has one fix: **init must be reachable at JS module scope.**
+   A revived runtime loads the bundle and starts no surface, so an `init` inside a
+   React effect never runs. Not configurable — an app that needs longer has a
+   startup problem no timeout fixes. Brownfield (`Application` is not a
+   `ReactApplication`) degrades to the old behaviour with one warning.
+
+Device evidence, two entry points, both from a process the OS had killed:
+- **Media button** (the framework's remembered `Last MediaButtonReceiver`):
+  FGS start granted `+0 ms` → service `onCreate` `+22` → session rebuilt from the
+  mirror `+53` → **`startForeground` `+59 ms`** (1.2 % of the window) → media3
+  takes the notification `+63` → `ReactContext` `+84` → `MediaService.init` done
+  `+254` → audio playing at the persisted `36 033 ms` by `+377`.
+- **System UI resumption card** (screenshot-confirmed for a dead process): process
+  start `+0` → **`startForeground` `+184 ms`** → `ReactContext` `+196` →
+  handover `+349` → resuming at `109 900 ms` by `+453`.
+- With `playbackResumption: false`, byte-for-byte the old behaviour: "Started with
+  no initialized media session; stopping". With module-scope `init` removed, the
+  watchdog fired at exactly 10.001 s with the actionable message and stopped
+  cleanly. No `ForegroundServiceDidNotStartInTimeException` anywhere in the run.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
@@ -354,6 +458,19 @@ after the pause and was gone by 16 s.
   `Util.constrainValue(v, 0, 600_000)`, so a larger value is clamped down and a
   negative is clamped up to "demote now" without a word. There is no SDK-level
   branch in the logic — the grace period is identical on every API level.
+- **`am kill` and `am force-stop` are not the same kill.** `am kill` leaves the
+  System UI resumption card in place (SystemUI logs `Converting … to resume`) and
+  earns a START_STICKY service restart a second later; `force-stop` removes the
+  card outright (screenshot-confirmed) *but* — measured on Android 16, contrary
+  to the usual folklore — the framework still holds the app's
+  `Last MediaButtonReceiver`, so a headset play still revives it. Only `am kill`
+  reproduces the scenario users actually hit.
+- **The OS, not the app, grants the FGS start for a resumption.** Both entry
+  points arrive with `code:TEMP_ALLOWED_WHILE_IN_USE;
+  tempAllowListReason:<…,reasonCode:MEDIA_SESSION_CALLBACK,duration:10000>` —
+  a 10-second allowlist (`media_button_receiver_fgs_allowlist_duration_ms`).
+  That window, not the 5-second `startForeground` promise, is the real budget for
+  everything before the notification is up.
 - **`--enable-protocol=hls` in an ffmpeg build proves nothing** — it's the
   deprecated `hls://` protocol; only the `hls`+`mpegts` *demuxers* matter.
 - **Nor does the string `aresample` in libavfilter** — same family, found while

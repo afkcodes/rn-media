@@ -405,6 +405,20 @@ class DemoMediaHandler extends BaseMediaHandler {
   override onSleepTimer(): void {
     this.#log('onSleepTimer (playback already paused natively)');
   }
+
+  /**
+   * This JS runtime was booted **by the media service**, after the process had
+   * been killed, to finish a playback resumption the user started from the
+   * System UI card / a Bluetooth remote.
+   *
+   * Nothing to do: the notification is already up with the persisted track, and
+   * the `play` is replayed on this handler a moment later. The log line is the
+   * on-device proof that the revival reached JavaScript, and is the middle link
+   * in the evidence chain (`RnMediaMediaSession` logs either side of it).
+   */
+  override onPlaybackResumption(): void {
+    this.#log('onPlaybackResumption (revived after process death)');
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -638,6 +652,11 @@ class Playback {
             // someone is watching. A shipping app would leave this alone (or
             // pick a value it can defend); this one is a test bed.
             stopForegroundTimeoutMs: 15_000,
+            // Opt in to coming back from the dead. Paired with the
+            // `MediaButtonReceiver` in this app's AndroidManifest.xml and with
+            // `withPersistence` below — all three are required, and the
+            // library logs which one is missing.
+            playbackResumption: true,
           },
           onHandlerError: (method, cause) =>
             console.error(`[example] handler.${method} failed:`, cause),
@@ -922,6 +941,22 @@ const scope = globalThis as typeof globalThis & {
   __rnMediaAppState?: { remove(): void };
 };
 const playback: Playback = (scope.__rnMediaPlayback ??= new Playback());
+
+/**
+ * Start everything **here**, at module scope — not from the `useEffect` below.
+ *
+ * This is what makes playback resumption possible at all. When the media
+ * service revives a killed process it calls `ReactHost.start()`, which loads
+ * this bundle and runs exactly this: module-scope code. It starts **no
+ * surface**, so no component ever mounts and every `useEffect` in this file is
+ * dead code in that process. An app whose `MediaService.init` lives in a hook
+ * therefore boots a runtime that never registers a handler, the library waits,
+ * logs "MediaService.init was never called", and stops the service.
+ *
+ * `start()` is idempotent, so the effect below is still correct — it just is
+ * not the thing that matters after a kill.
+ */
+void playback.start();
 
 /**
  * Checkpoint the session on the way out of the foreground.

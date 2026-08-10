@@ -277,6 +277,53 @@ JS involvement.
   a position that grew while the process was dead. Details and the honest limits
   are in the
   [media-session README](packages/media-session/README.md#surviving-process-death-withpersistence).
+- **Android can bring the whole thing back after the process is gone** — the
+  System UI resumption card, a Bluetooth reconnect, a headset play button. Opt-in,
+  because it starts a foreground service in a process the user did not open:
+
+  ```ts
+  const service = withPersistence(
+    await MediaService.init(() => new MyHandler(), {
+      android: { …, playbackResumption: true },
+    }),
+    storage,
+  );
+  ```
+
+  ```xml
+  <!-- your app's AndroidManifest.xml, inside <application> -->
+  <receiver android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+    <intent-filter>
+      <action android:name="android.intent.action.MEDIA_BUTTON" />
+    </intent-filter>
+  </receiver>
+  ```
+
+  The service rebuilds the session from a **native** mirror of the persisted
+  snapshot — no JavaScript involved — shows the notification with the right track
+  within the foreground-service deadline, and *then* boots your runtime behind it;
+  the `play` the user pressed is replayed on your handler once it arrives, and
+  `MediaHandler.onPlaybackResumption()` tells you it happened (optional; you do
+  not need it).
+
+  **`MediaService.init(...)` must be reachable at JS module scope**, not inside a
+  component or a hook. A revived runtime loads your bundle and mounts nothing, so
+  an `init` in a `useEffect` never runs — the library waits, logs exactly that,
+  and stops the service. [`apps/example/App.tsx`](apps/example/App.tsx) does it
+  the right way (`void playback.start()` at the bottom of the module).
+
+  Measured on device, from a killed process: notification up 59 ms after the OS
+  granted the start, audio playing from the persisted position 377 ms after.
+
+  **Where iOS fits.** The cross-platform layer is the one above:
+  `withPersistence` / `restorePersisted` save and restore the same record on both
+  platforms. Android and iOS just consume it differently — Android *automatically*
+  (the flow above), iOS on the next **manual** launch, where `restorePersisted`
+  puts the user back on the same track at the same position, paused. There is no
+  iOS twin of `playbackResumption` and there cannot be one: a terminated iOS app
+  stays terminated — force-quit is read as the user's intent that it stop, and
+  nothing may resurrect a process for playback. Platform policy, not a gap.
 - **JS timers freeze in the background** (an RN platform behavior). Handlers,
   promises, and network callbacks work; `setTimeout`-based logic does not.
   Anything timing-critical has to be native — which is why the **sleep timer is
@@ -360,14 +407,17 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # or: npm run android
   background-audio or lock-screen behaviour has been observed yet.
 - Chromecast is out of scope (use the Cast SDK app-side); AirPlay audio works
   through normal iOS routing.
-- **App-killed → media-button playback resumption is not implemented in v1.**
-  The *state* now survives — `withPersistence` saves queue, track and a paused
-  position, and the next launch restores them — but nothing revives a dead
-  process from a media button; the user has to open the app. Two honest edges
-  of persistence itself: writes happen only on broadcasts (so a track played
-  straight through saves nothing until you call `service.save()`, e.g. when the
-  app leaves the foreground), and a live stream saves position `0` because an
-  offset into a live stream has nothing to seek back to.
+- **Playback resumption after process death is opt-in** (`playbackResumption:
+  true`, off by default) and **Android-only** — iOS has nothing that can restart
+  a terminated app for playback. It needs three things together (the library
+  logs which one is missing): the flag, `withPersistence`, and `MediaService.init`
+  at **JS module scope**, plus media3's `MediaButtonReceiver` in your manifest.
+  Two honest edges of persistence itself remain: writes happen only on broadcasts
+  (so a track played straight through saves nothing until you call
+  `service.save()`, e.g. when the app leaves the foreground), and a live stream
+  saves position `0` because an offset into a live stream has nothing to seek
+  back to. `adb shell am force-stop` removes the System UI resumption card;
+  `am kill` — what actually happens to a paused, demoted app — does not.
 - The **sleep timer** is native on both platforms, but on iOS a timer armed over
   silence may never fire: iOS suspends a backgrounded process shortly after
   audio stops. Armed during playback it fires, which is the case that matters.
