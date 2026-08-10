@@ -271,6 +271,11 @@ receiver is deliberately not merged in from this package — media3 reads it as 
 app's promise that it can resume, and it changes media-button routing for every
 consumer. Its absence is a warning at `init`.
 
+Expo prebuild regenerates `android/`, so there the copy-paste is unownable: the
+config plugin's opt-in `playbackResumption` option writes the same receiver into
+the generated manifest (idempotent; an existing declaration is left untouched).
+Opt-in either way — the decision stays the app's, only its expression changes.
+
 ## Explicitly out of scope for v1 (interface reserved, no implementation)
 Android Auto browse tree beyond returning empty, CarPlay, cast, ratings, search.
 
