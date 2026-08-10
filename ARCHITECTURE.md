@@ -7,7 +7,7 @@ this file changes in the same commit. Deeper detail lives in
 [`PLAN.md`](PLAN.md) (analysis, roadmap) and [`docs/specs/`](docs/specs)
 (per-package contracts with as-built addenda).
 
-*Last updated: 2026-08-10.*
+*Last updated: 2026-08-11.*
 
 ## The system in one picture
 
@@ -119,8 +119,8 @@ timelines unseekable and dropped the scrubber).
 ### 11. Binaries: pinned, forked, LGPL, dynamically linked
 Prebuilt libmpv comes from our forks of media-kit's build repos, and as of
 2026-08-09 **both platforms ship rn-media builds** rather than upstream's:
-`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.2` and
-`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.2`. Each is pinned by exact tag +
+`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.4` and
+`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.3`. Each is pinned by exact tag +
 SHA-256 (hard build failure on mismatch) and cached for offline builds; the
 repo owner is itself a pin field on both platforms, so re-pointing at upstream
 is a one-line change. Forking is deliberate: upstream's audio flavor omits the
@@ -141,10 +141,39 @@ platforms (`.so` in APK, embedded dynamic xcframeworks on iOS) — the
 App-Store-accepted pattern that satisfies the relink obligation. Wrapper code
 is MIT.
 
+**As of 2026-08-11 the forks carry a source patch, not just flags, and that is
+a real escalation of the fork commitment.** `004.rn_media_pcm_tap.patch` adds a
+PCM tap to mpv's client API (§21) — four source files, no build-system files,
+which is precisely why the *same file* applies to the Android fork's mpv 0.35.1
+and the darwin fork's 0.36.0 with only hunk offsets differing. A configure flag
+survives a rebase by itself; a patch does not, so the procedure is now written
+down rather than assumed:
+
+1. Rebase `rn-media-hls` onto the new upstream tag. The flags either survive or
+   the build fails loudly; the patch may fail *quietly* by applying with fuzz.
+2. Re-check the four anchors named in the patch header (`ao_post_process_data`'s
+   body, `ao_print_devices`'s declaration, `struct mpv_global`, and
+   `mp_property_audio_params` + the `{"audio-out-params", …}` table entry). They
+   have been stable across 0.35 → 0.41.
+3. Rebuild with `./build.sh --clean -n mpv` and prove the feature is in the
+   **shipped** artifact by a string only the patched code emits — automated as
+   `buildscripts/rn-media-release.sh`, which refuses to package a `.so` that
+   lacks any required marker and prints the SHA-256 block for the pin.
+4. Bump both pins together, and read the export diff: the tap adds **no new
+   exported symbol**, so an export set that changed means something else did.
+
+The Android fork carries one patch the darwin fork does not, and the asymmetry
+is a version fact rather than a platform one:
+`005.mpv_dup_node_byte_array.patch` backports upstream's own `dup_node`
+byte-array arm, which mpv gained in **0.36.0** — so 0.35.1 needs it and 0.36.0
+already has it. It is marked for deletion the moment the Android fork's mpv
+reaches 0.36. Without it the tap looks broken in the most misleading way
+possible (see Platform truths).
+
 The two forks are **not equally verified**: the Android build is confirmed
-playing HLS on a device; the iOS build is link-verified via CI only, and
-runtime playback on an iOS device remains unverified. README → Limitations
-carries the exact standing.
+playing HLS on a device, and its PCM tap is confirmed feeding a visualizer on
+one; the iOS build is link-verified via CI only, and runtime playback on an iOS
+device remains unverified. README → Limitations carries the exact standing.
 
 ### 12. Defaults chosen by measurement (each overridable)
 - **User-Agent `rn-media (libmpv)`** — real Shoutcast hosts return 401 for the
@@ -444,6 +473,155 @@ Device evidence, two entry points, both from a process the OS had killed:
   watchdog fired at exactly 10.001 s with the actionable message and stopped
   cleanly. No `ForegroundServiceDidNotStartInTimeException` anywhere in the run.
 
+### 21. The visualizer taps mpv itself — we patched libmpv rather than ship an Android-only feature
+The research question was where FFT/PCM data can come from at all. The first
+answer was "the platform, on Android only"; that answer was built, run on a
+device, and then **rejected and replaced**, because parity is not negotiable for
+a library whose first architectural claim is one engine and identical behavior.
+
+**libmpv's client API has no PCM tap, in any released version.** That much was
+true. What was wrong was the conclusion drawn from it — that the alternative was
+a per-platform feature. The one shipped precedent, `mpv_audio_kit` (Flutter,
+same engine), reads `mpv_get_property("pcm-tap-frame")` from a **patched**
+libmpv; its own source says so, and its patches turned out to be published
+(`ales-drnz/libmpv-scripts`, BSD-3). So the route existed and was proven — on
+desktop, in a GPL build, with a process-wide singleton ring. We took the idea and
+the property name and wrote our own, smaller, per-core version (§11).
+
+**What was rejected, and why it stayed rejected.**
+`android.media.audiofx.Visualizer` works, and was fully implemented before this
+decision. It loses on four counts, any one of which would have been survivable
+and which together are not:
+1. **It is Android-only.** iOS has no equivalent, so the type system would have
+   had to encode a permanent platform split for a feature that has no reason to
+   have one.
+2. **It requires `RECORD_AUDIO` from every consuming app** — for *any* audio
+   session, not only the device-wide mix (the class documentation is explicit;
+   the widely-repeated "only session 0" is wrong). A media library cannot put a
+   microphone permission in every consumer's manifest.
+3. **It is capped at ~20 Hz** (`getMaxCaptureRate()`) **and 8 bits**. The 8-bit
+   quantisation is why the first device build showed a wall of full-height bars:
+   one LSB is `20·log10(1/128) ≈ -42 dB`, so there is nothing below that to draw.
+4. **It taps the platform mixer, not the player.** Following *this* player's
+   output needed an `audiotrack-session-id` handed to mpv before
+   `mpv_initialize()` — an always-on cost and an Android-shaped seam through the
+   core.
+
+`af-metadata/<label>` (lavfi frame metadata, real and present in 0.35.1) remains
+the third option and is still not taken: it yields *levels*, not bins, and the
+filters that export them (`astats`, `ebur128`) are not compiled into our
+binaries.
+
+**So the fork carries a source patch now, and that is the real decision.**
+`004.rn_media_pcm_tap.patch` adds two properties and nothing else:
+`pcm-tap` (int, rw — samples per channel to retain, `0` = off) and
+`pcm-tap-frame` (node, ro — `sample_rate`/`channels`/`frames`/`pts_us`/`seq`
+plus `samples`, a byte array of interleaved float32). Four source files, no
+build-system files, which is why **the same file applies to the Android fork's
+mpv 0.35.1 and the darwin fork's 0.36.0** with only hunk offsets differing. The
+tap sits at the end of `ao_post_process_data()` — the funnel every AO's data
+passes through in `buffer.c`'s `read_buffer()` — so it is after the filter chain
+and after mpv's software gain, and reports what is *audible*. It hangs off
+`mpv_global` rather than a file-static, because this library runs several mpv
+cores in one process and each must tap its own audio. The write path runs on the
+device thread and never blocks: it `trylock`s and drops the chunk on contention.
+**No new exported symbol** — the whole feature is reachable through
+`mpv_get_property`/`mpv_set_property`, so the export set of every shipped
+artifact is byte-identical to the previous release (53 symbols on both
+platforms) and the ABI is untouched. Cost: +2.6 KB/ABI on Android, +224 B on the
+iOS device slice.
+
+**The escalation was priced before it was accepted.** A patch is a rebase
+liability a configure flag is not; §11 now carries the procedure, and
+`rn-media-release.sh` refuses to package a binary that does not contain a string
+only the patched code emits.
+
+**One version-specific companion patch, and the bug that earned it.**
+`005.mpv_dup_node_byte_array.patch` (Android only) backports upstream mpv's own
+`dup_node` byte-array arm. Every `MPV_FORMAT_NODE` property is copied out of its
+handler through `copy_node()` → `dup_node()`, and mpv 0.35.1's switch has no
+`MPV_FORMAT_BYTE_ARRAY` case, so the node is stamped `(mpv_format)-1` — invalid.
+On device the map's scalars arrived intact (`channels: 2, frames: 2048,
+seq: 1082`) while `samples` came through empty, which reads exactly like a tap
+with no audio rather than a copy that dropped a field. mpv gained the arm in
+**0.36.0**, so the darwin fork needs nothing; the asymmetry between the two forks
+is a version fact, not a platform one, and the patch is marked for deletion when
+Android's mpv reaches 0.36.
+
+**The FFT is native; every opinion above it is TypeScript.** The PCM never
+crosses into JavaScript. A native sampler thread (`PcmTap`) reads the tap on its
+own clock, downmixes to mono, applies a Hann window, transforms with a
+precomputed radix-2 FFT and hands over ~4 KB of magnitudes — normalised so a
+full-scale sinusoid reads exactly `1.0`, which the host-compiled suite asserts
+against a real transform. That split is §5 with a performance reason attached: a
+2048-point transform is ~135 k float operations, which is nothing in C++ and is
+real work in Hermes at 30-60 Hz, and shipping magnitudes instead of samples
+quarters the payload. Above the transform, in TypeScript and per subscriber:
+band aggregation, the dB window, smoothing, peak ballistics — unit-tested
+device-free.
+
+**Sampling on a timer is right here, and §6 still stands.** §6 forbids polling
+for *state*, because state changes are discrete and rare so sampling them is both
+wasteful and lossy. A spectrum is the opposite: a fixed-rate render of a
+continuous signal, where "30 frames per second" *is* the requirement. The timer
+is a native thread because a JS timer would be on the thread we must not block
+and would freeze outright in the background (Platform truths). Back-pressure is
+§6's, with one deliberate difference: events accumulate and coalesce while JS is
+busy because an unseen property change still has to be applied, whereas a
+spectrum that arrived while JS was busy is a picture of the past — so ticks are
+**dropped and counted** (`frame.dropped`), never queued.
+
+**Delivery rate is not information rate, and the docs say so.** New spectral
+content arrives only when the audio device consumes a chunk: `ao_audiotrack`
+writes one `getMinBufferSize() * 2` chunk at a time under `WRITE_BLOCKING`, which
+measures ~20-45 Hz. Delivering at 30 is still worth doing — the asymmetric EMA is
+what turns a stepped target into motion, and it can only do that on frames it is
+given. Ticks that find an unchanged `seq` re-send the cached spectrum instead of
+recomputing an identical FFT; a `seq` that stands still for 300 ms is a pause,
+and the tap reports silence so the display decays to rest instead of freezing
+mid-bounce.
+
+**The default is the audio, not a flattering picture of it.** Bands aggregate by
+**power** (the sum of squared magnitudes over the band's bins), not by their
+loudest bin, so a band responds to how much energy it holds rather than to
+whichever bin spiked. Two display aids exist and **both default to off**:
+`tiltDbPerOctave` (music's power falls ~3 dB/octave, so a tilt makes the top of
+the display as busy as the bottom — and is a deliberate lie about the audio) and
+`autoGain` (a bounded, asymmetric tracker that keeps quiet material on screen at
+the cost of bar height no longer meaning a level). What a default subscription
+draws is the measured spectrum: a dB axis, a smoothing filter, nothing else. The
+one unavoidable choice is where that axis starts, and it was set by measurement
+rather than taste — on a modern commercial master the quiet bands sit near
+-35 dBFS and the loud ones near -17, so the window is -40…-10 dBFS.
+
+**Laziness is enforced by the shape of the API, not by discipline.** The
+primitive is `subscribe()`, not `start()`/`stop()`: the sampler thread, the FFT
+tables and mpv's ring are *derived from* the listener set, so they cannot be
+leaked by forgetting to stop them. There is deliberately no free-standing
+`start()` — it could only mean "hold the tap open with nobody looking". Disarmed,
+mpv's write path is a single atomic load per device chunk and nothing is
+allocated; reading `capabilities` allocates nothing either, because the
+capability probe is one property read (`pcm-tap` exists ⇒ this binary carries the
+patch), which is the same code on both platforms and needs no `Platform.OS`.
+
+**The example is the reference render pattern.** A grid of segment Views — 320
+of them changing style 30 times a second — is a layout storm that would break
+this library's own performance rule from the UI side regardless of how good the
+data is. `apps/example` draws each bar as a static colour column with an opaque
+mask slid over it and a peak cap above: **two Views per band, both moving by
+`transform` only**, so a frame costs a commit and a draw and no measure pass. The
+LED segmentation is one grid drawn over all the bars, laid out once.
+
+Device evidence (POCO/Android 16, 2026-08-11, `v1.1.9-rnmedia.4`): a live
+Shoutcast AAC+ stream and a finite AAC/MP4 track both drive a 20-band display at
+48 kHz from 2048-frame windows, `gain 0.0 dB` (auto-gain off), with per-band
+structure that tracks the music and a natural high-frequency roll-off. **Release
+build: 60 fps requested, 60.0 measured at the JS listener, zero dropped.** The
+same code in a *debug* build measured 24-26 fps with occasional drops — worth
+recording, because it is the one number here that says more about Hermes running
+unoptimised JS than about the engine, and measuring a visualizer in a debug
+build is how you conclude the wrong thing about where the ceiling is.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
@@ -498,6 +676,37 @@ Device evidence, two entry points, both from a process the OS had killed:
 - **generator scaffolds contain load-bearing "dead code"**: the ReactPackage
   class is the only trigger of `System.loadLibrary` — deleting it fails only
   at runtime.
+- **mpv 0.35.1 silently destroys a byte array inside a NODE property.** Every
+  `MPV_FORMAT_NODE` property is copied out of its handler through
+  `copy_node()` -> `dup_node()`, whose switch had no `MPV_FORMAT_BYTE_ARRAY` arm
+  until mpv **0.36.0** — the node falls into `default:` and is stamped
+  `(mpv_format)-1`. The failure is maximally misleading: the map's scalars
+  arrive intact and only the payload is gone, so it reads as "no data yet"
+  rather than "the copy dropped it". Upstream's own fix is backported as
+  `005.mpv_dup_node_byte_array.patch` (§21).
+- **The audio device consumes chunks at ~20-45 Hz, so that is the rate new
+  spectral content actually appears at** — `ao_audiotrack` writes one
+  `AudioTrack.getMinBufferSize() * 2` chunk per iteration under
+  `WRITE_BLOCKING`. A visualizer's *delivery* rate can and should be higher; the
+  asymmetric smoothing is what fills the gap, and a tap read that finds an
+  unchanged `seq` must re-send the cached spectrum rather than recompute it or
+  blank the display.
+- **`android.media.audiofx.Visualizer` requires `RECORD_AUDIO` even on your own
+  audio session.** The widely-repeated "only session 0 needs the permission" is
+  wrong: the class documentation gates *the use of the visualizer* on
+  `RECORD_AUDIO`, and `MODIFY_AUDIO_SETTINGS` is the *additional* requirement
+  for session 0. There is no same-app exemption. Recorded because it is what
+  disqualified that entire route (§21), not because anything here depends on it.
+- **`Visualizer` is 8-bit, and it shows.** One LSB is
+  `20·log10(1/128) ≈ -42 dB`, so a Web-Audio-style -100 dB floor maps the
+  quantisation noise itself to a tall bar and the display saturates into a flat
+  wall (observed on device before the mpv tap replaced it). Its ~20 Hz
+  `getMaxCaptureRate()` ceiling was the other half of why it went.
+- **mpv marks `af-metadata` changed on `MPV_EVENT_TICK`, and for audio-only
+  playback `handle_dummy_ticks` fires that every 50 ms** (`player/playloop.c`)
+  — so a lavfi metadata observation is a 20 Hz feed, not a per-frame one, and
+  `match_property`'s compare-to-the-first-slash means observing
+  `af-metadata/<label>/<key>` inherits that mask.
 
 ## Update policy
 

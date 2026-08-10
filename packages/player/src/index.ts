@@ -22,6 +22,7 @@ export type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  VisualizerCapture,
 } from './specs/mpv-client.nitro'
 
 export { toPlayerEvent, toPlayerEvents } from './events'
@@ -42,6 +43,7 @@ export {
   disposedError,
   isNetworkUri,
   toPlayerError,
+  toVisualizerError,
 } from './errors'
 export type {
   DisposedError,
@@ -122,6 +124,27 @@ export type {
   ReducerContext,
 } from './state'
 
+export {
+  DEFAULT_VISUALIZER_FPS,
+  VISUALIZER_DEFAULTS,
+  createDecodeState,
+  decodeVisualizerFrame,
+  resolveVisualizerOptions,
+} from './visualizer'
+export type {
+  VisualizerCapabilities,
+  VisualizerDecodeState,
+  VisualizerFrame,
+  VisualizerOptions,
+} from './visualizer'
+export { AGC_SILENCE_DB } from './visualizer'
+
+export { VisualizerController } from './visualizer-controller'
+export type {
+  VisualizerListener,
+  VisualizerUnsubscribe,
+} from './visualizer-controller'
+
 export { Player } from './player'
 export type {
   LoadOptions,
@@ -146,3 +169,5 @@ export { usePlayerState } from './hooks/usePlayerState'
 export type { PlayerStateSelector } from './hooks/usePlayerState'
 export { useProgress } from './hooks/useProgress'
 export type { Progress } from './hooks/useProgress'
+export { useVisualizer } from './hooks/useVisualizer'
+export type { UseVisualizerResult } from './hooks/useVisualizer'

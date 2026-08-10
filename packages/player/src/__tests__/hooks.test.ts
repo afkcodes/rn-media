@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { usePlayer } from '../hooks/usePlayer'
 import { usePlayerState } from '../hooks/usePlayerState'
 import { useProgress } from '../hooks/useProgress'
+import { useVisualizer } from '../hooks/useVisualizer'
 import type { Player } from '../player'
 import { Player as PlayerClass } from '../player'
 import { MpvProperty } from '../properties'
@@ -12,6 +13,7 @@ import {
   playbackRestartEvent,
   propertyEvent,
   startFileEvent,
+  toneCapture,
 } from './fake-mpv-client'
 
 let client: FakeMpvClient
@@ -311,5 +313,107 @@ describe('useProgress', () => {
       client.emit([propertyEvent(MpvProperty.demuxerCacheTime, 45.25)])
     })
     expect(result.current.buffered).toBe(45.25)
+  })
+})
+
+describe('useVisualizer', () => {
+  async function makeVisualizerPlayer(): Promise<Player> {
+    return PlayerClass.create({ createClient: () => client, now: clock })
+  }
+
+  function running(): boolean {
+    return client.visualizerRunning
+  }
+
+  function starts(): number {
+    return client.visualizerCalls.filter((c) => c.kind === 'start').length
+  }
+
+  function stops(): number {
+    return client.visualizerCalls.filter((c) => c.kind === 'stop').length
+  }
+
+  it('subscribes on mount and disarms the tap on unmount', async () => {
+    const player = await makeVisualizerPlayer()
+    const { unmount } = renderHook(() => useVisualizer(player, { bands: 8 }))
+    expect(running()).toBe(true)
+
+    unmount()
+    // Unmounting is what disarms mpv's tap — nothing may be left sampling
+    // behind a screen the user has navigated away from.
+    expect(running()).toBe(false)
+    expect(stops()).toBe(1)
+  })
+
+  it('re-renders with the newest frame', async () => {
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() => useVisualizer(player, { bands: 8 }))
+    expect(result.current.frame).toBeUndefined()
+    expect(result.current.active).toBe(true)
+
+    act(() => {
+      client.emitCapture(toneCapture(4, 0.5, { bins: 33 }))
+    })
+    expect(result.current.frame?.bands).toHaveLength(8)
+    expect(result.current.error).toBeUndefined()
+  })
+
+  it('does not resubscribe when an equal options literal is re-created', async () => {
+    const player = await makeVisualizerPlayer()
+    const { rerender } = renderHook(
+      ({ bands }: { bands: number }) => useVisualizer(player, { bands }),
+      { initialProps: { bands: 8 } }
+    )
+    rerender({ bands: 8 })
+    rerender({ bands: 8 })
+    // Options are compared by value: identity would rebuild the native sampler
+    // on every single render.
+    expect(starts()).toBe(1)
+    expect(stops()).toBe(0)
+  })
+
+  it('drops the subscription while disabled and restores it after', async () => {
+    const player = await makeVisualizerPlayer()
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useVisualizer(player, undefined, enabled),
+      { initialProps: { enabled: true } }
+    )
+    expect(running()).toBe(true)
+
+    rerender({ enabled: false })
+    expect(running()).toBe(false)
+    expect(result.current.active).toBe(false)
+    expect(result.current.frame).toBeUndefined()
+
+    rerender({ enabled: true })
+    expect(running()).toBe(true)
+  })
+
+  it('does nothing at all while the player is still being created', () => {
+    const { result } = renderHook(() => useVisualizer(undefined))
+    expect(result.current.active).toBe(false)
+    expect(result.current.frame).toBeUndefined()
+    expect(starts()).toBe(0)
+  })
+
+  it('surfaces an unpatched libmpv as a typed unsupported error', async () => {
+    client.readErrors.set(
+      MpvProperty.pcmTap,
+      '[mpv:-8] mpv_get_property("pcm-tap", DOUBLE): property not found'
+    )
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() => useVisualizer(player))
+    expect(result.current.error?.code).toBe('unsupported')
+    expect(result.current.active).toBe(false)
+  })
+
+  it('surfaces a native start failure as a typed error', async () => {
+    client.visualizerRejection =
+      '[visualizer:unavailable] this libmpv has no PCM tap.'
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() => useVisualizer(player))
+    expect(result.current.error?.code).toBe('unsupported')
+    expect(result.current.active).toBe(false)
   })
 })

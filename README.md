@@ -377,6 +377,30 @@ mechanics, availability probe:
 [filters and EQ](packages/player/README.md#audio-filters-and-eq) ·
 [ReplayGain](packages/player/README.md#replaygain-loudness-normalisation).
 
+## See the sound
+
+A live spectrum of exactly this player's output, on **both platforms**, with no
+permission to request and nothing to add to your manifest:
+
+```tsx
+const { frame, error } = useVisualizer(player, { bands: 28 });
+// frame.bands — Float32Array in [0, 1], log-spaced and already smoothed
+```
+
+The samples come from mpv itself: our libmpv forks carry a small source patch
+that exposes the audio the engine is handing to the device (`pcm-tap`,
+`pcm-tap-frame`), tapped after the filter chain and after mpv's software gain —
+so what you draw is what you hear, EQ and all. A native sampler thread
+downmixes, windows and transforms it; the PCM never crosses into JavaScript and
+only ~4 KB of spectrum does. Lazy end to end: nothing exists until something
+subscribes, and the last unsubscribe frees all of it.
+
+It needs binaries carrying that patch (Android `v1.1.9-rnmedia.3`+, iOS
+`v0.7.2-rnmedia.3`+ — what this repo pins). On anything older
+`player.visualizer.capabilities.fft` is `false` and subscribing throws a typed
+`unsupported` error rather than doing nothing quietly. Full contract:
+[visualizer](packages/player/README.md#visualizer-spectrum--waveform).
+
 ## Reach into mpv
 
 The C++ binding is a complete, raw mpv client and the typed `Player` is TS on

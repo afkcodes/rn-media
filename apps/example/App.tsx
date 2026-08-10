@@ -18,6 +18,7 @@
 import React, { useEffect, useReducer } from 'react';
 import {
   AppState,
+  Platform,
   Pressable,
   ScrollView,
   StatusBar,
@@ -39,6 +40,7 @@ import {
   toPlayerError,
   usePlayerState,
   useProgress,
+  useVisualizer,
   type AudioFilter,
   type EqualizerPreset,
   type PlayerError,
@@ -1072,6 +1074,262 @@ function useSleepTimerCountdown(): number | undefined {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                                 Visualizer                                  */
+/* -------------------------------------------------------------------------- */
+
+const VISUALIZER_BANDS = 20;
+/**
+ * 60 is the engine's ceiling and it is reached: a release build of this screen
+ * measures 60.0 fps delivered with zero dropped frames. Worth asking for even
+ * though new spectral content only arrives at the audio device's chunk rate
+ * (~20-45 Hz) — the asymmetric smoothing animates *between* targets, and it can
+ * only do that on frames it is handed.
+ *
+ * Measure this in a **release** build. The identical screen in debug manages
+ * 24-26 fps, which is Hermes running unoptimised JavaScript, not the engine.
+ * The header shows what actually landed.
+ */
+const VISUALIZER_FPS = 60;
+/** LED rows per bar. Winamp's analyser was 16 segments tall. */
+const VISUALIZER_SEGMENTS = 16;
+const VISUALIZER_BAR_HEIGHT = 128;
+const VISUALIZER_TRACK_HEIGHT = VISUALIZER_BAR_HEIGHT - 12;
+/**
+ * Unlit LED colour — and, necessarily, the mask's colour too.
+ *
+ * It has to be **opaque**: the mask's whole job is to hide the colour column
+ * underneath it, and a translucent one lets every bar read as full height
+ * regardless of the audio (observed on device, 2026-08-11). This is
+ * `rgba(255,255,255,0.06)` composited over `COLORS.background` once, by hand.
+ */
+const VISUALIZER_UNLIT = '#1c1f25';
+
+/**
+ * One bar: a **static** green→amber→red column that never re-renders, plus two
+ * Views that do.
+ *
+ * Read it as a level meter — green through most of the travel, amber near the
+ * top, red at the very top — so a bar's colours mean a level rather than
+ * following it around. The LED segmentation is a single grid drawn *over* every
+ * bar (`VisualizerGrid`), not 16 Views per bar toggled per frame, which is the
+ * same look for 1/20th of the work.
+ *
+ * This is the whole point of the component. The obvious way to draw an LED
+ * analyser is a stack of 16 segment Views per bar whose colours you toggle —
+ * 320 Views changing style 30 times a second, which is a layout-and-commit
+ * storm on the UI thread and would break this library's own performance rule
+ * before the audio path ever got a chance to. Instead:
+ *
+ *  - the coloured column and the LED grid are laid out once and never touched;
+ *  - the level is drawn by sliding an opaque **mask** down over that column, so
+ *    the colours stay keyed to *position* (a bar's top reads as "hot") rather
+ *    than to its current level;
+ *  - the peak cap is one more View that only ever translates.
+ *
+ * Both moving Views change `transform` only. Transforms do not invalidate
+ * layout, so a frame costs a commit and a draw and no measure pass. That is the
+ * pattern to copy.
+ */
+const VisualizerBar = React.memo(function VisualizerBar({
+  value,
+  peak,
+}: {
+  value: number;
+  peak: number;
+}): React.JSX.Element {
+  return (
+    <View style={styles.barColumn}>
+      {/* Static: the full-height colour column, laid out once. */}
+      <View style={styles.barLow} />
+      <View style={styles.barMid} />
+      <View style={styles.barHigh} />
+
+      {/*
+        The mask sits entirely above the bar at rest and slides down to cover
+        whatever the level does not reach. translateY = height × (1 − value):
+        0 leaves the bar fully lit, `height` hides it completely.
+      */}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.barMask,
+          {transform: [{translateY: VISUALIZER_TRACK_HEIGHT * (1 - value)}]},
+        ]}
+      />
+
+      {/* The floating peak cap: also transform-only. */}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.barPeak,
+          {
+            opacity: peak > 0.01 ? 1 : 0,
+            transform: [{translateY: -peak * (VISUALIZER_TRACK_HEIGHT - 2)}],
+          },
+        ]}
+      />
+    </View>
+  );
+});
+
+/**
+ * The LED grid: `VISUALIZER_SEGMENTS - 1` hairlines drawn once across every bar
+ * and never re-rendered.
+ *
+ * It lives inside the bars *row* rather than the outer container on purpose.
+ * The row's width is exactly the first bar's left edge to the last bar's right
+ * edge, so `left: 0; right: 0` here means precisely "across the bars" — as a
+ * sibling of the centering container it overhung both ends and read as stray
+ * rules floating in the card.
+ */
+const VisualizerGrid = React.memo(function VisualizerGrid(): React.JSX.Element {
+  return (
+    <View pointerEvents="none" style={styles.barGrid}>
+      {Array.from({length: VISUALIZER_SEGMENTS - 1}, (_unused, row) => (
+        <View key={row} style={styles.barGridLine} />
+      ))}
+    </View>
+  );
+});
+
+/**
+ * The diagnostics line, on its own 2 Hz clock.
+ *
+ * It is a separate component for one measured reason: a `<Text>` whose string
+ * changes re-measures and re-lays-out, and doing that 30 times a second next to
+ * the bars cost enough main-thread time that the native sampler started dropping
+ * ticks (23.5 fps measured against 30 requested, on device). The numbers are
+ * accumulated in a ref by the parent and only *read* here, twice a second — the
+ * moment a diagnostic sets state at frame rate it stops measuring the problem
+ * and becomes it.
+ */
+function VisualizerStats({
+  stats,
+  supported,
+  active,
+}: {
+  stats: React.RefObject<{
+    fps: number;
+    dropped: number;
+    gainDb: number;
+    rate: number;
+  }>;
+  supported: boolean;
+  active: boolean;
+}): React.JSX.Element {
+  const [, tick] = React.useState(0);
+  React.useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => tick(n => n + 1), 500);
+    return () => clearInterval(id);
+  }, [active]);
+
+  const current = stats.current;
+  return (
+    <Text style={styles.detail}>
+      Visualizer ·{' '}
+      {supported
+        ? `${VISUALIZER_BANDS} bands · ${VISUALIZER_FPS} fps requested` +
+          (active && current.rate > 0
+            ? ` · ${current.fps.toFixed(1)} measured · ${
+                current.rate / 1000
+              } kHz · gain ${current.gainDb.toFixed(1)} dB` +
+              (current.dropped > 0 ? ` · ${current.dropped} dropped` : '')
+            : '')
+        : 'needs a libmpv with the rn-media PCM tap'}
+    </Text>
+  );
+}
+
+/**
+ * A live spectrum of exactly this player's output.
+ *
+ * Two things this demonstrates that the API docs can only assert:
+ *
+ * 1. **It is off until you switch it on.** Nothing exists until the toggle
+ *    mounts `useVisualizer`: mpv's tap is disarmed, no ring is allocated and
+ *    there is no sampler thread. Flipping it back releases all of it.
+ * 2. **It needs no permission, on either platform.** The samples come from mpv
+ *    itself, so there is no `RECORD_AUDIO` in this app's manifest and nothing to
+ *    prompt for — which is the practical difference between tapping the engine
+ *    and tapping the platform.
+ */
+function Visualizer({
+  player,
+}: {
+  player: Player | undefined;
+}): React.JSX.Element {
+  const [on, setOn] = React.useState(false);
+  const {frame, error, active} = useVisualizer(
+    player,
+    {bands: VISUALIZER_BANDS, fps: VISUALIZER_FPS},
+    on,
+  );
+
+  // Measured delivery rate, accumulated in a ref during a render that was going
+  // to happen anyway. Reading it is free; *rendering* it is not, which is why
+  // the stats line lives in its own component below.
+  const stats = React.useRef({last: 0, fps: 0, dropped: 0, gainDb: 0, rate: 0});
+  if (frame && frame.capturedAt > stats.current.last) {
+    const delta = frame.capturedAt - stats.current.last;
+    if (stats.current.last > 0 && delta > 0 && delta < 1000) {
+      const instant = 1000 / delta;
+      stats.current.fps =
+        stats.current.fps === 0 ? instant : stats.current.fps * 0.9 + instant * 0.1;
+    }
+    stats.current.last = frame.capturedAt;
+    stats.current.dropped = frame.dropped;
+    stats.current.gainDb = frame.gainDb;
+    stats.current.rate = frame.sampleRate;
+  }
+
+  // A failed subscribe leaves nothing running, so the toggle must not keep
+  // claiming it is on — otherwise the button reads "Stop" over an error banner.
+  React.useEffect(() => {
+    if (error !== undefined) setOn(false);
+  }, [error]);
+
+  const capabilities = player?.visualizer.capabilities;
+  const supported = capabilities?.fft === true;
+
+  return (
+    <View style={styles.queue}>
+      <VisualizerStats stats={stats} supported={supported} active={active} />
+
+      <View style={styles.bars}>
+        <View style={styles.barsRow}>
+          {Array.from({length: VISUALIZER_BANDS}, (_unused, band) => (
+            <VisualizerBar
+              key={band}
+              value={active ? frame?.bands[band] ?? 0 : 0}
+              peak={active ? frame?.peaks[band] ?? 0 : 0}
+            />
+          ))}
+          <VisualizerGrid />
+        </View>
+      </View>
+
+      <View style={styles.eqRow}>
+        <Pressable
+          accessibilityRole="button"
+          disabled={!supported}
+          onPress={() => setOn(current => !current)}
+          style={[styles.eqChip, on && styles.eqChipActive]}
+        >
+          <Text style={styles.eqChipLabel}>{on ? 'Stop' : 'Start'}</Text>
+        </Pressable>
+      </View>
+
+      {error ? (
+        <Text style={styles.error}>
+          {error.code}: {error.message}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                    App                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -1253,6 +1511,8 @@ function App(): React.JSX.Element {
           </Text>
         </View>
 
+        <Visualizer player={player} />
+
         <View style={styles.queue}>
           <Text style={styles.detail}>
             Equaliser · {EQUALIZER_BANDS.length}-band ({EQUALIZER_BANDS[0]} Hz –{' '}
@@ -1305,6 +1565,86 @@ function App(): React.JSX.Element {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: COLORS.background },
+  bars: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: VISUALIZER_BAR_HEIGHT,
+    width: '100%',
+  },
+  // Sized by its children, so it is exactly as wide as the bars — which is what
+  // lets the LED grid span them and nothing else.
+  barsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 4,
+    height: VISUALIZER_TRACK_HEIGHT,
+  },
+  barColumn: {
+    height: VISUALIZER_TRACK_HEIGHT,
+    width: 14,
+    overflow: 'hidden',
+    borderRadius: 3,
+    // Unlit background, the way a real analyser's grid stays faintly visible.
+    backgroundColor: VISUALIZER_UNLIT,
+  },
+  // The three colour zones are absolutely positioned so the column has a fixed
+  // gradient regardless of the level: green at the bottom, amber, red on top.
+  barLow: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: VISUALIZER_TRACK_HEIGHT * 0.72,
+    backgroundColor: '#32d74b',
+  },
+  barMid: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: VISUALIZER_TRACK_HEIGHT * 0.72,
+    height: VISUALIZER_TRACK_HEIGHT * 0.18,
+    backgroundColor: '#ffcc00',
+  },
+  barHigh: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: VISUALIZER_TRACK_HEIGHT * 0.9,
+    height: VISUALIZER_TRACK_HEIGHT * 0.1,
+    backgroundColor: '#ff3b30',
+  },
+  barMask: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    // Parked one full height above the bar, then translated down to cover
+    // whatever the level does not reach.
+    top: -VISUALIZER_TRACK_HEIGHT,
+    height: VISUALIZER_TRACK_HEIGHT,
+    backgroundColor: VISUALIZER_UNLIT,
+  },
+  barPeak: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#f2f2f7',
+  },
+  barGrid: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'space-evenly',
+  },
+  barGridLine: {
+    height: 2,
+    width: '100%',
+    backgroundColor: COLORS.background,
+  },
   container: { padding: 24, gap: 10, alignItems: 'center' },
   kicker: { fontSize: 13, color: COLORS.muted },
   title: {

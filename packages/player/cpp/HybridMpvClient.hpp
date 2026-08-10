@@ -29,6 +29,7 @@
 
 #include "HybridMpvClientSpec.hpp"
 #include "MpvClient.hpp"
+#include "PcmTap.hpp"
 
 namespace margelo::nitro::rnmediaplayer {
 
@@ -103,6 +104,46 @@ private:
   std::vector<MpvEvent> _js;
 };
 
+///
+/// Delivers analysed visualizer windows to JS, with the same back-pressure
+/// contract `MpvFlushCoordinator` applies to events — and one deliberate
+/// difference.
+///
+/// Events accumulate and coalesce while JS is busy, because a property change
+/// that was never seen still has to be applied. A spectrum has no such duty: a
+/// window that arrived while JS was busy is, by the time JS is free, a picture
+/// of the past. So `PcmTap` drops those ticks outright and reports how many
+/// (`AnalysedFrame::dropped`) instead of queueing them. Keep-latest, taken to
+/// its logical end: keep-latest-or-nothing.
+///
+/// Held by `shared_ptr` for the same reason as the flush coordinator — the
+/// Promise continuations outlive the sampler thread's call.
+///
+class VisualizerDelivery final : public std::enable_shared_from_this<VisualizerDelivery> {
+public:
+  using Listener = std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture&)>;
+
+  /// Called once, before the sampler thread can exist.
+  void attach(rnmedia::PcmTap* tap);
+  /// Called from `HybridMpvClient::destroy()` after the sampler thread is gone.
+  void detach();
+
+  void setListener(const Listener& listener);
+  void clearListener();
+
+  /// Sampler thread. Marshals to JS and returns; never blocks on it.
+  void deliver(rnmedia::AnalysedFrame&& frame);
+
+private:
+  /// Releases the one in-flight slot. Re-reads `_tap` under the lock, so a
+  /// continuation that fires after teardown finds nothing and does nothing.
+  void complete();
+
+  std::mutex _mutex;
+  rnmedia::PcmTap* _tap = nullptr; // not owned
+  Listener _listener;
+};
+
 class HybridMpvClient final : public HybridMpvClientSpec {
 public:
   HybridMpvClient();
@@ -127,6 +168,11 @@ public:
   void setEventBatchListener(
       const std::function<std::shared_ptr<Promise<bool>>(const std::vector<MpvEvent>&)>& onEventBatch) override;
 
+  void startVisualizer(double fftSize, double fps, bool waveform) override;
+  void stopVisualizer() override;
+  void setVisualizerListener(
+      const std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture&)>& onCapture) override;
+
   void attachVideoOutput(uint64_t handle) override;
   void detachVideoOutput() override;
   uint64_t getRawHandle() override;
@@ -140,7 +186,11 @@ private:
   /// the pending-command table it calls into are still alive.
   std::shared_ptr<MpvFlushCoordinator> _flusher;
   std::shared_ptr<PendingCommands> _pending;
+  std::shared_ptr<VisualizerDelivery> _visualizer;
   std::unique_ptr<rnmedia::MpvClient> _client;
+  /// Created on the first `startVisualizer`, so a player nobody visualises
+  /// never allocates a sampler thread, an FFT table or a window.
+  std::unique_ptr<rnmedia::PcmTap> _tap;
 };
 
 } // namespace margelo::nitro::rnmediaplayer

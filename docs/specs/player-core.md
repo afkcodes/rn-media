@@ -188,6 +188,55 @@ Requires Android binaries ≥ v1.1.9-rnmedia.2 or iOS binaries ≥ v0.7.2-rnmedi
 binaries older than those, calls fail honestly with `{code:'mpv', errno:-11}`
 (documented as the availability probe).
 
+### AS-BUILT (2026-08-11): visualizer
+
+`player.visualizer.subscribe(listener, options?) → unsubscribe`, plus
+`player.visualizer.capabilities` / `.active` and the
+`useVisualizer(player, options?, enabled?)` hook. **Both platforms, one code
+path, no permission** (ARCHITECTURE §21): the samples come from mpv itself
+through two properties added by this project's libmpv patch — the same patch
+file in both binary forks. `capabilities.fft` is `false` only when the linked
+libmpv predates it, and `subscribe()` then throws a typed `unsupported` error.
+
+Deviations from the task sketch, with reasons:
+
+- **The engine changed after it was built.** The first implementation used
+  `android.media.audiofx.Visualizer` and shipped as far as a device before being
+  rejected: Android-only, `RECORD_AUDIO` from every consumer, ~20 Hz, 8-bit.
+  Patching libmpv replaced all four problems with one rebase liability, priced in
+  §11. The Kotlin `AudioVisualizer` HybridObject, its spec, its fake and the
+  `permission-denied` error member were all deleted; `MpvClient` remains this
+  package's only hybrid, and it is still pure C++ (§2).
+- **`subscribe()` is the primitive; there is no `start(opts)`/`stop()` pair.**
+  The sampler thread and mpv's ring are derived from the listener set, so they
+  cannot be leaked. A free-standing `start()` could only mean "hold the tap open
+  with nobody looking".
+- **No `visualizerFrame` entry on `player.on(...)`.** The event map is for
+  discrete, always-on events with no per-listener configuration; a
+  high-frequency stream whose *cost* depends on subscription needs its own
+  refcounted channel, or `player.on` becomes the one API where adding a listener
+  allocates a thread.
+- **The FFT is native, the optics are TypeScript.** PCM never crosses the
+  bridge: `PcmTap` (C++) downmixes, Hann-windows and transforms on its own
+  thread and delivers ~4 KB of linear magnitudes per frame, calibrated so a
+  full-scale sinusoid reads `1.0`. Bands, dB window, smoothing and peak
+  ballistics stay in TS, per subscriber, and are unit-tested device-free.
+- **Back-pressure drops rather than queues.** Events coalesce because an unseen
+  property change still has to be applied; a spectrum that arrived while JS was
+  busy is a picture of the past. Skipped ticks are counted in `frame.dropped`.
+- **Defaults represent the audio.** `tiltDbPerOctave` and `autoGain` both
+  default to **off**; the dB window (-40…-10 dBFS) was set by measuring real
+  material on a device, not chosen for looks.
+
+New native surface, all on the existing `MpvClient` spec: `startVisualizer`,
+`stopVisualizer`, `setVisualizerListener` and the `VisualizerCapture` struct
+(the first use of Nitro `ArrayBuffer` in this package, verified against
+`react-native-nitro-modules@0.36.5`). Below it, `MpvClient` gained one genuinely
+generic primitive — `getPropertyNodeMap(name, visit)`, a zero-copy visitor over
+any `MPV_FORMAT_NODE_MAP` property including its byte-array members — plus two
+thin typed wrappers over the patch's properties. New host-compiled C++ suites:
+`FftTests` and `PcmTapTests` (22 cases, ThreadSanitizer-clean).
+
 ## 4. Acceptance criteria (both tasks)
 - `nitrogen` codegen + strict `tsc` pass; TS tests green (reducer, projection,
   coalescing, error mapping — with fixtures, no device).

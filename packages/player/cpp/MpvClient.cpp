@@ -2,6 +2,7 @@
 
 #include <mpv/client.h>
 
+#include <cstring>
 #include <utility>
 
 namespace rnmedia {
@@ -294,6 +295,118 @@ void MpvClient::setPropertyBool(const std::string& name, bool value) {
   if (status < 0) {
     throw MpvError(status, "mpv_set_property(\"" + name + "\", FLAG)");
   }
+}
+
+bool MpvClient::getPropertyNodeMap(const std::string& name,
+                                   const std::function<void(const NodeMember&)>& visit) {
+  _state.requireInitialized("getPropertyNodeMap");
+  std::shared_lock<std::shared_mutex> lock(_handleMutex);
+  if (_handle == nullptr) {
+    throw DisposedError("getPropertyNodeMap");
+  }
+
+  mpv_node node{};
+  const int status = mpv_get_property(_handle, name.c_str(), MPV_FORMAT_NODE, &node);
+  if (status == MPV_ERROR_PROPERTY_UNAVAILABLE) {
+    return false;
+  }
+  if (status < 0) {
+    throw MpvError(status, "mpv_get_property(\"" + name + "\", NODE)");
+  }
+
+  // mpv owns the node's memory and hands ownership to us; this frees it on
+  // every path out, including a throwing visitor.
+  struct NodeGuard {
+    mpv_node* node;
+    ~NodeGuard() {
+      mpv_free_node_contents(node);
+    }
+  } guard{&node};
+
+  if (node.format != MPV_FORMAT_NODE_MAP || node.u.list == nullptr) {
+    return false;
+  }
+
+  const mpv_node_list* list = node.u.list;
+  for (int i = 0; i < list->num; i++) {
+    const mpv_node& value = list->values[i];
+    NodeMember member;
+    member.key = list->keys[i] == nullptr ? std::string_view{} : std::string_view(list->keys[i]);
+    switch (value.format) {
+      case MPV_FORMAT_INT64:
+        member.integer = value.u.int64;
+        member.number = static_cast<double>(value.u.int64);
+        break;
+      case MPV_FORMAT_DOUBLE:
+        member.number = value.u.double_;
+        break;
+      case MPV_FORMAT_FLAG:
+        member.integer = value.u.flag;
+        member.number = static_cast<double>(value.u.flag);
+        break;
+      case MPV_FORMAT_STRING:
+      case MPV_FORMAT_OSD_STRING:
+        if (value.u.string != nullptr) {
+          member.text = std::string_view(value.u.string);
+        }
+        break;
+      case MPV_FORMAT_BYTE_ARRAY:
+        if (value.u.ba != nullptr) {
+          member.bytes = static_cast<const std::uint8_t*>(value.u.ba->data);
+          member.byteCount = value.u.ba->size;
+        }
+        break;
+      default:
+        // Nested maps/arrays have no consumer yet; skipping them keeps this
+        // primitive honest rather than half-implementing a tree walker.
+        break;
+    }
+    visit(member);
+  }
+  return true;
+}
+
+bool MpvClient::configurePcmTap(int frames) {
+  _state.requireInitialized("configurePcmTap");
+  std::shared_lock<std::shared_mutex> lock(_handleMutex);
+  if (_handle == nullptr) {
+    throw DisposedError("configurePcmTap");
+  }
+
+  std::int64_t value = frames;
+  const int status = mpv_set_property(_handle, "pcm-tap", MPV_FORMAT_INT64, &value);
+  if (status == MPV_ERROR_PROPERTY_NOT_FOUND || status == MPV_ERROR_OPTION_NOT_FOUND) {
+    // Not an error: this libmpv predates the rn-media PCM tap patch. The caller
+    // turns it into a typed `unsupported`, identically on both platforms.
+    return false;
+  }
+  if (status < 0) {
+    throw MpvError(status, "mpv_set_property(\"pcm-tap\", INT64)");
+  }
+  return true;
+}
+
+bool MpvClient::readPcmTapWindow(std::vector<float>& out, int& channels, int& rate, std::int64_t& seq) {
+  bool haveSamples = false;
+  const bool present = getPropertyNodeMap("pcm-tap-frame", [&](const NodeMember& member) {
+    if (member.key == "channels") {
+      channels = static_cast<int>(member.integer.value_or(0));
+    } else if (member.key == "sample_rate") {
+      rate = static_cast<int>(member.integer.value_or(0));
+    } else if (member.key == "seq") {
+      seq = member.integer.value_or(0);
+    } else if (member.key == "samples" && member.bytes != nullptr) {
+      const std::size_t count = member.byteCount / sizeof(float);
+      // `resize` keeps the capacity across frames, so the steady state is a
+      // memcpy and nothing else — this runs up to 60 times a second.
+      out.resize(count);
+      if (count > 0) {
+        std::memcpy(out.data(), member.bytes, count * sizeof(float));
+      }
+      haveSamples = true;
+    }
+  });
+  return present && haveSamples;
 }
 
 void MpvClient::observeProperty(const std::string& name, PropertyFormat format) {

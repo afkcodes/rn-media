@@ -5,6 +5,7 @@ import { toPlayerEvents } from './events'
 import type { AudioFilter } from './filters'
 import { compileAudioFilters } from './filters'
 import { createMpvClient } from './native-client'
+import { VisualizerController } from './visualizer-controller'
 import {
   MPV_VOLUME_SCALE,
   MpvProperty,
@@ -679,6 +680,7 @@ export class Player {
   #state: PlayerState
   #currentUri: string | undefined
   #destroyed = false
+  #visualizer: VisualizerController | undefined
 
   readonly #stateListeners = new Set<(state: PlayerState) => void>()
   readonly #eventListeners: {
@@ -728,9 +730,17 @@ export class Player {
     const now = options.now ?? Date.now
     const client = factory()
     const player = new Player(client, now)
+    player.#visualizer = new VisualizerController(client)
 
     try {
       client.setEventBatchListener((events) => player.#handleBatch(events))
+      // Registered unconditionally, and it costs nothing: no sampler thread
+      // exists until something subscribes, so an app that never draws a
+      // spectrum never pays for one.
+      client.setVisualizerListener((capture) => {
+        player.#visualizer?.handleCapture(capture)
+        return true
+      })
       client.initialize({
         // Precedence, weakest first: this library's defaults, then the typed
         // options above them, then the caller's raw `mpvOptions`, which win
@@ -1387,6 +1397,46 @@ export class Player {
   }
 
   // -------------------------------------------------------------------------
+  // Visualizer
+  // -------------------------------------------------------------------------
+
+  /**
+   * Real-time spectrum and waveform of **this player's** output.
+   *
+   * Entirely lazy: reading this property, and reading
+   * `player.visualizer.capabilities`, allocate nothing. mpv's tap stays
+   * disarmed and no sampler thread exists until the first `subscribe()`; the
+   * last unsubscribe releases all of it.
+   *
+   * @example
+   * ```ts
+   * if (player.visualizer.capabilities.fft) {
+   *   const stop = player.visualizer.subscribe((frame) => {
+   *     paintBars(frame.bands) // 32 values in [0, 1], already smoothed
+   *   })
+   *   // …later
+   *   stop()
+   * }
+   * ```
+   *
+   * @remarks
+   * **Identical on Android and iOS, and it needs no permission.** The samples
+   * come from mpv itself, through two properties added by this project's libmpv
+   * patch (`pcm-tap`, `pcm-tap-frame`) — the same source patch in both binary
+   * forks, tapped at the point where mpv hands audio to the device, so what you
+   * see is what is audible. `capabilities.fft` is `false` only when the linked
+   * libmpv predates the patch, and `subscribe()` then throws a typed
+   * `unsupported` error rather than silently doing nothing. See
+   * ARCHITECTURE §21.
+   */
+  get visualizer(): VisualizerController {
+    // Never undefined after `create()`; the fallback keeps the getter total for
+    // an instance built by some future path that skipped the assignment.
+    this.#visualizer ??= new VisualizerController(undefined)
+    return this.#visualizer
+  }
+
+  // -------------------------------------------------------------------------
   // Teardown
   // -------------------------------------------------------------------------
 
@@ -1401,6 +1451,9 @@ export class Player {
   destroy(): void {
     if (this.#destroyed) return
     this.#destroyed = true
+    // Before the core goes: the sampler thread reads mpv properties, so it has
+    // to be stopped while the handle is still valid.
+    this.#visualizer?.destroy()
     this.#stateListeners.clear()
     for (const listeners of Object.values(this.#eventListeners)) {
       listeners.clear()
