@@ -176,9 +176,15 @@ queue with variant/segment entries (measured 3→23). The player forces
   sequences.
 - C++: pure logic (batching, lifecycle) split from mpv calls; host-compiled
   tests, ThreadSanitizer-clean.
-- Kotlin: standalone Gradle harness (placeholder `:app` required — RN's
-  gradle plugin only installs dependency substitution under the application
-  plugin) + lint.
+- Kotlin: a real JVM unit-test source set in media-session (`src/test`,
+  consumer-invisible — proven at the resolved-classpath level), covering
+  ResumptionStore's parser, the channel-priority merge, and a schema-version
+  sync guard that mutation-tests the TS↔Kotlin constant pair. Runs in CI
+  alongside lint for all three library modules (lint was silently absent for
+  days — a green pipeline only proves what it runs). The standalone Gradle
+  harness pattern (placeholder `:app` required — RN's gradle plugin only
+  installs dependency substitution under the application plugin) remains the
+  fallback for packages without the example app wired.
 - Final authority: a **physical Android device** (user rule: never an
   emulator). iOS compiles on CI only; runtime iOS verification awaits a device.
 
@@ -199,7 +205,7 @@ peer so bare apps are unaffected): Expo's documented library layout, matching
 what `@react-native-firebase/app` and `react-native-google-mobile-ads` ship.
 The Info.plist mod **merges** rather than assigns — idempotent across repeated
 prebuilds, and a sibling mode like `voip` survives — under `createRunOncePlugin`.
-One option, `androidNotificationIcon`, exists because prebuild regenerates
+Two options exist because prebuild regenerates
 `android/`: without it the runtime `android.notificationIcon` is unreachable for
 Expo apps and media3 silently falls back to its own icon. Vectors go to
 `res/drawable`, rasters to `res/drawable-xxxhdpi` (a raster in unqualified
@@ -411,7 +417,10 @@ Four decisions worth the words:
    (`MediaSessionLegacyStub.canResumePlaybackOnStart` is literally "is there a
    receiver for `ACTION_MEDIA_BUTTON`"), and it changes how media buttons are
    routed for *every* app that installs the package. It stays a documented
-   copy-paste, and its absence is a log line at `init`.
+   copy-paste for bare RN — or, for Expo prebuild (where a paste cannot
+   survive regeneration), the config plugin's opt-in `playbackResumption`
+   option, which injects it idempotently — and its absence is a log line at
+   `init`.
 4. **Failure is bounded and says which half broke.** 10 s covers a React cold
    start several times over; on expiry the log distinguishes "the runtime never
    started" from "the runtime started but `MediaService.init` was never called",
