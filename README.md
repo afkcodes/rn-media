@@ -1,5 +1,10 @@
 # rn-media
 
+[![Android CI](https://img.shields.io/github/actions/workflow/status/afkcodes/rn-media/android-build.yml?branch=main&label=Android%20CI&logo=android&logoColor=white)](https://github.com/afkcodes/rn-media/actions/workflows/android-build.yml)
+[![iOS CI](https://img.shields.io/github/actions/workflow/status/afkcodes/rn-media/ios-build.yml?branch=main&label=iOS%20CI&logo=apple&logoColor=white)](https://github.com/afkcodes/rn-media/actions/workflows/ios-build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![React Native ≥ 0.82](https://img.shields.io/badge/React%20Native-%E2%89%A5%200.82-61dafb?logo=react&logoColor=white)](#requirements)
+
 **React Native audio playback built on [libmpv](https://mpv.io), with a
 player-agnostic media-session layer** — lock screen, notification, Bluetooth
 and background playback that keep working after the app's UI is gone.
@@ -17,6 +22,18 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 > from a process the OS had killed. iOS is **built by CI** — it compiles, links
 > and embeds the libmpv frameworks — but has never run on a device. APIs may
 > still change.
+
+<p align="center">
+  <img src="docs/assets/demo.gif" width="330"
+       alt="The example app: a live Shoutcast stream with ICY now-playing, the same session in the notification shade and on the lock screen, then seeking, an EQ preset and stop." />
+</p>
+
+<p align="center">
+  <sub><a href="apps/example">The example app</a>, on a physical Android 16 device — live Shoutcast with
+  artwork and ICY now-playing → notification shade → lock screen, whose play
+  button drives the same handler → seek on a finite AAC/MP4 track → EQ preset →
+  stop and dismiss. <a href="docs/assets/demo.mp4">Source video</a>.</sub>
+</p>
 
 ## Why this exists
 
@@ -467,6 +484,10 @@ test bed: a queue of live streams and files, focus wiring, EQ presets, the nativ
 sleep timer, and session persistence across process death. It carries one
 dependency the library does not (`react-native-mmkv`, purely as the persistence
 storage) — exactly the point of the injected-storage contract.
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the full loop — per-package tests, the
+Android Gradle tasks CI runs, and what counts as verification here (device-free
+for TS logic, a *physical* device for any playback claim).
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md) is the living record of every decision and
 its evidence; [`PLAN.md`](PLAN.md) holds the analysis, and
