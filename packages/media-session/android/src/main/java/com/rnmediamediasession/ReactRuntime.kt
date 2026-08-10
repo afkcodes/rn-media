@@ -1,8 +1,12 @@
 package com.rnmediamediasession
 
 import android.content.Context
+import android.util.Log
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
+import com.facebook.react.ReactInstanceEventListener
+import com.facebook.react.bridge.ReactContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * What this package knows about the JavaScript runtime's lifetime, and why the
@@ -58,17 +62,23 @@ import com.facebook.react.ReactHost
  *
  * ## Limits, stated honestly
  *
- * 1. **Process death loses everything.** If Android kills the process (paused +
- *    demoted service, or memory pressure), the runtime and the app's handler
- *    are gone. A later media button restarts the service into a process with no
- *    initialized session; media3 handles that safely by refusing the session
- *    and calling `stopSelfSafely()`, and
- *    `RnMediaMediaSessionService.onCreate` stops early for the same reason.
- *    Booting a runtime from inside the service is deliberately NOT attempted:
- *    it would race media3's own shutdown path and the 5-second
- *    `startForeground` window, and it would only work for apps that call
- *    `MediaService.init` at JS module scope. Reviving after process death is a
- *    separate feature (playback resumption), not a v1 promise.
+ * 1. **Process death loses everything — unless the app opted into playback
+ *    resumption.** If Android kills the process (paused + demoted service, or
+ *    memory pressure), the runtime and the app's handler are gone. What happens
+ *    next is now a choice the app makes:
+ *    - `android.playbackResumption: false` (the default): a later media button
+ *      restarts the service into a process with no initialized session, and
+ *      `RnMediaMediaSessionService.onCreate` stops early and quietly. This is
+ *      the behaviour that shipped before the feature existed, unchanged.
+ *    - `android.playbackResumption: true`: the service rebuilds the session
+ *      from the native mirror (`ResumptionStore`), satisfies the
+ *      `startForeground` contract from it, and *then* boots the runtime through
+ *      [startRuntime]. The two caveats that made this a deferred item are
+ *      handled explicitly rather than wished away — the 5-second window is
+ *      satisfied before any JavaScript is asked for, and the "only works if the
+ *      app calls `MediaService.init` at module scope" limitation is now a
+ *      documented requirement with a bounded wait and an actionable log when it
+ *      is not met.
  * 2. **A dev reload destroys the runtime while the session is up.** Handled:
  *    [addBeforeDestroyListener] tears the session down first, so the
  *    notification cannot outlive the callbacks behind its buttons.
@@ -111,5 +121,72 @@ internal object ReactRuntime {
 
   fun removeBeforeDestroyListener(context: Context, listener: () -> Unit) {
     host(context)?.removeBeforeDestroyListener(listener)
+  }
+
+  /**
+   * `true` when this application can host a JS runtime at all.
+   *
+   * The brownfield case: an `Application` that does not implement
+   * `ReactApplication` (React Native embedded in a native app that owns its own
+   * `ReactHost`, or none). Nothing here can find a runtime to boot, so playback
+   * resumption degrades to the pre-existing "stop quietly" behaviour rather
+   * than crashing on a cast that was never going to succeed.
+   */
+  fun canRevive(context: Context): Boolean = host(context) != null
+
+  /**
+   * Boot the JS runtime, and call [onInstance] once a `ReactContext` exists.
+   *
+   * ## The race this is shaped around
+   * `addReactInstanceEventListener` does **not** replay for an instance that
+   * already exists (`ReactHostImpl.addReactInstanceEventListener` just appends
+   * to a list; the only call site is the one-shot notification inside instance
+   * creation). And `start()` is asynchronous — it hands `getOrCreateStartTask`
+   * to a background executor (`ReactHostImpl.start` is
+   * `Task.call({ getOrCreateStartTask() }, bgExecutor)`), so between "is there a
+   * context?" and "start it" the answer can change.
+   *
+   * So the order is the one `HeadlessJsTaskService` uses and the only one with
+   * no hole in it: **register first, start second, re-check third.** Registering
+   * first means an instance created by `start()` cannot slip past us;
+   * re-checking after means an instance that already existed (or was created
+   * between the two calls) is not waited for forever. [onInstance] is fired
+   * exactly once either way — whichever path gets there first wins the
+   * [AtomicBoolean] — and the listener is unregistered as soon as it does.
+   *
+   * `start()` is safe to call redundantly: `getOrCreateStartTask` is
+   * memoised and the implementation is documented thread-safe.
+   *
+   * @return `false` when there is no `ReactHost` (see [canRevive]); [onInstance]
+   * is then never called.
+   */
+  fun startRuntime(context: Context, onInstance: () -> Unit): Boolean {
+    val host = host(context) ?: return false
+    val fired = AtomicBoolean(false)
+
+    // Declared before it is registered so the listener can unregister itself.
+    lateinit var listener: ReactInstanceEventListener
+    val deliver = {
+      if (fired.compareAndSet(false, true)) {
+        host.removeReactInstanceEventListener(listener)
+        onInstance()
+      }
+    }
+    listener = object : ReactInstanceEventListener {
+      override fun onReactContextInitialized(context: ReactContext) = deliver()
+    }
+
+    host.addReactInstanceEventListener(listener)
+    try {
+      host.start()
+    } catch (error: Throwable) {
+      // A ReactHost that refuses to start is not something this package can
+      // fix, and it must not take the service down with it.
+      host.removeReactInstanceEventListener(listener)
+      Log.e(RnMediaMediaSessionService.TAG, "ReactHost.start() failed; cannot revive.", error)
+      return false
+    }
+    if (host.currentReactContext != null) deliver()
+    return true
   }
 }

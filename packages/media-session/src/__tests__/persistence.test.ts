@@ -205,6 +205,7 @@ describe('save → restore round trip', () => {
       setPlaybackState: () => calls.push('state'),
       setMediaItem: () => calls.push('item'),
       setQueue: () => calls.push('queue'),
+      setResumptionSnapshot: () => {},
       setSleepTimer: () => {},
       cancelSleepTimer: () => {},
       getSleepTimerRemaining: () => undefined,
@@ -645,5 +646,104 @@ describe('clearPersisted', () => {
   it('rejects on a storage failure — the caller asked for this one', async () => {
     const rejecting = new RejectingStorage()
     await expect(clearPersisted(rejecting)).rejects.toBe(rejecting.error)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                        The native resumption mirror                        */
+/* -------------------------------------------------------------------------- */
+
+describe('native resumption mirror', () => {
+  it('mirrors exactly the bytes that went into storage, on every broadcast', async () => {
+    const storage = new SyncStorage()
+    const { native, api } = await service()
+    const persisted = withPersistence(api, storage)
+
+    persisted.setQueue(QUEUE)
+    persisted.setMediaItem(QUEUE[0])
+    persisted.setPlaybackState(playbackState({ queueIndex: 0 }))
+
+    // Same count and — the property that matters — same content. The mirror is
+    // what a service with no JavaScript reads; if it could drift from the
+    // record the app restores, the notification and the app would disagree
+    // after every kill.
+    expect(native.resumptionSnapshots).toEqual(storage.writes)
+  })
+
+  it('mirrors an async storage write-for-write, without waiting for the disk', async () => {
+    const storage = new AsyncStorage(/* manual */ true)
+    const { native, api } = await service()
+    const persisted = withPersistence(api, storage)
+
+    persisted.setQueue(QUEUE)
+    persisted.setMediaItem(QUEUE[0])
+
+    // Storage has one write in flight and one coalescing behind it; the mirror
+    // is already current, because it is not on the disk's clock.
+    expect(storage.writes).toHaveLength(0)
+    expect(native.resumptionSnapshots).toHaveLength(2)
+    expect(JSON.parse(native.resumptionSnapshots.at(-1)!).mediaItem).toEqual(
+      QUEUE[0]
+    )
+
+    storage.release()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    storage.release()
+    await persisted.flush()
+    expect(native.resumptionSnapshots).toEqual(storage.writes)
+  })
+
+  it('save() refreshes the mirror as well as the record', async () => {
+    const storage = new SyncStorage()
+    const { native, api } = await service()
+    const persisted = withPersistence(api, storage)
+    persisted.setPlaybackState(playbackState())
+
+    const before = native.resumptionSnapshots.length
+    persisted.save()
+    expect(native.resumptionSnapshots).toHaveLength(before + 1)
+    expect(native.resumptionSnapshots.at(-1)).toBe(storage.writes.at(-1))
+  })
+
+  it('clear() forgets both copies', async () => {
+    const storage = new SyncStorage()
+    const { native, api } = await service()
+    const persisted = withPersistence(api, storage)
+    persisted.setQueue(QUEUE)
+
+    await persisted.clear()
+
+    expect(await restorePersisted(storage)).toEqual({ status: 'empty' })
+    // `undefined`, not a tombstone record: the native side has a key to remove,
+    // not a schema to satisfy.
+    expect(native.resumptionSnapshots.at(-1)).toBeUndefined()
+  })
+
+  it('clear() leaves the mirror alone when the storage write fails', async () => {
+    const { native, api } = await service()
+    const rejecting = new RejectingStorage()
+    const persisted = withPersistence(api, rejecting, { onError: () => {} })
+
+    await expect(persisted.clear()).rejects.toBe(rejecting.error)
+    expect(native.resumptionSnapshots).not.toContain(undefined)
+  })
+
+  it('reports a mirror failure instead of losing the storage write', async () => {
+    const storage = new SyncStorage()
+    const { native, api } = await service()
+    const boom = new Error('bridge gone')
+    native.setResumptionSnapshot = () => {
+      throw boom
+    }
+    const errors: unknown[] = []
+    const persisted = withPersistence(api, storage, {
+      onError: (error) => errors.push(error),
+    })
+
+    persisted.setQueue(QUEUE)
+
+    // Persistence is the feature that matters; the mirror is a cache.
+    expect(storage.writes).toHaveLength(1)
+    expect(errors).toEqual([boom])
   })
 })

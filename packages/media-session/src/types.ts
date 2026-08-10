@@ -104,6 +104,26 @@ export interface MediaHandler {
    */
   onSleepTimer?(): void | Promise<void>
 
+  /**
+   * Android only: this JS runtime was started **by the media service** to
+   * complete a playback resumption after the process had been killed.
+   *
+   * By the time this runs the notification is already on screen, the session
+   * already carries the persisted track and position, and the `play` the user
+   * pressed is about to be replayed on this handler. So there is nothing you
+   * have to do here — it exists so an app can log it, fire an analytics event,
+   * or refresh a token before the replayed `play()` needs one.
+   *
+   * Optional for the same reason {@link onSleepTimer} is: an informational
+   * callback added after v1 must not break structural implementors of this
+   * interface.
+   *
+   * Requires `android.playbackResumption: true`, `withPersistence`, and
+   * `MediaService.init` at module scope — see
+   * {@link MediaServiceConfig.android}.
+   */
+  onPlaybackResumption?(): void | Promise<void>
+
   /* --- Android Auto / CarPlay browse: reserved, not wired to native in v1 --- */
 
   /**
@@ -142,10 +162,61 @@ export interface MediaServiceConfig {
      * timeout with `withPersistence`.
      */
     stopForegroundTimeoutMs?: number
+    /**
+     * Let the media service come back **after the process was killed**, from
+     * the System UI resumption card, a Bluetooth reconnect or a headset play
+     * button — booting the JS runtime behind it.
+     *
+     * @default false — opt-in until it is proven on more hardware than ours.
+     *
+     * Requires all three, and says so in the log when one is missing:
+     * 1. `withPersistence(service, storage)` — it writes the native mirror the
+     *    service reads with no JS alive.
+     * 2. `MediaService.init(...)` reachable at **JS module scope**. A revived
+     *    runtime loads your bundle but mounts no component, so an `init` inside
+     *    a `useEffect` never runs.
+     * 3. media3's `MediaButtonReceiver` in your `AndroidManifest.xml`:
+     *
+     *    ```xml
+     *    <receiver android:name="androidx.media3.session.MediaButtonReceiver"
+     *              android:exported="true">
+     *      <intent-filter>
+     *        <action android:name="android.intent.action.MEDIA_BUTTON" />
+     *      </intent-filter>
+     *    </receiver>
+     *    ```
+     *
+     *    That declaration is what makes media3 advertise resumption to the
+     *    System UI at all; it is deliberately not merged in from this library,
+     *    because it changes how media buttons are routed for every app that
+     *    installs the package.
+     *
+     * ## The platform story, so the asymmetry is not mistaken for a gap
+     * - **Both platforms**: `withPersistence` / `restorePersisted` — the same
+     *   record, the same behaviour. That is the cross-platform feature.
+     * - **Android**: this flag adds an automatic consumer of that record — the
+     *   resumption card, Bluetooth, a media button revive the process for you.
+     * - **iOS**: the consumer of the same record is the next *manual* launch —
+     *   the user opens the app and it is paused where they left it. An automatic
+     *   iOS twin cannot exist: a terminated iOS app stays terminated, because
+     *   force-quit is read as user intent and nothing may resurrect a process
+     *   for playback. Apple's policy, not a missing feature here.
+     *
+     * If that ever changes the flag has a natural home at
+     * `config.ios.playbackResumption`; it is namespaced under `android` on
+     * purpose, not by accident.
+     */
+    playbackResumption?: boolean
   }
   ios?: {
     /** Decoded-artwork cache capacity. @default 8 */
     artworkCacheSize?: number
+    /**
+     * There is deliberately no `playbackResumption` here — see
+     * {@link MediaServiceConfig.android}. iOS cannot restart a terminated app to
+     * play audio; what it shares with Android is `withPersistence`, restored on
+     * the next manual launch.
+     */
   }
   /**
    * Called when a handler method throws or rejects. Defaults to `console.error`.
@@ -191,6 +262,20 @@ export interface MediaServiceApi {
    * see {@link setMediaItem} for how the current entry gets enriched.
    */
   setQueue(items: MediaItem[]): void
+  /**
+   * Mirror the persisted session into native storage so Android can resume
+   * playback after the process is killed. **`withPersistence` calls this for
+   * you** — there is no reason for app code to.
+   *
+   * The argument is the serialized `PersistedSession` record, byte-identical to
+   * what went into your storage engine, so the two copies cannot drift. The
+   * native side keeps it in its own `SharedPreferences`, which is the only
+   * thing the media service can read when it is created into a process with no
+   * JavaScript in it. `undefined` forgets it.
+   *
+   * A no-op on iOS and whenever `android.playbackResumption` is `false`.
+   */
+  setResumptionSnapshot(snapshot?: string): void
   /**
    * End background execution. The ONLY thing that does — `pause()` never does
    * (PLAN §5.4). After this resolves, `init` may be called again.

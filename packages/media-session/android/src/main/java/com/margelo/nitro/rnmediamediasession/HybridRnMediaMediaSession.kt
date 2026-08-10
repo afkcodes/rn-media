@@ -58,6 +58,10 @@ class HybridRnMediaMediaSession : HybridRnMediaMediaSessionSpec() {
     MediaSessionController.setQueue(items.toList())
   }
 
+  override fun setResumptionSnapshot(snapshot: String?) {
+    MediaSessionController.setResumptionSnapshot(snapshot)
+  }
+
   override fun stopService(): Promise<Unit> {
     val promise = Promise<Unit>()
     MediaSessionController.stop { promise.resolve(Unit) }

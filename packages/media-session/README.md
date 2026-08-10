@@ -261,14 +261,115 @@ nothing that could not have been broadcast can be restored.
 
 | Export | Purpose |
 | --- | --- |
-| `withPersistence(service, storage, options?)` | Tee decorator; adds `save()` and `flush()` |
+| `withPersistence(service, storage, options?)` | Tee decorator; adds `save()`, `flush()` and `clear()` |
 | `restorePersisted(storage, options?)` | `Promise<RestoreResult>` |
 | `applyPersisted(service, session)` | Re-broadcast in the order the channels expect |
-| `clearPersisted(storage, options?)` | Forget the saved session |
+| `clearPersisted(storage, options?)` | Forget the saved session (**storage only**) |
 | `PERSISTENCE_SCHEMA_VERSION`, `DEFAULT_PERSISTENCE_KEY` | Schema constants |
 
 `options` is `{ key?, onError?, now? }`. Sleep-timer state is deliberately *not*
-persisted — see below.
+persisted — see below. `service.clear()` and `clearPersisted(storage)` differ in
+one way that matters once resumption is on: `clear()` also forgets the native
+mirror, so the session stops being offered as a System UI resumption card.
+
+## Playback resumption after process death
+
+**Android only, opt-in.** Lets the System UI resumption card, a Bluetooth
+reconnect or a headset play button bring the whole app back — foreground service,
+notification, queue, position and all — from a process Android had killed.
+
+```ts
+const service = withPersistence(
+  await MediaService.init(() => new MyHandler(), {
+    android: {
+      notificationChannelId: 'playback',
+      notificationChannelName: 'Playback',
+      playbackResumption: true,       // default false
+    },
+  }),
+  storage,
+)
+```
+
+```xml
+<!-- your app's AndroidManifest.xml, inside <application> -->
+<receiver android:name="androidx.media3.session.MediaButtonReceiver"
+          android:exported="true">
+  <intent-filter>
+    <action android:name="android.intent.action.MEDIA_BUTTON" />
+  </intent-filter>
+</receiver>
+```
+
+Three requirements, and the library logs which one you are missing:
+
+1. **`playbackResumption: true`.** Off by default — this path starts a foreground
+   service in a process the user did not open.
+2. **`withPersistence(...)`.** It writes the snapshot the service reads. Nothing
+   else does.
+3. **`MediaService.init(...)` reachable at JS *module scope*** — not in a
+   component, a hook or a screen. A revived runtime loads your bundle and starts
+   **no surface**, so nothing mounts and no effect ever runs. This is the single
+   most likely way to enable resumption and see it not work; the service waits
+   10 s, logs exactly that, and stops cleanly.
+
+### What actually happens
+
+The persisted record is mirrored into native `SharedPreferences` on every write —
+the same serialized string, so the two copies cannot drift. When the OS creates
+the service into an empty process it reads that mirror **synchronously**, rebuilds
+the media3 session from it, posts the notification with the right track inside the
+foreground-service deadline, and only *then* calls `ReactHost.start()`. Your
+runtime boots behind a notification that is already correct. The `play` the user
+pressed is held and replayed on your handler once it arrives.
+
+```ts
+class MyHandler extends BaseMediaHandler {
+  override onPlaybackResumption() {
+    // Optional and informational. The notification is already up and `play()`
+    // is about to be replayed on this handler — this is where you'd refresh an
+    // expired stream token or log the event.
+  }
+}
+```
+
+Measured on device (Android 16, release build) from a killed process:
+notification up **59 ms** after the OS granted the foreground-service start,
+runtime up at 84 ms, `init` done at 254 ms, audio playing from the persisted
+position at 377 ms.
+
+### The platform story (read this before "why is it Android-only?")
+
+Three layers, and only the middle one is platform-specific:
+
+| Layer | Android | iOS |
+| --- | --- | --- |
+| Save + restore the session (`withPersistence` / `restorePersisted`) | ✅ identical | ✅ identical |
+| Who consumes it | the OS: resumption card, Bluetooth, media button — **automatically**, no app launch | the **user**, by opening the app; `restorePersisted` puts them back on the same track, paused |
+| Config flag | `android.playbackResumption` | none, and none is possible |
+
+The cross-platform feature is persistence. `playbackResumption` only names the
+extra thing *Android* can do with that same data. An iOS twin cannot exist: a
+terminated iOS app stays terminated — a force-quit is read as the user's intent
+that it stop, and no media button, Control Center press or route change may
+resurrect a process for playback. That is Apple's policy, the same platform
+reality as "force-quit kills playback", not a missing feature here. If it ever
+changes, the flag has a natural home at `ios.playbackResumption`; it is
+namespaced under `android` deliberately, so nobody later "fixes" the asymmetry by
+hoisting it.
+
+Honest edges:
+
+- **`setResumptionSnapshot` is a no-op on iOS**, because the mirror only exists
+  for a service that has to read it with no JS alive, and iOS has no such service.
+  Your own `withPersistence` storage is untouched and is what the next launch
+  restores from.
+- **`adb shell am force-stop` removes the System UI resumption card**; `am kill` —
+  what actually happens to a paused, demoted app — does not. Test with `am kill`.
+- A **START_STICKY restart** (the OS bringing the service back on its own) is not
+  a resumption and does not boot your app; it stops quietly.
+- An `Application` that does not implement `ReactApplication` (brownfield) gets
+  one warning and the pre-existing behaviour.
 
 ## Sleep timer (native)
 
@@ -388,6 +489,13 @@ Details worth knowing:
 
   Applied when the service is created — the first `playing` broadcast. Calling
   `init` again with a different value does not retro-fit a running service.
+
+- `playbackResumption` lets the service come back after the process is killed.
+  Off by default; see
+  [Playback resumption](#playback-resumption-after-process-death). Note that a
+  service created *by a resumption* is configured from the **mirrored** config of
+  the previous run, for the same reason as above: the app's real config is in
+  JavaScript, which is what a cold start does not have yet.
 - Swiping the app away: the JS `onTaskRemoved` handler is called, and the
   built-in policy keeps playing if the last broadcast said `playing`, otherwise
   it stops the service.
@@ -409,14 +517,16 @@ pin the runtime, and this package has no background JS timers to keep warm
 
 What that does **not** cover:
 
-- **Process death.** If Android kills the process, your handler is gone. A later
-  media button starts the service into a process with no session; it logs and
-  stops rather than showing a notification with dead buttons. Reviving a session
-  *from a media button* (playback resumption) is not a v1 feature — but the
-  state itself no longer has to be lost:
+- **Process death.** If Android kills the process, your handler is gone. By
+  default a later media button starts the service into a process with no session;
+  it logs and stops rather than showing a notification with dead buttons, and the
+  state itself is not lost —
   [`withPersistence`](#surviving-process-death-withpersistence) saves the three
-  channels on every broadcast, and the next launch restores queue, track and a
-  paused position.
+  channels on every broadcast and the next launch restores queue, track and a
+  paused position. With
+  [`playbackResumption: true`](#playback-resumption-after-process-death) that
+  media button (or the System UI resumption card) instead rebuilds the session
+  natively and boots your runtime behind it.
 - **JS timers.** `setTimeout` inside your handler stops firing once the Activity
   is gone. That is an RN platform behaviour, not something this package can fix
   — which is why the [sleep timer](#sleep-timer-native) is native.

@@ -45,10 +45,11 @@ namespace margelo::nitro::rnmediamediasession {
     std::optional<std::string> notificationIcon     SWIFT_PRIVATE;
     bool stopForegroundOnPause     SWIFT_PRIVATE;
     std::optional<double> stopForegroundTimeoutMs     SWIFT_PRIVATE;
+    bool playbackResumption     SWIFT_PRIVATE;
 
   public:
     AndroidMediaSessionConfig() = default;
-    explicit AndroidMediaSessionConfig(std::string notificationChannelId, std::string notificationChannelName, std::optional<std::string> notificationIcon, bool stopForegroundOnPause, std::optional<double> stopForegroundTimeoutMs): notificationChannelId(notificationChannelId), notificationChannelName(notificationChannelName), notificationIcon(notificationIcon), stopForegroundOnPause(stopForegroundOnPause), stopForegroundTimeoutMs(stopForegroundTimeoutMs) {}
+    explicit AndroidMediaSessionConfig(std::string notificationChannelId, std::string notificationChannelName, std::optional<std::string> notificationIcon, bool stopForegroundOnPause, std::optional<double> stopForegroundTimeoutMs, bool playbackResumption): notificationChannelId(notificationChannelId), notificationChannelName(notificationChannelName), notificationIcon(notificationIcon), stopForegroundOnPause(stopForegroundOnPause), stopForegroundTimeoutMs(stopForegroundTimeoutMs), playbackResumption(playbackResumption) {}
 
   public:
     friend bool operator==(const AndroidMediaSessionConfig& lhs, const AndroidMediaSessionConfig& rhs) = default;
@@ -68,7 +69,8 @@ namespace margelo::nitro {
         JSIConverter<std::string>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "notificationChannelName"))),
         JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "notificationIcon"))),
         JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundOnPause"))),
-        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundTimeoutMs")))
+        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundTimeoutMs"))),
+        JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "playbackResumption")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::rnmediamediasession::AndroidMediaSessionConfig& arg) {
@@ -78,6 +80,7 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "notificationIcon"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.notificationIcon));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundOnPause"), JSIConverter<bool>::toJSI(runtime, arg.stopForegroundOnPause));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundTimeoutMs"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.stopForegroundTimeoutMs));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "playbackResumption"), JSIConverter<bool>::toJSI(runtime, arg.playbackResumption));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -93,6 +96,7 @@ namespace margelo::nitro {
       if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "notificationIcon")))) return false;
       if (!JSIConverter<bool>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundOnPause")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundTimeoutMs")))) return false;
+      if (!JSIConverter<bool>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "playbackResumption")))) return false;
       return true;
     }
   };

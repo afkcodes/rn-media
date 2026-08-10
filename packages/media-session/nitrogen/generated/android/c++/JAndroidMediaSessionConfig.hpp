@@ -42,12 +42,15 @@ namespace margelo::nitro::rnmediamediasession {
       jboolean stopForegroundOnPause = this->getFieldValue(fieldStopForegroundOnPause);
       static const auto fieldStopForegroundTimeoutMs = clazz->getField<jni::JDouble>("stopForegroundTimeoutMs");
       jni::local_ref<jni::JDouble> stopForegroundTimeoutMs = this->getFieldValue(fieldStopForegroundTimeoutMs);
+      static const auto fieldPlaybackResumption = clazz->getField<jboolean>("playbackResumption");
+      jboolean playbackResumption = this->getFieldValue(fieldPlaybackResumption);
       return AndroidMediaSessionConfig(
         notificationChannelId->toStdString(),
         notificationChannelName->toStdString(),
         notificationIcon != nullptr ? std::make_optional(notificationIcon->toStdString()) : std::nullopt,
         static_cast<bool>(stopForegroundOnPause),
-        stopForegroundTimeoutMs != nullptr ? std::make_optional(stopForegroundTimeoutMs->value()) : std::nullopt
+        stopForegroundTimeoutMs != nullptr ? std::make_optional(stopForegroundTimeoutMs->value()) : std::nullopt,
+        static_cast<bool>(playbackResumption)
       );
     }
 
@@ -57,7 +60,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JAndroidMediaSessionConfig::javaobject> fromCpp(const AndroidMediaSessionConfig& value) {
-      using JSignature = JAndroidMediaSessionConfig(jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jboolean, jni::alias_ref<jni::JDouble>);
+      using JSignature = JAndroidMediaSessionConfig(jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jboolean, jni::alias_ref<jni::JDouble>, jboolean);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -66,7 +69,8 @@ namespace margelo::nitro::rnmediamediasession {
         jni::make_jstring(value.notificationChannelName),
         value.notificationIcon.has_value() ? jni::make_jstring(value.notificationIcon.value()) : nullptr,
         value.stopForegroundOnPause,
-        value.stopForegroundTimeoutMs.has_value() ? jni::JDouble::valueOf(value.stopForegroundTimeoutMs.value()) : nullptr
+        value.stopForegroundTimeoutMs.has_value() ? jni::JDouble::valueOf(value.stopForegroundTimeoutMs.value()) : nullptr,
+        value.playbackResumption
       );
     }
   };

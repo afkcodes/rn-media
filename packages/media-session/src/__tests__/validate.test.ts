@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { MediaSessionError } from '../errors'
 import {
+  DEFAULT_PLAYBACK_RESUMPTION,
   MAX_COMPACT_CONTROLS,
   MAX_STOP_FOREGROUND_TIMEOUT_MS,
   normalizeConfig,
@@ -242,6 +243,37 @@ describe('normalizeConfig', () => {
 
   it('is fine with no config at all', () => {
     expect(normalizeConfig()).toEqual({ android: undefined, ios: undefined })
+  })
+
+  describe('playbackResumption', () => {
+    const base = {
+      notificationChannelId: 'playback',
+      notificationChannelName: 'Playback',
+    }
+
+    it('is false unless the app asks for it', () => {
+      expect(
+        normalizeConfig({ android: base }).android?.playbackResumption
+      ).toBe(false)
+      expect(DEFAULT_PLAYBACK_RESUMPTION).toBe(false)
+    })
+
+    it('passes an explicit opt-in through', () => {
+      expect(
+        normalizeConfig({
+          android: { ...base, playbackResumption: true },
+        }).android?.playbackResumption
+      ).toBe(true)
+    })
+
+    it('rejects a non-boolean rather than coercing it', () => {
+      expect(() =>
+        normalizeConfig({
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          android: { ...base, playbackResumption: 'yes' as any },
+        })
+      ).toThrowError(/playbackResumption must be a boolean/)
+    })
   })
 
   describe('stopForegroundTimeoutMs', () => {

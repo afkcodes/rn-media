@@ -29,6 +29,7 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include "NativeMediaItem.hpp"
 #include <optional>
 #include <vector>
+#include <string>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -65,6 +66,7 @@ namespace margelo::nitro::rnmediamediasession {
       virtual void setPlaybackState(const NativePlaybackState& state) = 0;
       virtual void setMediaItem(const std::optional<NativeMediaItem>& item) = 0;
       virtual void setQueue(const std::vector<NativeMediaItem>& items) = 0;
+      virtual void setResumptionSnapshot(const std::optional<std::string>& snapshot) = 0;
       virtual std::shared_ptr<Promise<void>> stopService() = 0;
       virtual void setSleepTimer(double seconds) = 0;
       virtual void cancelSleepTimer() = 0;

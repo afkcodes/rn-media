@@ -243,6 +243,19 @@ export interface PersistedMediaService extends MediaServiceApi {
    */
   save(): void
   /**
+   * Forget the persisted session — **both copies**.
+   *
+   * {@link clearPersisted} only knows about the storage engine it is handed.
+   * This also clears the native resumption mirror, which is what would
+   * otherwise keep offering the user a System UI resumption card for a session
+   * they asked you to forget (a sign-out, a "clear history").
+   *
+   * Rejects if the storage engine does; the mirror is cleared only after the
+   * storage write lands, so the two never disagree in the direction that
+   * matters.
+   */
+  clear(): Promise<void>
+  /**
    * Resolves once every write issued so far has settled.
    *
    * Different from {@link save}: `save()` decides *what* to write, `flush()`
@@ -284,6 +297,17 @@ export interface PersistedMediaService extends MediaServiceApi {
  *   produced while it is pending collapse into a single follow-up write. Three
  *   channel broadcasts in one tick therefore cost one round trip, not three,
  *   and an out-of-order `setItem` completion can never resurrect stale state.
+ *
+ * ## Two copies, one string (Android playback resumption)
+ * Every record is also handed to the native side through
+ * `MediaServiceApi.setResumptionSnapshot`, which keeps it in this package's own
+ * `SharedPreferences`. That copy exists for exactly one caller: the Android
+ * media service when the OS creates it into a process with **no JavaScript in
+ * it**, which is the whole premise of playback resumption — it has ~5 s to call
+ * `startForeground` and must already know what to show. The app's storage
+ * engine stays the source of truth; the mirror is a cache, written from the
+ * same serialized string so the two cannot drift. Inert unless
+ * `android.playbackResumption` is on, and absent on iOS.
  *
  * ## What is not persisted
  * Handlers (they are code), and the `stopService` lifecycle. `stopService()`
@@ -371,10 +395,37 @@ export function withPersistence(
     settleIdle()
   }
 
-  /** Serialize the current channels and get the write moving. */
+  /**
+   * Serialize the current channels, get the write moving, and hand the *same*
+   * bytes to the native resumption mirror.
+   *
+   * One serialization, two destinations, deliberately: the app's storage engine
+   * is the source of truth the app reads on its next launch, and the native
+   * mirror is what the Android media service reads when it is created into a
+   * process with no JavaScript at all (playback resumption). Feeding both from
+   * one string is what makes "they cannot disagree" a property of the code
+   * rather than a promise.
+   *
+   * The mirror write is fire-and-forget and never blocks the broadcast: the
+   * native side takes the string, hands it to its own writer thread and
+   * returns. It is a no-op on iOS and when `android.playbackResumption` is off.
+   */
   function writeSnapshot(): void {
-    queued = serialize()
+    const payload = serialize()
+    queued = payload
+    mirror(payload)
     drain()
+  }
+
+  function mirror(payload: string | undefined): void {
+    try {
+      service.setResumptionSnapshot(payload)
+    } catch (error) {
+      // A service built before this method existed (or a hand-rolled fake) must
+      // not be able to break persistence, which is the feature that actually
+      // matters. Reported, never swallowed.
+      onError(error)
+    }
   }
 
   return {
@@ -409,6 +460,20 @@ export function withPersistence(
         return
       }
       writeSnapshot()
+    },
+
+    async clear(): Promise<void> {
+      // Storage first: if it rejects, the caller hears about it and the mirror
+      // is still consistent with what is on disk.
+      await clearPersisted(storage, { key, now })
+      playbackState = undefined
+      mediaItem = undefined
+      queue = undefined
+      mirror(undefined)
+    },
+
+    setResumptionSnapshot(snapshot?: string): void {
+      service.setResumptionSnapshot(snapshot)
     },
 
     stopService(): Promise<void> {
@@ -590,6 +655,11 @@ export function applyPersisted(
  * {@link restorePersisted} reads the result as `empty`.
  *
  * Storage failures reject — the caller asked for this one and can handle it.
+ *
+ * **Clears the app-facing record only.** It is handed a storage engine, not a
+ * service, so it cannot reach the native resumption mirror; call
+ * {@link PersistedMediaService.clear} instead when a forgotten session should
+ * also stop being offered as a System UI resumption card.
  */
 export async function clearPersisted(
   storage: MediaSessionStorage,

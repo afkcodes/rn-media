@@ -127,6 +127,8 @@ export function createMediaService(
       dispatch('customAction', (h) => h.customAction(name, parsed))
     },
     onSleepTimer: () => dispatch('onSleepTimer', (h) => h.onSleepTimer?.()),
+    onPlaybackResumption: () =>
+      dispatch('onPlaybackResumption', (h) => h.onPlaybackResumption?.()),
   }
 
   function assertReady(call: string): void {
@@ -152,6 +154,17 @@ export function createMediaService(
     setQueue(items: MediaItem[]): void {
       assertReady('setQueue()')
       native.setQueue(validateQueue(items))
+    },
+
+    setResumptionSnapshot(snapshot?: string): void {
+      assertReady('setResumptionSnapshot()')
+      // Deliberately unvalidated: the only caller is `withPersistence`, and the
+      // string it passes is the record it just serialized. Re-parsing it here
+      // to "check" it would cost a JSON round trip on every broadcast to prove
+      // something this package produced a line earlier. The native parser is
+      // the one that treats it as untrusted, because it reads it back across a
+      // process death.
+      native.setResumptionSnapshot(snapshot)
     },
 
     setSleepTimer(seconds: number): void {
@@ -232,6 +245,8 @@ export const MediaService: MediaServiceController = {
   setPlaybackState: (state) => resolveSingleton().setPlaybackState(state),
   setMediaItem: (item) => resolveSingleton().setMediaItem(item),
   setQueue: (items) => resolveSingleton().setQueue(items),
+  setResumptionSnapshot: (snapshot) =>
+    resolveSingleton().setResumptionSnapshot(snapshot),
   setSleepTimer: (seconds) => resolveSingleton().setSleepTimer(seconds),
   cancelSleepTimer: () => resolveSingleton().cancelSleepTimer(),
   getSleepTimerRemaining: () => resolveSingleton().getSleepTimerRemaining(),

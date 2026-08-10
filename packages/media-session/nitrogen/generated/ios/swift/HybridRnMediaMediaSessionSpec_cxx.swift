@@ -177,6 +177,24 @@ open class HybridRnMediaMediaSessionSpec_cxx {
   }
   
   @inline(__always)
+  public final func setResumptionSnapshot(snapshot: bridge.std__optional_std__string_) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setResumptionSnapshot(snapshot: { () -> String? in
+        if bridge.has_value_std__optional_std__string_(snapshot) {
+          let __unwrapped = bridge.get_std__optional_std__string_(snapshot)
+          return String(__unwrapped)
+        } else {
+          return nil
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
   public final func stopService() -> bridge.Result_std__shared_ptr_Promise_void___ {
     do {
       let __result = try self.__implementation.stopService()

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { BaseMediaHandler, CompositeMediaHandler } from '../handler'
 import { createMediaService } from '../media-service'
-import type { MediaServiceApi } from '../types'
+import type { MediaHandler, MediaServiceApi } from '../types'
 import { FakeNativeMediaSession, RecordingHandler } from './fakes'
 
 async function ready(): Promise<{
@@ -110,5 +110,73 @@ describe('onSleepTimer', () => {
     class Decorated extends CompositeMediaHandler {}
     new Decorated(inner).onSleepTimer()
     expect(inner.calls).toEqual(['onSleepTimer'])
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                            onPlaybackResumption                            */
+/* -------------------------------------------------------------------------- */
+
+describe('onPlaybackResumption', () => {
+  it('reaches the handler when native says the runtime was revived', async () => {
+    const { native, handler } = await ready()
+
+    native.emit().onPlaybackResumption()
+
+    expect(handler.calls).toEqual(['onPlaybackResumption'])
+  })
+
+  it('reports a throwing handler instead of letting it escape', async () => {
+    const onHandlerError = vi.fn()
+    const native = new FakeNativeMediaSession()
+    const handler = new RecordingHandler()
+    handler.throwWith = new Error('boom')
+    await createMediaService(native).init(() => handler, { onHandlerError })
+
+    native.emit().onPlaybackResumption()
+
+    expect(onHandlerError).toHaveBeenCalledWith(
+      'onPlaybackResumption',
+      handler.throwWith
+    )
+  })
+
+  it('is optional: a handler that omits it is not a crash', async () => {
+    const native = new FakeNativeMediaSession()
+    // A structural handler — what a player-agnostic consumer may legitimately
+    // write without extending BaseMediaHandler. Adding an informational
+    // callback to the interface must never break one of these, which is the
+    // whole reason `onPlaybackResumption?` is optional (same call as
+    // `onSleepTimer?`).
+    const bare: MediaHandler = {
+      play: () => {},
+      pause: () => {},
+      stop: () => {},
+      seekTo: () => {},
+      skipToNext: () => {},
+      skipToPrevious: () => {},
+      skipToQueueItem: () => {},
+      setRate: () => {},
+      onTaskRemoved: () => {},
+      customAction: () => {},
+      getChildren: () => Promise.resolve([]),
+      getMediaItem: () => Promise.resolve(undefined),
+    }
+    expect('onPlaybackResumption' in bare).toBe(false)
+    const onHandlerError = vi.fn()
+    await createMediaService(native).init(() => bare, { onHandlerError })
+
+    expect(() => native.emit().onPlaybackResumption()).not.toThrow()
+    expect(() => native.emit().onSleepTimer()).not.toThrow()
+    expect(onHandlerError).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op on BaseMediaHandler, and delegates through a decorator', () => {
+    expect(new BaseMediaHandler().onPlaybackResumption()).toBeUndefined()
+
+    const inner = new RecordingHandler()
+    class Decorated extends CompositeMediaHandler {}
+    new Decorated(inner).onPlaybackResumption()
+    expect(inner.calls).toEqual(['onPlaybackResumption'])
   })
 })

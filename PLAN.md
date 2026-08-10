@@ -406,14 +406,16 @@ player.
 
 **Backlog B — designed-for, deferred (Phase 5):** FFT/PCM visualizer
 taps, Android Auto/CarPlay browse, crossfade (two
-Player instances + volume ramp — multi-instance makes this possible),
-app-killed → media-button playback resumption.
+Player instances + volume ramp — multi-instance makes this possible).
 
 *Shipped out of Backlog B since:* typed EQ/DSP (ARCHITECTURE §18); the
 queue/position persistence decorator and the native sleep timer, plus the
-`stopForegroundTimeoutMs` knob (ARCHITECTURE §19) — persistence removes the
-*state* half of app-killed resumption, leaving only the "revive the process from
-a media button" half genuinely open.
+`stopForegroundTimeoutMs` knob (ARCHITECTURE §19); and **app-killed →
+media-button/System-UI playback resumption** (ARCHITECTURE §20), which persistence
+had already half-solved — the missing piece was a *native-readable* mirror of the
+snapshot, since the app's storage engine is JavaScript and JavaScript is exactly
+what a resumed process lacks. Opt-in (`android.playbackResumption`), Android only,
+device-verified 2026-08-10.
 
 **Fundamental limits (document, don't fight):** no DRM (Widevine/FairPlay) — mpv
 cannot; target audience is non-DRM audio (indie/self-hosted/Plex/Jellyfin/
@@ -438,5 +440,5 @@ every RN player). AirPlay audio works via iOS system routing.
 1. **Naming** — working title `rn-media`; npm scope? (`@mpvkit/*` clashes with iOS MPVKit; maybe `@rn-media/*`, `react-native-mpv-*`, or a brandable name.)
 2. **v1 scope** — recommendation above is audio-first (phases 1–3) with video in 4; confirm.
 3. **Expo support level** — config plugin only (recommended), or also an Expo Modules wrapper?
-4. **Queue ownership** — JS-owned queue with handler callbacks (audio_service model, maximum flexibility, needs JS alive) vs optional native queue fallback for post-kill resilience. Recommendation: JS-owned in v1; revisit.
+4. **Queue ownership** — JS-owned queue with handler callbacks (audio_service model, maximum flexibility, needs JS alive) vs optional native queue fallback for post-kill resilience. **Settled:** JS-owned, and the post-kill case no longer argues against it — ARCHITECTURE §20's native snapshot mirror gives the service a readable queue with no JS alive, without moving queue *ownership* out of JavaScript.
 5. **Windows/macOS/TV** — libmpv supports them all; out of scope for v1, keep the C++ core portable.

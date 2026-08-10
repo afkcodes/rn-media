@@ -48,6 +48,10 @@ abstract class HybridRnMediaMediaSessionSpec: HybridObject() {
   
   @DoNotStrip
   @Keep
+  abstract fun setResumptionSnapshot(snapshot: String?): Unit
+  
+  @DoNotStrip
+  @Keep
   abstract fun stopService(): Promise<Unit>
   
   @DoNotStrip

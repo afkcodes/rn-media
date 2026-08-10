@@ -133,6 +133,10 @@ namespace margelo::nitro::rnmediamediasession {
       return __array;
     }(items));
   }
+  void JHybridRnMediaMediaSessionSpec::setResumptionSnapshot(const std::optional<std::string>& snapshot) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<jni::JString> /* snapshot */)>("setResumptionSnapshot");
+    method(_javaPart, snapshot.has_value() ? jni::make_jstring(snapshot.value()) : nullptr);
+  }
   std::shared_ptr<Promise<void>> JHybridRnMediaMediaSessionSpec::stopService() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<JPromise::javaobject>()>("stopService");
     auto __result = method(_javaPart);
