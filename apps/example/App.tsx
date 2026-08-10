@@ -133,8 +133,8 @@ interface Track extends MediaItem {
  *    with `unsupported-format` no matter what — `--enable-protocol=hls` was
  *    present, but that is the deprecated `hls://` protocol, not the demuxer.
  *    Our fork adds `--enable-demuxer=hls --enable-demuxer=mpegts` and nothing
- *    else. iOS still uses the stock `libmpv-darwin-build` binaries, which have
- *    not been rebuilt yet, so both are still expected to fail there.
+ *    else. iOS ships the matching fork (`v0.7.2-rnmedia.2`), so both entries
+ *    should work there too — CI-verified only; never run on an iOS device.
  *
  * 4. **Finite MP3, 12 s** — short enough to reach `trackEnded` while you are
  *    still looking at it, so it is what proves duration reporting and the
@@ -163,7 +163,7 @@ const TRACKS: readonly Track[] = [
     id: 'fip-hls',
     title: 'FIP',
     artist: 'Radio France',
-    album: 'HLS master · AAC · live (Android only)',
+    album: 'HLS master · AAC · live',
     uri: 'https://stream.radiofrance.fr/fip/fip.m3u8',
     live: true,
   },
@@ -174,7 +174,7 @@ const TRACKS: readonly Track[] = [
     // No master playlist: this URL *is* the media playlist (`#EXTINF` +
     // `.ts` segments), so it covers the no-variant HLS path that entry 2
     // does not.
-    album: 'HLS media · AAC · live (Android only)',
+    album: 'HLS media · AAC · live',
     uri: 'https://radio.wavespb.com/live/146ed6ec6dea5a24/146ed6ec6dea5a24.m3u8',
     artworkUri:
       'https://airdco.pc.cdn.bitgravity.com/images/vividh-bharati.jpg',
