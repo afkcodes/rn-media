@@ -1,0 +1,104 @@
+name: Bug report
+description: Something in @rn-media/player, /audio-session or /media-session behaves wrong
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: the root [README](https://github.com/afkcodes/rn-media/blob/main/README.md#limitations)
+        lists what this library deliberately cannot do (DRM, Chromecast, iOS
+        restart-after-force-quit). iOS is compiled by CI but has never run on a
+        device — an iOS runtime report is welcome, just say so.
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      multiple: true
+      options:
+        - '@rn-media/player'
+        - '@rn-media/audio-session'
+        - '@rn-media/media-session'
+        - 'example app / build'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - Android
+        - iOS
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, what you got, and how reliably it reproduces.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >-
+        Minimal code, ideally a diff against `apps/example`. Include the media
+        URL or the container/codec if the bug is playback-related — "an MP3"
+        and "an HLS master playlist with AAC variants" are different bugs.
+      render: tsx
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Package versions
+      description: '`@rn-media/*` versions, plus `react-native-nitro-modules`.'
+      placeholder: 'player 0.1.0, media-session 0.1.0, nitro-modules 0.32.0'
+    validations:
+      required: true
+
+  - type: input
+    id: rn-version
+    attributes:
+      label: React Native version
+      placeholder: '0.86.1 (New Architecture)'
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device / OS
+      description: Real device or emulator/simulator, model, OS version.
+      placeholder: 'Pixel 8, Android 16 (physical) — or iPhone 15 simulator, iOS 18.2'
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        `adb logcat` / Xcode console output around the failure.
+
+        **For anything stream-related** — a URL that will not play, a stall, a
+        wrong duration, missing ICY metadata — tap mpv's own log instead of
+        guessing. It says which demuxer and decoder were chosen and why the
+        open failed:
+
+        ```ts
+        const player = await Player.create({ logLevel: 'verbose' });
+        player.on('log', e => console.log(`[${e.prefix}] ${e.text}`));
+        ```
+
+        (`'debugging'` and `'trace'` go deeper; `'trace'` is very loud.)
+        Paste the lines from `load` up to the failure.
+      render: shell
+    validations:
+      required: false
