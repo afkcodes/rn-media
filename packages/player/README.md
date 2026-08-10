@@ -8,11 +8,8 @@ React Native audio player built on libmpv, powered by Nitro Modules.
 
 ## Requirements
 
-- React Native v0.76.0 or higher
+- React Native **v0.82.0 or higher** (New Architecture only)
 - Node 18.0.0 or higher
-
-> [!IMPORTANT]  
-> To Support `Nitro Views` you need to install React Native version v0.78.0 or higher.
 
 ## Installation
 
@@ -98,6 +95,52 @@ shuffled order. **Combining it with `startIndex` throws** an `invalid-state`
 source you passed at that position, and quietly reinterpreting it would be a
 coin flip. For "shuffle, but start with *this* track", put that track first
 yourself, or load in order and call `playlist.shuffle()` afterwards.
+
+### Audio filters and EQ
+
+```ts
+import { AudioFilters, EQUALIZER_PRESETS, equalizerPresetChain } from '@rn-media/player'
+
+player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.rock))
+player.setAudioFilters([
+  AudioFilters.equalizer({ frequency: 60, widthType: 'o', width: 1, gain: 4 }),
+  AudioFilters.crossfeed({ strength: 0.3 }),
+  AudioFilters.limiter(),
+])
+player.getAudioFilters() // mpv's own `af` string, read back
+player.clearAudioFilters()
+```
+
+Typed descriptors compile into mpv's `af` grammar — one mpv entry per filter,
+escaped exactly the way mpv's own serialiser writes it. Factories:
+`equalizer`, `bass`, `treble`, `lowpass`, `highpass`, `graphicEqualizer`
+(18-band `superequalizer`), `crossfeed`, `compressor`, `limiter`,
+`dynamicNormalizer`, `loudnorm`, `volume`, and `custom` for any other
+libavfilter audio filter that is compiled in. Each validates against the
+underlying filter's documented ranges and throws `invalid-state` rather than
+letting mpv fail later.
+
+**Presets.** `EQUALIZER_PRESETS` holds 22 tuned 10-band curves (ISO octave
+centres, nothing beyond ±9 dB); `EQUALIZER_PRESET_LIST` is the same set in
+picker order, and `defineEqualizerPreset(id, name, gainsDb)` validates a
+user-designed one. Apply them through `equalizerPresetChain`, which computes the
+pre-amp from the *summed* magnitude response — octave-spaced bells overlap and
+add, so `Loudness` peaks at +8.8 dB from +7 dB sliders and attenuating by the
+largest slider would still clip. Bands at 0 dB are dropped, a flat preset
+compiles to an empty chain, and an `alimiter` is appended as the inter-sample
+safety net (`{ limiter: false }` opts out).
+
+Notes:
+
+- **`af` is a global mpv option, not per-entry** — a chain survives track
+  changes by design.
+- **Nothing interacts.** mpv's speed handling (`scaletempo2`) sits downstream
+  of the user chain, and ReplayGain is volume-domain, so filters, `setRate()`
+  and `setReplayGain()` compose freely. Watch total headroom, not ordering.
+- **Availability probe.** The filters exist in our pinned binaries on both
+  platforms (Android `v1.1.9-rnmedia.2`, iOS `v0.7.2-rnmedia.2`), so no
+  platform branching is needed. On an older or overridden binary the call fails
+  honestly with a `mpv` `PlayerError` carrying `errno: -11`.
 
 ### ReplayGain (loudness normalisation)
 
