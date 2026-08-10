@@ -34,6 +34,13 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 The sweet spot: music apps with **non-DRM audio** — indie catalogs, self-hosted
 libraries (Plex / Jellyfin / Subsonic), podcasts, radio, audiobooks.
 
+Different job? [`react-native-audio-api`](https://github.com/software-mansion/react-native-audio-api)
+implements the **Web Audio API** — an audio *graph* for synthesis, games and
+per-sample DSP. That's a paradigm this library doesn't attempt, and the reverse
+holds for queues, lock screens and background survival. They compose, though:
+`@rn-media/media-session` takes any player structurally, so a Web-Audio app can
+drive our lock-screen and background layer.
+
 ## 60-second quick start
 
 ```sh
