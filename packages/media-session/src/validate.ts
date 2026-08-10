@@ -258,11 +258,49 @@ export function normalizePlaybackState(
 }
 
 /* -------------------------------------------------------------------------- */
+/*                                 Sleep timer                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Validate a sleep-timer duration.
+ *
+ * Strictly positive: `0` is rejected rather than treated as "fire now" because
+ * the two plausible readings — "pause immediately" and "cancel" — are both
+ * already spelled out (`pause()` and `cancelSleepTimer()`), and picking one
+ * silently would make the other a bug that only shows up on a device with the
+ * screen off. `NaN`/`Infinity` are rejected here rather than downstream, where
+ * `NaN * 1000` becomes a `Long` of 0 on Android and a timer that fires
+ * instantly.
+ */
+export function validateSleepTimerSeconds(seconds: number): number {
+  assertFinite(seconds, 'seconds')
+  if (seconds <= 0) {
+    throw invalidArgument(
+      `seconds must be > 0, got ${seconds}. Use cancelSleepTimer() to disarm, ` +
+        `or pause() to stop now.`
+    )
+  }
+  return seconds
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                   Config                                   */
 /* -------------------------------------------------------------------------- */
 
 /** `stopForegroundOnPause` follows audio_service's default. See PLAN §5.6. */
 export const DEFAULT_STOP_FOREGROUND_ON_PAUSE = true
+
+/**
+ * media3's `MediaSessionService.DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS`, which
+ * is both the default *and* the maximum: the setter runs the argument through
+ * `Util.constrainValue(v, 0, DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS)`, so a
+ * larger value is clamped down rather than honoured (media3 1.11.0, confirmed
+ * by `javap` on the shipped AAR: `ConstantValue: long 600000l`).
+ *
+ * Exported so an app can say "half of media3's default" without hard-coding
+ * ten minutes, and so a test can assert the ceiling.
+ */
+export const MAX_STOP_FOREGROUND_TIMEOUT_MS = 600_000
 
 export function normalizeConfig(
   config: MediaServiceConfig = {}
@@ -285,6 +323,21 @@ export function normalizeConfig(
         'config.android.notificationIcon'
       )
     }
+    if (android.stopForegroundTimeoutMs !== undefined) {
+      assertFinite(
+        android.stopForegroundTimeoutMs,
+        'config.android.stopForegroundTimeoutMs'
+      )
+      if (android.stopForegroundTimeoutMs < 0) {
+        // media3 would silently clamp a negative to 0, i.e. "demote instantly"
+        // — the opposite of what someone writing a negative number is likely
+        // to mean. Rejecting is the honest reading.
+        throw invalidArgument(
+          `config.android.stopForegroundTimeoutMs must be >= 0 (0 demotes the service ` +
+            `immediately on pause), got ${android.stopForegroundTimeoutMs}.`
+        )
+      }
+    }
   }
 
   if (ios?.artworkCacheSize !== undefined) {
@@ -306,6 +359,11 @@ export function normalizeConfig(
             notificationIcon: android.notificationIcon,
             stopForegroundOnPause:
               android.stopForegroundOnPause ?? DEFAULT_STOP_FOREGROUND_ON_PAUSE,
+            // Passed through undefined rather than defaulted: "no opinion" has
+            // to stay distinguishable from "10 minutes", because media3 is
+            // free to change its own default and an app that did not ask
+            // should move with it.
+            stopForegroundTimeoutMs: android.stopForegroundTimeoutMs,
           },
     ios: ios === undefined ? undefined : { artworkCacheSize: ios.artworkCacheSize },
   }

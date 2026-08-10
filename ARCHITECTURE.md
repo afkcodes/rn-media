@@ -167,7 +167,7 @@ queue with variant/segment entries (measured 3→23). The player forces
 `demuxer=lavf` for `.m3u8`/`.m3u` sources only, caller-overridable.
 
 ### 15. Testing strategy
-- TS: everything device-free via injected fakes (player 277, media-session 68,
+- TS: everything device-free via injected fakes (player 277, media-session 141,
   audio-session 41 tests). Reducers are pure; fixtures replay real event
   sequences.
 - C++: pure logic (batching, lifecycle) split from mpv calls; host-compiled
@@ -255,12 +255,90 @@ not the largest slider — octave-spaced one-octave bells overlap and add, so
 per-platform branching; on binaries older than them the call fails with a typed
 `mpv` error (`errno: -11`), which remains the supported availability probe.
 
+### 19. Background hardening: persistence is injected, the sleep timer is native, the FGS grace period is a knob
+Three answers to the same question — *what happens to a paused, demoted,
+killable service?* — added to `media-session` and verified on device
+(POCO/Android 16, release build, 2026-08-10).
+
+**Persistence is a tee over the broadcast setters, and takes zero dependencies.**
+`withPersistence(service, storage)` wraps `MediaServiceApi`; `storage` is
+structural `{getItem, setItem}` — the `wireAudioSession` philosophy (§3), so
+AsyncStorage, MMKV and a `Map` all fit and none is depended on. Writes are
+triggered *only* by a broadcast, which is already discontinuity-only (§7); no
+timer was added and none may be. A sync engine is written through synchronously,
+an async one gets one write in flight with intermediate snapshots coalescing, so
+three channel broadcasts in a tick cost one round trip and a late `setItem`
+cannot resurrect stale state. The record is versioned and every bad-data outcome
+is a *value* (`empty` / `unsupportedVersion` / `corrupt`), never a throw — only a
+failing storage engine rejects — and restored payloads pass through the same
+validators a live broadcast does.
+
+The three non-obvious decisions:
+1. **The anchor is frozen paused at write time and re-stamped `at` on restore.**
+   A persisted `rate: 1` is a lie the moment the process dies (every surface
+   projects `value + elapsed × rate`), and a restored `playing` status is worse
+   than cosmetic: on Android a `playing` broadcast is precisely what *starts the
+   foreground service*, so it would raise a notification for audio that does not
+   exist. Status is downgraded to `paused`, and the projection is clamped to a
+   known `duration`.
+2. **A live entry persists position `0`** — using the package's existing
+   live discriminator, a missing `duration` (§13, and what already drives
+   `isDynamic`/`MPNowPlayingInfoPropertyIsLiveStream`). A restored offset into a
+   live stream has nothing to seek to and measures listening time, not a place
+   in the content. Leaving it to implementors would make it a bug in most apps
+   instead of a decision in one place.
+3. **Discontinuity-only writes have a cost, and it is paid explicitly.** A track
+   played straight through produces no broadcast and therefore no write — device
+   evidence: a 42 s play restored as `0:00`. The fix is *not* a periodic save
+   (that is the per-tick write the whole design forbids, and its JS timer would
+   freeze in the background anyway) but `service.save()`, which re-projects and
+   writes on demand; the app picks the moment (`AppState` leaving `active`,
+   `onTaskRemoved`, before `stopService`). With that, the same test restored
+   `0:42` across `am force-stop`. Nothing can checkpoint an un-warned kill; the
+   position then restores to the last checkpoint, which is never *wrong*, only
+   older.
+
+**The sleep timer is native because our own Platform truth says it must be.**
+`setSleepTimer/cancelSleepTimer/getSleepTimerRemaining` + an `onSleepTimer`
+handler callback. Android uses a main-looper `Handler.postDelayed`, iOS a
+cancellable `DispatchQueue.main.asyncAfter` work item — neither is tied to an
+Activity, neither is a JS timer. On fire the pause is **native-first** (§9) and,
+on Android, literally the same path a notification pause takes: the facade
+player's own `Player.pause()`, so media3's optimistic placeholder, the
+notification, the lock screen and the JS `pause` handler all behave exactly as
+if the user had pressed the button; `onSleepTimer` is fired afterwards purely as
+notification, which is why its default implementation is a no-op. Remaining time
+is read from *the same clock the timer was scheduled against*
+(`uptimeMillis`/`DispatchTime`) so it cannot disagree with when the pause
+happens. Deliberately not `AlarmManager`: it would make every consumer request
+`SCHEDULE_EXACT_ALARM` to fix a case (a timer armed over silence) that has no
+meaning, since playing audio holds the CPU awake for the entire window that
+does. Measured on device with the Activity destroyed: armed 13:23:04.480, JS
+`pause` at 13:23:49.482 (+45.002 s), `onSleepTimer` 3 ms later, AudioTrack
+`state:paused`, session `PAUSED`, zero Activities alive.
+
+**`stopForegroundTimeoutMs` exposes media3's grace period rather than picking a
+side.** `@UnstableApi public final void
+MediaSessionService.setForegroundServiceTimeoutMs(long)` (media3 1.11.0 —
+verified by `javap` on the shipped AAR, not from memory), called from the
+service's `onCreate` after `setMediaNotificationProvider`. Its implementation is
+`Util.constrainValue(v, 0, DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS)`, so
+**600 000 ms is the maximum as well as the default** and a negative is silently
+clamped to "demote immediately" — which is why the TS layer rejects negatives
+rather than letting that happen quietly. The knob exists because the trade-off
+is genuinely two-sided (killability and battery vs. surviving to be resumed from
+the notification) and neither side is ours to choose; omitted, media3's default
+stands. Device evidence: configured to 15 000 ms, `isForeground` held for 14 s
+after the pause and was gone by 16 s.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
   gates on lifecycle + headless tasks; Samsung freezes them even with one —
-  RN #56324). Nothing timing-critical may live in JS; sleep timers must be
-  native.
+  RN #56324). Nothing timing-critical may live in JS. The consequence is not
+  advice to consumers but a shipped feature: `media-session` provides the sleep
+  timer natively (§19), because an app that built one on `setTimeout` would ship
+  a bug that only appears with the screen off.
 - **An unhandled JS exception destroys the whole runtime** (default
   ReactHostDelegate rethrows). All handler dispatch is wrapped.
 - **CocoaPods `exclude_files` applies to *every* attribute including
@@ -270,7 +348,12 @@ per-platform branching; on binaries older than them the call fails with a typed
   `com.margelo.nitro.<ns>`** — a wrong package compiles, links, ships, and
   throws ClassNotFoundException at runtime.
 - **media3 1.11 keeps a paused media service in the foreground for a 10-minute
-  grace period** — "demote on pause" is not immediate, by design.
+  grace period** — "demote on pause" is not immediate, by design. That 10
+  minutes (`DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS`) is simultaneously the
+  **ceiling**: `setForegroundServiceTimeoutMs` runs its argument through
+  `Util.constrainValue(v, 0, 600_000)`, so a larger value is clamped down and a
+  negative is clamped up to "demote now" without a word. There is no SDK-level
+  branch in the logic — the grace period is identical on every API level.
 - **`--enable-protocol=hls` in an ffmpeg build proves nothing** — it's the
   deprecated `hls://` protocol; only the `hls`+`mpegts` *demuxers* matter.
 - **Nor does the string `aresample` in libavfilter** — same family, found while

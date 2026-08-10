@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.media3.common.Player
 import com.margelo.nitro.rnmediamediasession.AndroidMediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
 import com.margelo.nitro.rnmediamediasession.MediaSessionHandlers
@@ -68,6 +69,14 @@ internal object MediaSessionController {
   /** Handle for the `ReactHost` before-destroy hook; identity matters for removal. */
   private var beforeDestroy: (() -> Unit)? = null
 
+  /**
+   * The native sleep timer. Owned here rather than by the service because it
+   * must keep counting across the service's own lifecycle — the whole point is
+   * that it does not depend on anything the OS can take away short of the
+   * process.
+   */
+  private val sleepTimer = SleepTimer { onSleepTimerFired() }
+
   fun snapshot(): Snapshot = current
 
   // MARK: - Lifecycle
@@ -102,6 +111,11 @@ internal object MediaSessionController {
    * (PLAN §5.4).
    */
   fun stop(onDone: () -> Unit) {
+    // Before anything else, and synchronously: this method is also the
+    // `ReactHost` before-destroy listener (see [initialize]), so a dev reload
+    // arrives here with the runtime about to die. A timer left armed would fire
+    // into handlers belonging to a runtime that no longer exists.
+    sleepTimer.cancel()
     // Cleared synchronously, before anything is posted: after this point no
     // media3 callback can reach a JS handler the caller is about to discard.
     handlers = null
@@ -183,6 +197,67 @@ internal object MediaSessionController {
    */
   fun notifyTaskRemoved() {
     handlers?.onTaskRemoved()
+  }
+
+  // MARK: - Sleep timer
+
+  /** Arm (or re-arm) the sleep timer. Called from the JS thread. */
+  fun setSleepTimer(seconds: Double) {
+    sleepTimer.arm(seconds)
+  }
+
+  /** Disarm. Called from the JS thread. */
+  fun cancelSleepTimer() {
+    sleepTimer.cancel()
+  }
+
+  /** Seconds remaining, or `null`. Called from the JS thread; must not block. */
+  fun sleepTimerRemaining(): Double? = sleepTimer.remainingSeconds()
+
+  /**
+   * The sleep timer elapsed. Main thread (see [SleepTimer]).
+   *
+   * **Native-first, exactly like a notification pause** (ARCHITECTURE §9): the
+   * facade player is paused through its own public `Player.pause()`, which is
+   * the very call a `MediaController` — the notification, the lock screen, a
+   * Bluetooth remote — ends up making. So the session, the notification and the
+   * scrubber go to paused immediately, `SimpleBasePlayer` shows its optimistic
+   * placeholder, and `handleSetPlayWhenReady(false)` dispatches `pause` to JS
+   * to actually stop the audio. Reusing that path rather than reimplementing it
+   * is what makes "the timer fired" and "the user pressed pause" indistinguish-
+   * able to every surface, which is the correct behaviour and also one code
+   * path to keep working.
+   *
+   * Only *then* is JS told the timer fired, fire-and-forget. The ordering is
+   * part of the contract: `onSleepTimer` is a notification of something already
+   * done, never a request to do it (see `MediaSessionHandlers.onSleepTimer`).
+   */
+  private fun onSleepTimerFired() {
+    val facade = player
+    when {
+      facade == null ->
+        // No session (stopped, or never initialized). Nothing to pause; the JS
+        // notification still goes out so an app-level timer UI can clear.
+        Log.w(RnMediaMediaSessionService.TAG, "Sleep timer fired with no active session.")
+
+      facade.isCommandAvailable(Player.COMMAND_PLAY_PAUSE) -> facade.pause()
+
+      else -> {
+        // `SimpleBasePlayer` silently ignores `pause()` when COMMAND_PLAY_PAUSE
+        // is not in `State.availableCommands`, i.e. when the app broadcast no
+        // `pause` capability. Falling through to the handler still honours the
+        // user's intent — the audio stops — while the session state correctly
+        // stays where the app put it.
+        Log.w(
+          RnMediaMediaSessionService.TAG,
+          "Sleep timer fired but the app does not advertise the `pause` capability; " +
+            "calling the JS pause handler directly. The session state will not change " +
+            "until the app broadcasts it.",
+        )
+        handlers?.pause()
+      }
+    }
+    handlers?.onSleepTimer()
   }
 
   // MARK: - Foreground service start/stop

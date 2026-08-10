@@ -18,7 +18,7 @@ public extension MediaSessionHandlers {
   /**
    * Create a new instance of `MediaSessionHandlers`.
    */
-  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void) {
+  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void) {
     self.init({ () -> bridge.Func_void in
       let __closureWrapper = Func_void(play)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
@@ -49,6 +49,9 @@ public extension MediaSessionHandlers {
     }(), { () -> bridge.Func_void_std__string_std__string in
       let __closureWrapper = Func_void_std__string_std__string(customAction)
       return bridge.create_Func_void_std__string_std__string(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void in
+      let __closureWrapper = Func_void(onSleepTimer)
+      return bridge.create_Func_void(__closureWrapper.toUnsafe())
     }())
   }
 
@@ -148,6 +151,16 @@ public extension MediaSessionHandlers {
       let __wrappedFunction = bridge.wrap_Func_void_std__string_std__string(self.__customAction)
       return { (__name: String, __extras: String) -> Void in
         __wrappedFunction.call(std.string(__name), std.string(__extras))
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var onSleepTimer: () -> Void {
+    return { () -> () -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void(self.__onSleepTimer)
+      return { () -> Void in
+        __wrappedFunction.call()
       }
     }()
   }

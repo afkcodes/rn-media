@@ -17,6 +17,7 @@
  */
 import React, { useEffect, useReducer } from 'react';
 import {
+  AppState,
   Pressable,
   ScrollView,
   StatusBar,
@@ -51,12 +52,40 @@ import {
 import {
   BaseMediaHandler,
   MediaService,
+  applyPersisted,
+  restorePersisted,
+  withPersistence,
   type MediaItem,
-  type MediaServiceApi,
+  type MediaSessionStorage,
+  type PersistedMediaService,
+  type PersistedSession,
   type PlaybackState,
 } from '@rn-media/media-session';
+import { createMMKV } from 'react-native-mmkv';
 import { SeekBar, formatTime } from './SeekBar';
 import { COLORS } from './theme';
+
+/* -------------------------------------------------------------------------- */
+/*                                  Storage                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Persistence storage for the media session — **an app-level choice, not the
+ * library's**.
+ *
+ * `@rn-media/media-session` takes `{ getItem, setItem }` structurally and
+ * depends on nothing; this app happens to use `react-native-mmkv` (an
+ * example-only dependency) because it is *synchronous*, so a broadcast is on
+ * disk before `setPlaybackState` returns — which is what makes surviving
+ * `adb shell am force-stop` a certainty rather than a race. AsyncStorage
+ * satisfies the same interface with two fewer lines and one more `await`.
+ */
+const mmkv = createMMKV({ id: 'rn-media-example' });
+
+const sessionStorage: MediaSessionStorage = {
+  getItem: key => mmkv.getString(key) ?? null,
+  setItem: (key, value) => mmkv.set(key, value),
+};
 
 /* -------------------------------------------------------------------------- */
 /*                                  The queue                                  */
@@ -364,6 +393,18 @@ class DemoMediaHandler extends BaseMediaHandler {
   override onTaskRemoved(): void {
     this.#log('onTaskRemoved');
   }
+
+  /**
+   * The native sleep timer fired.
+   *
+   * Playback is **already paused** by the time this runs — natively, with no
+   * Activity and no JS timer involved. This log line is the on-device proof
+   * that the notification reached JavaScript
+   * (`adb logcat -s ReactNativeJS`); the app does no pausing of its own.
+   */
+  override onSleepTimer(): void {
+    this.#log('onSleepTimer (playback already paused natively)');
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -387,10 +428,26 @@ class DemoMediaHandler extends BaseMediaHandler {
  */
 class Playback {
   #player: Player | undefined;
-  #service: MediaServiceApi | undefined;
+  #service: PersistedMediaService | undefined;
   #error: PlayerError | undefined;
   #startingPlayer: Promise<void> | undefined;
   #startingService: Promise<void> | undefined;
+  #restoring: Promise<void> | undefined;
+  /** What `restorePersisted` handed back on this launch, for the UI banner. */
+  #restored: PersistedSession | undefined;
+  /** Human-readable outcome of the restore, shown in the UI. */
+  #restoreNote = 'not attempted';
+  /** Track index to open on, recovered from the persisted session. */
+  #resumeIndex: number | undefined;
+  /**
+   * Position to seek to once mpv has actually opened the resumed entry.
+   *
+   * Not `loadPlaylist({ startPosition })`: that is mpv's per-file `start`
+   * option and this player applies it to *every* entry appended, so the whole
+   * queue would start 1:23 in. Seeking once, when the entry is ready, resumes
+   * exactly one track.
+   */
+  #pendingResumeMs: number | undefined;
   #unwireAudio: (() => void) | undefined;
   #unsubscribeState: (() => void) | undefined;
   /** Last broadcast discontinuity signature — see {@link #onStateChange}. */
@@ -427,10 +484,82 @@ class Playback {
     for (const listener of this.#listeners) listener();
   }
 
+  get restored(): PersistedSession | undefined {
+    return this.#restored;
+  }
+
+  get restoreNote(): string {
+    return this.#restoreNote;
+  }
+
   /** Idempotent: safe to call from every mount, and from a Fast Refresh. */
   async start(): Promise<void> {
+    // Before the player, so the queue can open on the entry the last process
+    // died on rather than jumping to track 1 and then correcting itself.
+    await (this.#restoring ??= this.#restore());
     await (this.#startingPlayer ??= this.#createPlayer());
     await this.#ensureService();
+  }
+
+  /**
+   * Read back whatever the last process left behind.
+   *
+   * Every branch of {@link RestoreResult} is handled and none of them throws —
+   * that is the point of the typed result. A first launch, an app downgrade and
+   * a truncated write all land the app on the same happy path.
+   */
+  async #restore(): Promise<void> {
+    try {
+      const result = await restorePersisted(sessionStorage);
+      switch (result.status) {
+        case 'restored': {
+          this.#restored = result.session;
+          const id = result.session.mediaItem?.id;
+          const index = TRACKS.findIndex(t => t.id === id);
+          if (index >= 0) {
+            this.#resumeIndex = index;
+            const ms = result.session.playbackState?.position.value ?? 0;
+            // `> 0` is the whole guard. A live entry is persisted at position
+            // 0 by the session itself — it publishes no duration, which is the
+            // library's live discriminator — so this app does not need its own
+            // `track.live` check here, and would be wrong to trust one: the
+            // authority on "is this seekable" is what was broadcast, not a
+            // static flag in this file.
+            if (ms > 0) this.#pendingResumeMs = ms;
+          }
+          const age = Math.round((Date.now() - result.session.savedAt) / 1000);
+          this.#restoreNote =
+            `restored "${result.session.mediaItem?.title ?? '—'}" ` +
+            `@ ${formatTime(
+              (result.session.playbackState?.position.value ?? 0) / 1000,
+            )} ` +
+            `· queue ${result.session.queue?.length ?? 0} · saved ${age}s ago`;
+          console.log(
+            `[example] persistence: ${this.#restoreNote}`,
+            JSON.stringify(result.session.playbackState?.position),
+          );
+          break;
+        }
+        case 'empty':
+          this.#restoreNote = 'nothing saved yet (first launch)';
+          console.log('[example] persistence: nothing saved yet');
+          break;
+        case 'unsupportedVersion':
+          this.#restoreNote = `saved by schema v${result.found ?? '?'}, this build reads v${result.expected}`;
+          console.warn(`[example] persistence: ${this.#restoreNote}`);
+          break;
+        case 'corrupt':
+          this.#restoreNote = `corrupt record ignored: ${result.reason}`;
+          console.warn(`[example] persistence: ${this.#restoreNote}`);
+          break;
+      }
+    } catch (cause) {
+      // Only a broken storage engine reaches here — bad *data* is a result, not
+      // an exception. Losing the saved session is survivable; hiding the reason
+      // is not.
+      this.#restoreNote = 'storage unavailable';
+      console.error('[example] persistence: storage failed:', cause);
+    }
   }
 
   /**
@@ -485,7 +614,7 @@ class Playback {
       // playlist demuxer can't explode the queue with variant/segment entries.
       await player.loadPlaylist(
         TRACKS.map(t => t.uri),
-        { startIndex: 0, autoPlay: false },
+        { startIndex: this.#resumeIndex ?? 0, autoPlay: false },
       );
     } catch (cause) {
       this.#error = toPlayerError(cause);
@@ -496,7 +625,7 @@ class Playback {
 
   async #createService(): Promise<void> {
     try {
-      this.#service = await MediaService.init(
+      const api = await MediaService.init(
         () => new DemoMediaHandler(() => this),
         {
           android: {
@@ -504,11 +633,29 @@ class Playback {
             notificationChannelName: 'Playback',
             notificationIcon: 'ic_notification',
             stopForegroundOnPause: true,
+            // Deliberately far below media3's 10-minute default so the
+            // demotion is observable in `dumpsys activity services` while
+            // someone is watching. A shipping app would leave this alone (or
+            // pick a value it can defend); this one is a test bed.
+            stopForegroundTimeoutMs: 15_000,
           },
           onHandlerError: (method, cause) =>
             console.error(`[example] handler.${method} failed:`, cause),
         },
       );
+      // One line, and every broadcast below persists itself. The library gains
+      // no dependency from this — `sessionStorage` is ours.
+      this.#service = withPersistence(api, sessionStorage, {
+        onError: cause =>
+          console.error('[example] persisting the session failed:', cause),
+      });
+      // Put the recovered session on every remote surface before the player has
+      // anything to say. It is a *paused* state by construction, so this does
+      // not start the foreground service — the notification appears on play,
+      // exactly as it would without persistence.
+      if (this.#restored !== undefined) {
+        applyPersisted(this.#service, this.#restored);
+      }
       // Channel 3. The entries never change; only their durations arrive late.
       this.#publishQueue();
       if (this.#player !== undefined) this.#broadcast(this.#player.state, true);
@@ -532,6 +679,7 @@ class Playback {
    * along with the next real change.
    */
   #onStateChange(state: PlayerState): void {
+    this.#consumeResume(state);
     const track = currentTrack(state);
     const signature = [
       state.status,
@@ -554,6 +702,26 @@ class Playback {
     if (signature === this.#lastSignature) return;
     this.#lastSignature = signature;
     this.#broadcast(state, false);
+  }
+
+  /**
+   * Seek to the restored position, once — and only once mpv has actually opened
+   * the entry it belongs to.
+   *
+   * `autoPlay: false` means nothing is loaded at startup, so there is nothing
+   * to seek *into* until the user presses play and the entry reaches `ready`.
+   * The index check is what stops a resume point leaking onto a different
+   * track if the user skips before pressing play.
+   */
+  #consumeResume(state: PlayerState): void {
+    const ms = this.#pendingResumeMs;
+    if (ms === undefined) return;
+    if (state.status !== 'ready' || state.playlist.index !== this.#resumeIndex) {
+      return;
+    }
+    this.#pendingResumeMs = undefined;
+    console.log(`[example] persistence: resuming at ${ms} ms`);
+    void this.#player?.seekTo(ms / 1000);
   }
 
   /** Channel 3, with whatever durations are known so far. See {@link #durations}. */
@@ -664,6 +832,55 @@ class Playback {
     this.#player?.setRate(rate);
   }
 
+  /* --- sleep timer ------------------------------------------------------ */
+
+  /**
+   * Arm the **native** sleep timer.
+   *
+   * Note what is *not* here: a `setTimeout`. With the Activity destroyed, JS
+   * timers stop firing, which is exactly the state a sleep timer is used in.
+   * The session schedules this on the platform's own timer instead.
+   */
+  setSleepTimer(seconds: number): void {
+    try {
+      this.#service?.setSleepTimer(seconds);
+      console.log(`[example] sleep timer armed for ${seconds}s`);
+    } catch (cause) {
+      console.warn('[example] sleep timer rejected:', cause);
+    }
+    this.#notify();
+  }
+
+  cancelSleepTimer(): void {
+    this.#service?.cancelSleepTimer();
+    console.log('[example] sleep timer cancelled');
+    this.#notify();
+  }
+
+  /** Polled by the UI. Safe from JS *because the UI is on screen.* */
+  sleepTimerRemaining(): number | undefined {
+    return this.#service?.getSleepTimerRemaining();
+  }
+
+  /* --- persistence checkpoints ------------------------------------------ */
+
+  /**
+   * Write the session out *now*.
+   *
+   * The tee saves on every broadcast, and this app broadcasts only on
+   * discontinuities — so a track played straight through produces no write at
+   * all, and the position on disk stays wherever the last play/seek left it.
+   * The library will not paper over that with a timer (a periodic save is the
+   * per-tick write the whole design avoids, and the JS timer driving it would
+   * freeze in the background anyway), so choosing the moment is the app's job.
+   *
+   * The moment this app picks is *leaving the foreground* — see the `AppState`
+   * subscription below — which is the last instant it is guaranteed to run.
+   */
+  saveSession(): void {
+    this.#service?.save();
+  }
+
   /**
    * The only thing that ends background execution — pause never does.
    *
@@ -700,8 +917,28 @@ class Playback {
  * Parked on `globalThis` so a Fast Refresh of this module reuses the running
  * player and session instead of building a second one on top of them.
  */
-const scope = globalThis as typeof globalThis & { __rnMediaPlayback?: Playback };
+const scope = globalThis as typeof globalThis & {
+  __rnMediaPlayback?: Playback;
+  __rnMediaAppState?: { remove(): void };
+};
 const playback: Playback = (scope.__rnMediaPlayback ??= new Playback());
+
+/**
+ * Checkpoint the session on the way out of the foreground.
+ *
+ * Module scope, not a component effect, for the same reason the player is:
+ * this has to keep working after the React tree is gone. `background` is
+ * emitted while the Activity is still being torn down, which is the last
+ * moment JavaScript is guaranteed to run — after that the process may be
+ * reclaimed with no warning, and whatever was written here is what the next
+ * launch restores.
+ */
+scope.__rnMediaAppState ??= AppState.addEventListener('change', next => {
+  if (next !== 'active') {
+    playback.saveSession();
+    console.log(`[example] persistence: checkpoint on "${next}"`);
+  }
+});
 
 /** Start playback infrastructure on first mount; re-render on its changes. */
 function usePlayback(): { player: Player | undefined; error: PlayerError | undefined } {
@@ -765,6 +1002,41 @@ const FILTER_CHOICES: readonly FilterChoice[] = [
 ];
 
 /* -------------------------------------------------------------------------- */
+/*                                 Sleep timer                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Durations offered by the demo UI.
+ *
+ * 45 seconds is not a plausible product choice — it is short enough to watch
+ * the whole thing happen with the Activity destroyed, which is the only way to
+ * prove the timer is not a JS timer.
+ */
+const SLEEP_TIMER_CHOICES: readonly number[] = [45, 300, 1800];
+
+/**
+ * Poll the native timer while this screen is on.
+ *
+ * A JS interval is the *right* tool here and nowhere else in this app: the
+ * countdown only has to be correct while someone is looking at it, and while an
+ * Activity is alive JS timers run normally. The timer that matters is native
+ * and keeps counting whether or not this interval does.
+ */
+function useSleepTimerCountdown(): number | undefined {
+  const [remaining, setRemaining] = React.useState<number | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    const id = setInterval(
+      () => setRemaining(playback.sleepTimerRemaining()),
+      500,
+    );
+    return () => clearInterval(id);
+  }, []);
+  return remaining;
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                    App                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -772,6 +1044,7 @@ function App(): React.JSX.Element {
   const { player, error } = usePlayback();
   const state = usePlayerState(player);
   const progress = useProgress(player);
+  const sleepRemaining = useSleepTimerCountdown();
   const [eqPreset, setEqPreset] = React.useState('flat');
   // What mpv says the chain is, read straight back from the `af` property.
   // Not a mirror of local state: if mpv rejected the chain (as it will on iOS
@@ -907,6 +1180,42 @@ function App(): React.JSX.Element {
               <Text style={styles.queueArtist}>{item.album}</Text>
             </Pressable>
           ))}
+        </View>
+
+        <View style={styles.queue}>
+          <Text style={styles.detail}>
+            Sleep timer (native ·{' '}
+            {sleepRemaining === undefined
+              ? 'off'
+              : `${Math.ceil(sleepRemaining)}s left`}
+            )
+          </Text>
+          <View style={styles.eqRow}>
+            {SLEEP_TIMER_CHOICES.map(seconds => (
+              <Pressable
+                key={seconds}
+                accessibilityRole="button"
+                disabled={!ready}
+                onPress={() => playback.setSleepTimer(seconds)}
+                style={styles.eqChip}
+              >
+                <Text style={styles.eqChipLabel}>
+                  {seconds < 60 ? `${seconds}s` : `${seconds / 60}m`}
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable
+              accessibilityRole="button"
+              disabled={!ready}
+              onPress={() => playback.cancelSleepTimer()}
+              style={styles.eqChip}
+            >
+              <Text style={styles.eqChipLabel}>Cancel</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.detail}>
+            Persistence · {playback.restoreNote}
+          </Text>
         </View>
 
         <View style={styles.queue}>

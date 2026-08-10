@@ -22,6 +22,14 @@ export class BaseMediaHandler implements MediaHandler {
     _name: string,
     _extras?: Record<string, unknown>
   ): void | Promise<void> {}
+  /**
+   * Default: nothing.
+   *
+   * Correct by design — **the pause has already happened natively** by the time
+   * this is called (see {@link MediaHandler.onSleepTimer}), so an app that only
+   * wants "stop playing after 30 minutes" needs no code here at all.
+   */
+  onSleepTimer(): void | Promise<void> {}
 
   /** Reserved for the Android Auto browse tree. Not invoked in v1. */
   getChildren(_parentId: string): Promise<MediaItem[]> {
@@ -83,6 +91,9 @@ export class CompositeMediaHandler implements MediaHandler {
     extras?: Record<string, unknown>
   ): void | Promise<void> {
     return this.inner.customAction(name, extras)
+  }
+  onSleepTimer(): void | Promise<void> {
+    return this.inner.onSleepTimer?.()
   }
   getChildren(parentId: string): Promise<MediaItem[]> {
     return this.inner.getChildren(parentId)

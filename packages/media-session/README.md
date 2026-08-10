@@ -116,6 +116,220 @@ indices from remote surfaces). It deliberately does *not* implement "restart the
 track if more than 3 s in" — that needs player state it does not have; override
 `skipToPrevious` and call `super` for the real skip.
 
+## Surviving process death: `withPersistence`
+
+A paused, demoted foreground service is **killable** (see [Android](#android)
+below). When Android reclaims the process, your JS runtime — and with it the
+queue, the current track and the position — goes with it. Persistence is the
+mitigation: tee the three broadcast channels into storage, read them back on the
+next launch, re-broadcast.
+
+```ts
+import {
+  MediaService,
+  withPersistence,
+  restorePersisted,
+  applyPersisted,
+} from '@rn-media/media-session'
+
+// 1. Wrap the service. Every broadcast from here on saves itself.
+const service = withPersistence(
+  await MediaService.init(() => new MyHandler(), config),
+  storage,
+)
+
+// 2. On the next launch, read it back.
+const restored = await restorePersisted(storage)
+if (restored.status === 'restored') {
+  applyPersisted(service, restored.session)   // queue → item → state
+}
+```
+
+### Storage is yours; this package has no dependency
+
+`storage` is anything structurally matching:
+
+```ts
+interface MediaSessionStorage {
+  getItem(key: string): Promise<string | null> | string | null
+  setItem(key: string, value: string): Promise<void> | void
+}
+```
+
+Sync or async, both work. `@react-native-async-storage/async-storage` satisfies
+it as-is; MMKV, `expo-sqlite/kv-store` and a `Map` need two lines:
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage'
+withPersistence(service, AsyncStorage)
+
+import { createMMKV } from 'react-native-mmkv'
+const mmkv = createMMKV()
+withPersistence(service, {
+  getItem: (k) => mmkv.getString(k) ?? null,
+  setItem: (k, v) => mmkv.set(k, v),
+})
+```
+
+The library depends on none of them — the same reason `wireAudioSession` takes a
+structural player rather than importing `@rn-media/player`.
+
+### What is saved, and when
+
+- **Writes happen on discontinuities only.** The only automatic trigger is one
+  of the three broadcast setters, and those are already discontinuity-only by
+  design. There are no timers here and no polling.
+
+  The direct consequence, stated plainly: **a track played straight through
+  produces no write**, so the saved position stays wherever the last
+  play/seek/track-change left it. This package will not fix that with a timer —
+  a periodic save is exactly the per-tick write the whole design exists to
+  avoid, and on Android the JS timer driving it would freeze in the background
+  anyway. Instead you choose the moment:
+
+  ```ts
+  import { AppState } from 'react-native'
+
+  AppState.addEventListener('change', (next) => {
+    if (next !== 'active') service.save()   // last moment JS is guaranteed to run
+  })
+  ```
+
+  `service.save()` re-projects the live anchor to *right now* and writes, with
+  no broadcast. Other good moments: `onTaskRemoved` (the app was swiped away),
+  and just before a deliberate `stopService()`. Nothing can checkpoint a process
+  killed without warning while playing in the background; the position then
+  restores to the last checkpoint, which is a defensible answer and never a
+  wrong one.
+- A **synchronous** storage is written *inside* the setter, so the record is on
+  disk before `setPlaybackState` returns. An **asynchronous** one gets at most
+  one write in flight; snapshots produced while it is pending collapse into a
+  single follow-up, so three channel broadcasts in one tick cost one round trip
+  and a late `setItem` can never resurrect stale state. `service.flush()`
+  resolves once everything has settled.
+- A broadcast the service **rejects** is not persisted — validation runs first.
+- Write failures go to `options.onError` (default `console.error`); they are
+  never swallowed, and one failure does not stop later writes.
+
+### The position is always restored paused
+
+This is the part that is easy to get wrong. A persisted `{ value, at, rate: 1 }`
+becomes a lie the instant the process dies: every surface projects
+`value + (now − at) × rate`, so a session restored the next morning would claim
+a position eight hours into the track.
+
+So the record is frozen at write time — the anchor is projected to the write
+instant, `rate` is set to `0`, and a `playing`/`buffering` status is downgraded
+to `paused`. On the way back in, `at` is re-stamped to *now*. The consequences:
+
+- restoring never lies about where you were, however long the gap;
+- restoring never starts a foreground service (a `playing` broadcast is exactly
+  what does that on Android — see below), so a cold launch is silent until the
+  user presses play;
+- the projection is clamped to the track's `duration` when one is known, so a
+  long-lived `playing` state cannot restore past the end;
+- **a live entry persists position `0`.** A missing `duration` is this
+  package's live/unknown discriminator everywhere else (Android marks the
+  timeline entry dynamic and draws no scrubber, iOS sets
+  `MPNowPlayingInfoPropertyIsLiveStream`), and persistence uses the same one. A
+  restored offset into a live stream is meaningless in every direction: there
+  is nothing to seek back to, the number measures how long you *listened* rather
+  than a place in the content, and `1:47:32` on a radio station you tuned in
+  yesterday is the same class of lie as a running anchor. Both channels are
+  consulted — an item without a duration still counts as finite if the matching
+  queue entry has one.
+
+Resume playback from a **user gesture**, not from the restore.
+
+### Every failure is a value, not a throw
+
+```ts
+type RestoreResult =
+  | { status: 'restored'; session: PersistedSession }
+  | { status: 'empty' }                                          // first launch, or cleared
+  | { status: 'unsupportedVersion'; found?: number; expected: number }
+  | { status: 'corrupt'; reason: string }
+```
+
+A truncated write, an app downgrade, a user clearing storage — all ordinary
+runtime conditions, so none of them throws; an app that has to `try/catch` its
+cold start eventually will not. What *does* reject is a failing storage engine,
+because that is a broken dependency and not bad data.
+
+Restored payloads go through the **same validators a live broadcast does**, so
+nothing that could not have been broadcast can be restored.
+
+| Export | Purpose |
+| --- | --- |
+| `withPersistence(service, storage, options?)` | Tee decorator; adds `save()` and `flush()` |
+| `restorePersisted(storage, options?)` | `Promise<RestoreResult>` |
+| `applyPersisted(service, session)` | Re-broadcast in the order the channels expect |
+| `clearPersisted(storage, options?)` | Forget the saved session |
+| `PERSISTENCE_SCHEMA_VERSION`, `DEFAULT_PERSISTENCE_KEY` | Schema constants |
+
+`options` is `{ key?, onError?, now? }`. Sleep-timer state is deliberately *not*
+persisted — see below.
+
+## Sleep timer (native)
+
+```ts
+service.setSleepTimer(30 * 60)      // pause in 30 minutes
+service.getSleepTimerRemaining()    // seconds, or undefined
+service.cancelSleepTimer()
+
+class MyHandler extends BaseMediaHandler {
+  override onSleepTimer() { /* already paused — clear your badge */ }
+}
+```
+
+**Do not build this on `setTimeout`.** React Native's `JavaTimerManager` gates
+JS timers on the Activity lifecycle plus headless tasks, so with the Activity
+destroyed they stop firing — and Samsung freezes them even with one alive
+(RN #56324). A sleep timer's entire job happens after the user has put the phone
+down, which is precisely when JS timers do not run. So this one is a platform
+timer: a main-looper `Handler.postDelayed` on Android, a cancellable
+`DispatchQueue.main.asyncAfter` work item on iOS. Neither is tied to an Activity
+and neither is a JS timer.
+
+**When it fires, the pause happens natively first.** On Android the facade
+player is paused through its own `Player.pause()` — the identical call a
+notification or Bluetooth pause makes — so the session, the notification and the
+lock screen go to paused immediately and your `pause` handler is invoked to stop
+the audio. iOS does the same two steps explicitly (now-playing state, then the
+handler), since it has no facade player. *Only then* is `onSleepTimer` called.
+It is a notification of something already done, so the default no-op is correct:
+an app that just wants "stop after 30 minutes" writes no handler code at all.
+
+Details worth knowing:
+
+- Re-arming **replaces**; it never stacks. `cancelSleepTimer()` on nothing is a
+  no-op.
+- `setSleepTimer` rejects `0`, negatives, `NaN` and `Infinity` with
+  `MediaSessionError('invalidArgument')` — "cancel" and "pause now" both already
+  have names.
+- The timer is cancelled by `stopService()` and by a dev reload (the session is
+  torn down through `ReactHost.addBeforeDestroyListener` before the runtime
+  dies).
+- It does **not** survive process death, and it is not persisted: restoring
+  "37 minutes left" into a process that has just been born would be a fiction —
+  the premise is an OS timer that has been counting the whole time.
+- `getSleepTimerRemaining()` reads the same clock the timer was scheduled
+  against (`SystemClock.uptimeMillis()` / `DispatchTime.now()`), so it cannot
+  disagree with when the pause will happen. Polling it from a JS interval is
+  fine: a visible screen has a live Activity, which is the one place JS timers
+  work.
+- **Android**: `Handler.postDelayed` counts in *uptime*, which does not advance
+  in deep sleep. That is the right trade rather than a defect — playing audio
+  holds the CPU awake, so uptime and wall time move together for the whole
+  window that matters, and the alternative (`AlarmManager` with an exact alarm)
+  would make this library demand `SCHEDULE_EXACT_ALARM` from every consumer.
+- **iOS**, honestly: iOS suspends a backgrounded process shortly after its audio
+  *stops*, and a suspended process runs no timers. A timer armed while audio is
+  playing fires — playing audio is what keeps the process out of suspension, and
+  the job is finished at the moment it fires. A timer armed over silence, or
+  still pending when playback stops for another reason, cannot be relied on.
+  There is no supported way around that.
+
 ## Platform notes
 
 ### Android
@@ -132,16 +346,48 @@ track if more than 3 s in" — that needs player state it does not have; overrid
   at `init`: Android 12+ forbids starting one from the background.
 - `stopForegroundOnPause: true` (default) demotes the service on pause. The
   notification stays; the service becomes **killable**. That is the documented
-  trade-off — use a persistence decorator if losing state matters. Set `false`
-  to stay in the foreground while paused.
+  trade-off — wrap the service in
+  [`withPersistence`](#surviving-process-death-withpersistence) if losing state
+  matters. Set `false` to stay in the foreground while paused.
 
   The demotion is **not instant**: media3 1.11 keeps the service foreground for
   a "user engaged" grace period after the pause
   (`MediaSessionService.DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS`, 10 minutes) and
   demotes only when it expires. So `dumpsys activity services` still reports
   `isForeground=true` right after pausing — measured on Android 16, media3
-  1.11. That is media3's Android 14+ behaviour, and it is what keeps a
+  1.11. That is media3's behaviour on every API level, and it is what keeps a
   resume-from-notification working.
+
+- `stopForegroundTimeoutMs` sets that grace period.
+
+  ```ts
+  android: { …, stopForegroundTimeoutMs: 60_000 }   // demote a minute after pausing
+  ```
+
+  Maps 1:1 onto `MediaSessionService.setForegroundServiceTimeoutMs(long)`
+  (`@UnstableApi`, media3 1.11.0 —
+  [source](https://github.com/androidx/media/blob/1.11.0/libraries/session/src/main/java/androidx/media3/session/MediaSessionService.java#L643-L668)),
+  applied in the service's `onCreate`. Omit it and media3's default stands.
+
+  | Value | Effect |
+  | --- | --- |
+  | omitted | media3's default: 10 minutes |
+  | `0` | demote immediately on pause |
+  | `1…600000` | that many milliseconds |
+  | `> 600000` | media3 clamps it back down to 600000 — 10 minutes is the ceiling, not just the default |
+  | `< 0` | rejected here, because media3 would silently clamp it to `0`, i.e. the opposite of what a negative is likely to mean |
+
+  **Shorter** stops the process being protected sooner, so Android may reclaim
+  it — and with it the JS runtime and your handler — minutes after a pause.
+  Better for battery and memory pressure, and the honest choice for an app that
+  does not expect to be resumed from the notification much later; pair it with
+  `withPersistence`. **Longer** makes a resume-from-notification far more likely
+  to find everything still alive, at the cost of holding a foreground service
+  (and its process) for that whole window. Neither end is free, which is why
+  there is no opinionated default beyond media3's.
+
+  Applied when the service is created — the first `playing` broadcast. Calling
+  `init` again with a different value does not retro-fit a running service.
 - Swiping the app away: the JS `onTaskRemoved` handler is called, and the
   built-in policy keeps playing if the last broadcast said `playing`, otherwise
   it stops the service.
@@ -166,7 +412,14 @@ What that does **not** cover:
 - **Process death.** If Android kills the process, your handler is gone. A later
   media button starts the service into a process with no session; it logs and
   stops rather than showing a notification with dead buttons. Reviving a session
-  across process death (playback resumption) is not a v1 feature.
+  *from a media button* (playback resumption) is not a v1 feature — but the
+  state itself no longer has to be lost:
+  [`withPersistence`](#surviving-process-death-withpersistence) saves the three
+  channels on every broadcast, and the next launch restores queue, track and a
+  paused position.
+- **JS timers.** `setTimeout` inside your handler stops firing once the Activity
+  is gone. That is an RN platform behaviour, not something this package can fix
+  — which is why the [sleep timer](#sleep-timer-native) is native.
 - A **dev reload** destroys the runtime. The session is torn down first via
   `ReactHost.addBeforeDestroyListener`, so you never get a live notification
   wired to a dead runtime.

@@ -56,6 +56,8 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<JFunc_void::javaobject> onTaskRemoved = this->getFieldValue(fieldOnTaskRemoved);
       static const auto fieldCustomAction = clazz->getField<JFunc_void_std__string_std__string::javaobject>("customAction");
       jni::local_ref<JFunc_void_std__string_std__string::javaobject> customAction = this->getFieldValue(fieldCustomAction);
+      static const auto fieldOnSleepTimer = clazz->getField<JFunc_void::javaobject>("onSleepTimer");
+      jni::local_ref<JFunc_void::javaobject> onSleepTimer = this->getFieldValue(fieldOnSleepTimer);
       return MediaSessionHandlers(
         [&]() -> std::function<void()> {
           if (play->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
@@ -146,6 +148,15 @@ namespace margelo::nitro::rnmediamediasession {
             auto customActionRef = jni::make_global(customAction);
             return JNICallable<JFunc_void_std__string_std__string, void(std::string, std::string)>(std::move(customActionRef));
           }
+        }(),
+        [&]() -> std::function<void()> {
+          if (onSleepTimer->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_cxx::javaobject>(onSleepTimer);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto onSleepTimerRef = jni::make_global(onSleepTimer);
+            return JNICallable<JFunc_void, void()>(std::move(onSleepTimerRef));
+          }
         }()
       );
     }
@@ -156,7 +167,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JMediaSessionHandlers::javaobject> fromCpp(const MediaSessionHandlers& value) {
-      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>);
+      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -170,7 +181,8 @@ namespace margelo::nitro::rnmediamediasession {
         JFunc_void_double_cxx::fromCpp(value.skipToQueueItem),
         JFunc_void_double_cxx::fromCpp(value.setRate),
         JFunc_void_cxx::fromCpp(value.onTaskRemoved),
-        JFunc_void_std__string_std__string_cxx::fromCpp(value.customAction)
+        JFunc_void_std__string_std__string_cxx::fromCpp(value.customAction),
+        JFunc_void_cxx::fromCpp(value.onSleepTimer)
       );
     }
   };

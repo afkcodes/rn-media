@@ -40,11 +40,14 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<jni::JString> notificationIcon = this->getFieldValue(fieldNotificationIcon);
       static const auto fieldStopForegroundOnPause = clazz->getField<jboolean>("stopForegroundOnPause");
       jboolean stopForegroundOnPause = this->getFieldValue(fieldStopForegroundOnPause);
+      static const auto fieldStopForegroundTimeoutMs = clazz->getField<jni::JDouble>("stopForegroundTimeoutMs");
+      jni::local_ref<jni::JDouble> stopForegroundTimeoutMs = this->getFieldValue(fieldStopForegroundTimeoutMs);
       return AndroidMediaSessionConfig(
         notificationChannelId->toStdString(),
         notificationChannelName->toStdString(),
         notificationIcon != nullptr ? std::make_optional(notificationIcon->toStdString()) : std::nullopt,
-        static_cast<bool>(stopForegroundOnPause)
+        static_cast<bool>(stopForegroundOnPause),
+        stopForegroundTimeoutMs != nullptr ? std::make_optional(stopForegroundTimeoutMs->value()) : std::nullopt
       );
     }
 
@@ -54,7 +57,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JAndroidMediaSessionConfig::javaobject> fromCpp(const AndroidMediaSessionConfig& value) {
-      using JSignature = JAndroidMediaSessionConfig(jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jboolean);
+      using JSignature = JAndroidMediaSessionConfig(jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jboolean, jni::alias_ref<jni::JDouble>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -62,7 +65,8 @@ namespace margelo::nitro::rnmediamediasession {
         jni::make_jstring(value.notificationChannelId),
         jni::make_jstring(value.notificationChannelName),
         value.notificationIcon.has_value() ? jni::make_jstring(value.notificationIcon.value()) : nullptr,
-        value.stopForegroundOnPause
+        value.stopForegroundOnPause,
+        value.stopForegroundTimeoutMs.has_value() ? jni::JDouble::valueOf(value.stopForegroundTimeoutMs.value()) : nullptr
       );
     }
   };

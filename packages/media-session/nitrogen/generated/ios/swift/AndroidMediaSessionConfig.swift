@@ -18,14 +18,20 @@ public extension AndroidMediaSessionConfig {
   /**
    * Create a new instance of `AndroidMediaSessionConfig`.
    */
-  init(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Bool) {
+  init(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Bool, stopForegroundTimeoutMs: Double?) {
     self.init(std.string(notificationChannelId), std.string(notificationChannelName), { () -> bridge.std__optional_std__string_ in
       if let __unwrappedValue = notificationIcon {
         return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
       } else {
         return .init()
       }
-    }(), stopForegroundOnPause)
+    }(), stopForegroundOnPause, { () -> bridge.std__optional_double_ in
+      if let __unwrappedValue = stopForegroundTimeoutMs {
+        return bridge.create_std__optional_double_(__unwrappedValue)
+      } else {
+        return .init()
+      }
+    }())
   }
 
   @inline(__always)
@@ -53,5 +59,17 @@ public extension AndroidMediaSessionConfig {
   @inline(__always)
   var stopForegroundOnPause: Bool {
     return self.__stopForegroundOnPause
+  }
+  
+  @inline(__always)
+  var stopForegroundTimeoutMs: Double? {
+    return { () -> Double? in
+      if bridge.has_value_std__optional_double_(self.__stopForegroundTimeoutMs) {
+        let __unwrapped = bridge.get_std__optional_double_(self.__stopForegroundTimeoutMs)
+        return __unwrapped
+      } else {
+        return nil
+      }
+    }()
   }
 }

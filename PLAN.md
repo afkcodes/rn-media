@@ -404,11 +404,16 @@ player.
 - network cache tuning + `prefetch-playlist` (next-track preload)
 - `isLive` detection surfaced in PlayerState
 
-**Backlog B — designed-for, deferred (Phase 5):** typed EQ/DSP, FFT/PCM visualizer
-taps, Android Auto/CarPlay browse, queue-persistence decorator, crossfade (two
-Player instances + volume ramp — multi-instance makes this possible), native
-sleep timer (JS timers freeze in background — must be native), app-killed →
-media-button playback resumption.
+**Backlog B — designed-for, deferred (Phase 5):** FFT/PCM visualizer
+taps, Android Auto/CarPlay browse, crossfade (two
+Player instances + volume ramp — multi-instance makes this possible),
+app-killed → media-button playback resumption.
+
+*Shipped out of Backlog B since:* typed EQ/DSP (ARCHITECTURE §18); the
+queue/position persistence decorator and the native sleep timer, plus the
+`stopForegroundTimeoutMs` knob (ARCHITECTURE §19) — persistence removes the
+*state* half of app-killed resumption, leaving only the "revive the process from
+a media button" half genuinely open.
 
 **Fundamental limits (document, don't fight):** no DRM (Widevine/FairPlay) — mpv
 cannot; target audience is non-DRM audio (indie/self-hosted/Plex/Jellyfin/

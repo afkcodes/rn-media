@@ -54,6 +54,34 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
     this.queues.push(items)
   }
 
+  /* --- Sleep timer: a fake platform timer, driven by `fireSleepTimer()` --- */
+
+  /** Every `setSleepTimer` argument, in order. */
+  readonly sleepTimers: number[] = []
+  cancelSleepTimerCalls = 0
+  /** What `getSleepTimerRemaining()` reports. Armed by `setSleepTimer`. */
+  private remaining: number | undefined
+
+  setSleepTimer(seconds: number): void {
+    this.sleepTimers.push(seconds)
+    this.remaining = seconds
+  }
+
+  cancelSleepTimer(): void {
+    this.cancelSleepTimerCalls += 1
+    this.remaining = undefined
+  }
+
+  getSleepTimerRemaining(): number | undefined {
+    return this.remaining
+  }
+
+  /** Test driver: "the platform timer elapsed". Mirrors the native ordering. */
+  fireSleepTimer(): void {
+    this.remaining = undefined
+    this.emit().onSleepTimer()
+  }
+
   stopService(): Promise<void> {
     this.stopServiceCalls += 1
     if (this.stopServiceError != null) {
@@ -140,6 +168,9 @@ export class RecordingHandler implements MediaHandler {
   }
   onTaskRemoved() {
     return this.record('onTaskRemoved')
+  }
+  onSleepTimer() {
+    return this.record('onSleepTimer')
   }
   customAction(name: string, extras?: Record<string, unknown>) {
     return this.record(`customAction(${name},${JSON.stringify(extras) ?? 'undefined'})`)
