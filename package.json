@@ -6,7 +6,8 @@
     "codegen": "npm --prefix packages/player run codegen",
     "typecheck": "npm --prefix packages/player run typecheck && npm --prefix packages/audio-session run typecheck && npm --prefix packages/media-session run typecheck",
     "test": "npm --prefix packages/player run test",
-    "release": "npm --prefix packages/player run release"
+    "release": "npm --prefix packages/player run release",
+    "check:upstream": "node scripts/check-upstream.mjs"
   },
   "devDependencies": {
     "jsdom": "^30.0.1"
