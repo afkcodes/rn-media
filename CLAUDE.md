@@ -1,5 +1,14 @@
 # rn-media — Project Guide
 
+**The mission, verbatim from the owner: build the best audio module on React
+Native — easy to use, with all the features. PERIOD.** Operationally that means:
+feature parity across Android and iOS is a GATE, not a preference (platform-capped
+compromises get rejected even when they're easier — we own binary forks precisely
+so platform ceilings don't become our ceilings); ease-of-use is a deliverable
+(zero-config defaults, hooks, typed everything, docs whose samples typecheck);
+and the comparison table in the README is the scoreboard — a feature another RN
+audio library has and we lack is a bug against the mission.
+
 React Native audio (+ later video-as-plugin) playback library built on **libmpv**,
 with a player-agnostic media-session layer inspired by Flutter's `audio_service`.
 Read `ARCHITECTURE.md` FIRST — it is the living record of every decision and its
