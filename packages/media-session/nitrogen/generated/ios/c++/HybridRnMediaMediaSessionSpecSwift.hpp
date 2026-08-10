@@ -128,6 +128,12 @@ namespace margelo::nitro::rnmediamediasession {
         std::rethrow_exception(__result.error());
       }
     }
+    inline void setResumptionSnapshot(const std::optional<std::string>& snapshot) override {
+      auto __result = _swiftPart.setResumptionSnapshot(snapshot);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
     inline std::shared_ptr<Promise<void>> stopService() override {
       auto __result = _swiftPart.stopService();
       if (__result.hasError()) [[unlikely]] {

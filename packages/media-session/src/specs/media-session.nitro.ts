@@ -131,9 +131,67 @@ export interface AndroidMediaSessionConfig {
    * Ignored on iOS: there is no service to demote.
    */
   stopForegroundTimeoutMs?: number
+  /**
+   * Opt in to **playback resumption after process death** (Android only).
+   *
+   * When `true`, the media3 service is allowed to come back from nothing: the
+   * System UI resumption card, a Bluetooth reconnect or a headset play button
+   * can start the service into a process with no JavaScript at all, and the
+   * service will rebuild the session from a *native* mirror of the persisted
+   * snapshot and then boot the React runtime behind it. See
+   * `RnMediaMediaSessionService.beginRevival` and
+   * {@link RnMediaMediaSession.setResumptionSnapshot}.
+   *
+   * Three things are required and none of them is silently substituted:
+   * 1. `withPersistence(...)` — the mirror is written by it, and nothing else
+   *    writes it. Without persistence there is nothing to resume.
+   * 2. `MediaService.init(...)` must be reachable at **JS module scope**. A
+   *    revived runtime loads the bundle but mounts no component, so an `init`
+   *    inside a `useEffect` never runs and the revival is abandoned after a
+   *    bounded wait (with a log saying exactly this).
+   * 3. The consuming app must declare media3's `MediaButtonReceiver` in its
+   *    manifest — that declaration is what makes media3 advertise resumption
+   *    support to the System UI at all
+   *    (`MediaSessionLegacyStub.canResumePlaybackOnStart` is literally
+   *    "is there a broadcast receiver for `ACTION_MEDIA_BUTTON`").
+   *
+   * Default `false`: this path starts a foreground service from a process the
+   * user did not open, so it stays opt-in until it has been proven on more
+   * hardware than ours.
+   *
+   * ## Why this lives under `android` and has no iOS twin
+   * The **cross-platform** half of surviving process death is `withPersistence`
+   * / `restorePersisted`, which behave identically on both platforms. This flag
+   * only names what *Android* can additionally do with that data: revive the
+   * process by itself. iOS consumes the same record on the next **manual**
+   * launch — the user opens the app and it is paused where they left it — and an
+   * automatic iOS twin cannot exist, because on iOS a terminated app stays
+   * terminated: force-quit is read as user intent and nothing may resurrect a
+   * process for playback. That is Apple's policy, not a gap in this package.
+   * See {@link IosMediaSessionConfig} for where an iOS twin would go if that
+   * ever changes.
+   */
+  playbackResumption: boolean
 }
 
-/** iOS half of {@link MediaSessionConfig}. Ignored on Android. */
+/**
+ * iOS half of {@link MediaSessionConfig}. Ignored on Android.
+ *
+ * ## There is deliberately no `playbackResumption` here
+ * Not an oversight and not a TODO. iOS has no mechanism that can restart a
+ * terminated app to play audio: force-quit (and an OS termination) is treated as
+ * the user's intent that the app stop, and nothing — no media button, no Control
+ * Center, no route change — may bring it back. What iOS *does* share with Android
+ * is the layer underneath: `withPersistence` saves the session on both platforms
+ * identically, and on iOS the next **manual** launch calls `restorePersisted` and
+ * comes back paused, on the same track, at the same position.
+ *
+ * If Apple ever ships a resumption mechanism, this is where the flag belongs —
+ * `ios.playbackResumption`, mirroring
+ * {@link AndroidMediaSessionConfig.playbackResumption}. Stated here so the
+ * asymmetry reads as a platform fact rather than as something to "fix" by
+ * hoisting the flag out of its platform namespace.
+ */
 export interface IosMediaSessionConfig {
   /**
    * Maximum number of decoded artwork images kept in memory, keyed by URI.
@@ -324,6 +382,17 @@ export interface MediaSessionHandlers {
    * {@link RnMediaMediaSession.cancelSleepTimer}.
    */
   onSleepTimer: () => void
+  /**
+   * Android only: this JS runtime was booted **by the media service**, to
+   * finish a playback resumption that had already started without it.
+   *
+   * Fired once, immediately after the handlers are installed and before any
+   * command deferred during the revival is replayed. Purely informational —
+   * the notification is already up, the session already carries the persisted
+   * track, and the `play` the user pressed is replayed on your handler a beat
+   * later whether or not you implement this.
+   */
+  onPlaybackResumption: () => void
 }
 
 /* -------------------------------------------------------------------------- */
@@ -366,6 +435,32 @@ export interface RnMediaMediaSession
 
   /** Broadcast channel 3 of 3. Pass `[]` to clear the queue. */
   setQueue(items: NativeMediaItem[]): void
+
+  /**
+   * Mirror the persisted session into **native-owned** storage, for Android
+   * playback resumption.
+   *
+   * Not a fourth broadcast channel and not an app-facing call: `withPersistence`
+   * invokes this with the very same JSON record it hands the app's storage
+   * engine, so the two copies cannot drift. Pass `undefined` to forget it.
+   *
+   * ## Why a native mirror exists at all
+   * The whole point of playback resumption is that it works **with no
+   * JavaScript in the process**. The service is created by the OS, has ~5 s to
+   * call `startForeground`, and must already know what track to show. Reading
+   * the app's storage engine is not an option: that engine is JavaScript, and
+   * JavaScript is precisely what is missing. So the record is also written to
+   * `SharedPreferences` owned by this package — survives process death, read
+   * back **synchronously** on the service's main thread, no bridge involved
+   * (ARCHITECTURE §9, native-first).
+   *
+   * The JS-side storage stays the app-facing source of truth; this is a cache
+   * that only the resumption path reads. Ignored on iOS, which has no service
+   * to resurrect.
+   *
+   * @param snapshot the serialized `PersistedSession` record, or `undefined`.
+   */
+  setResumptionSnapshot(snapshot?: string): void
 
   /**
    * End background execution.

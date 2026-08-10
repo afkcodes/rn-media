@@ -17,6 +17,7 @@ public protocol HybridRnMediaMediaSessionSpec_protocol: HybridObject {
   func setPlaybackState(state: NativePlaybackState) throws -> Void
   func setMediaItem(item: NativeMediaItem?) throws -> Void
   func setQueue(items: [NativeMediaItem]) throws -> Void
+  func setResumptionSnapshot(snapshot: String?) throws -> Void
   func stopService() throws -> Promise<Void>
   func setSleepTimer(seconds: Double) throws -> Void
   func cancelSleepTimer() throws -> Void

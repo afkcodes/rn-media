@@ -31,6 +31,17 @@ export class BaseMediaHandler implements MediaHandler {
    */
   onSleepTimer(): void | Promise<void> {}
 
+  /**
+   * Default: nothing.
+   *
+   * Correct by design — by the time this fires the service has already put the
+   * persisted track on screen and the user's `play` is queued for replay on
+   * this same handler. Resumption works without a line of code here; the hook
+   * exists for logging and for work that must happen before that replayed
+   * `play()` (refreshing an expired stream token, say).
+   */
+  onPlaybackResumption(): void | Promise<void> {}
+
   /** Reserved for the Android Auto browse tree. Not invoked in v1. */
   getChildren(_parentId: string): Promise<MediaItem[]> {
     return Promise.resolve([])
@@ -94,6 +105,9 @@ export class CompositeMediaHandler implements MediaHandler {
   }
   onSleepTimer(): void | Promise<void> {
     return this.inner.onSleepTimer?.()
+  }
+  onPlaybackResumption(): void | Promise<void> {
+    return this.inner.onPlaybackResumption?.()
   }
   getChildren(parentId: string): Promise<MediaItem[]> {
     return this.inner.getChildren(parentId)

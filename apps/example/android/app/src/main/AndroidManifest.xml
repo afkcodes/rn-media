@@ -23,5 +23,30 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+
+      <!--
+        Playback resumption after process death.
+
+        media3 treats this declaration as the app's *promise* that it can resume
+        ("Assume an app that intentionally puts a `MediaButtonReceiver` into the
+        manifest has implemented some kind of resumption of the last recently
+        played media item" — MediaSessionLegacyStub, media3 1.11.0). It is what
+        makes `canResumePlaybackOnStart()` true, which is what makes the System
+        UI offer a resumption card for this app at all, and it is what routes a
+        headset/Bluetooth play to a receiver that can start the service into a
+        dead process.
+
+        Deliberately NOT merged in from @rn-media/media-session: it changes how
+        media buttons are routed for every app that installs the package, and
+        the feature it enables is opt-in (`android.playbackResumption`). Adding
+        it is one copy-paste, and the library logs when it is missing.
+      -->
+      <receiver
+        android:name="androidx.media3.session.MediaButtonReceiver"
+        android:exported="true">
+        <intent-filter>
+          <action android:name="android.intent.action.MEDIA_BUTTON" />
+        </intent-filter>
+      </receiver>
     </application>
 </manifest>

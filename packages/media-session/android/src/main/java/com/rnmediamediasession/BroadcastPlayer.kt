@@ -57,9 +57,61 @@ import com.margelo.nitro.rnmediamediasession.NativeMediaItem
  * looper of the main thread"). Every method here — including [update] — must
  * therefore run on the main thread; [MediaSessionController] guarantees it.
  */
+/**
+ * A broadcast item as a plain media3 `MediaItem`.
+ *
+ * Shared by the timeline ([BroadcastPlayer.getState]) and by
+ * `MediaSession.Callback.onPlaybackResumption`, which has to answer the System
+ * UI's resumption query with items rather than with player state. One
+ * conversion so the resumption card and the notification can never describe the
+ * same track differently.
+ */
+@OptIn(UnstableApi::class)
+internal fun NativeMediaItem.toMediaItem(): MediaItem =
+  MediaItem.Builder()
+    .setMediaId(id)
+    .setMediaMetadata(
+      MediaMetadata.Builder()
+        .setTitle(title)
+        .setArtist(artist)
+        .setAlbumTitle(album)
+        .setGenre(genre)
+        .setArtworkUri(artworkUri?.let(Uri::parse))
+        .setDurationMs(duration?.toLong())
+        .setIsBrowsable(false)
+        .setIsPlayable(true)
+        .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+        .build()
+    )
+    .build()
+
+/**
+ * Where a transport command goes once media3 has resolved it.
+ *
+ * An indirection with exactly one reason to exist: **the player can outlive the
+ * handlers, and can also precede them.** In a playback resumption the media3
+ * session — and therefore this `Player` — is built by the service before any
+ * JavaScript exists, and the app's handlers are installed seconds later when
+ * the runtime finishes booting. Capturing a `MediaSessionHandlers` in the
+ * constructor (as this class used to) makes that impossible to express; asking
+ * for one per command makes the handover a non-event.
+ *
+ * Implemented by [MediaSessionController], which is the only thing that knows
+ * whether handlers exist yet and what to do when they do not.
+ */
+internal fun interface CommandDispatcher {
+  /**
+   * @param startsPlayback `true` when this command is a request to *begin*
+   * playback. The only thing that can legitimately arrive before the app is
+   * alive, and the trigger for reviving it.
+   * @param invoke the call to make on the handlers, once there are any.
+   */
+  fun dispatch(startsPlayback: Boolean, invoke: (MediaSessionHandlers) -> Unit)
+}
+
 @OptIn(UnstableApi::class)
 internal class BroadcastPlayer(
-  private val handlers: MediaSessionHandlers,
+  private val commands: CommandDispatcher,
 ) : SimpleBasePlayer(Looper.getMainLooper()) {
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -204,26 +256,13 @@ internal class BroadcastPlayer(
 
   private fun mediaItemData(item: NativeMediaItem, index: Int, snapshot: Snapshot): MediaItemData {
     val durationMs = item.duration?.toLong()
-    val metadata = MediaMetadata.Builder()
-      .setTitle(item.title)
-      .setArtist(item.artist)
-      .setAlbumTitle(item.album)
-      .setGenre(item.genre)
-      .setArtworkUri(item.artworkUri?.let(Uri::parse))
-      .setDurationMs(durationMs)
-      .setIsBrowsable(false)
-      .setIsPlayable(true)
-      .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-      .build()
 
     return MediaItemData.Builder(
       // media3 rejects duplicate uids in a playlist, and the same track legitimately
       // appears twice in a queue — so the index, not the id, carries identity.
       /* uid = */ "$index:${item.id}"
     )
-      .setMediaItem(
-        MediaItem.Builder().setMediaId(item.id).setMediaMetadata(metadata).build()
-      )
+      .setMediaItem(item.toMediaItem())
       // Microseconds. C.TIME_UNSET for live/unknown.
       .setDurationUs(durationMs?.times(1000L) ?: C.TIME_UNSET)
       // `isSeekable` defaults to false, and a false here greys out the seekbar
@@ -237,9 +276,11 @@ internal class BroadcastPlayer(
   // MARK: - Commands in
 
   override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> =
-    dispatch { if (playWhenReady) handlers.play() else handlers.pause() }
+    dispatch(startsPlayback = playWhenReady) {
+      if (playWhenReady) it.play() else it.pause()
+    }
 
-  override fun handleStop(): ListenableFuture<*> = dispatch { handlers.stop() }
+  override fun handleStop(): ListenableFuture<*> = dispatch { it.stop() }
 
   /**
    * Nothing to prepare — the app owns the playback engine. Declared only so
@@ -256,7 +297,7 @@ internal class BroadcastPlayer(
 
   override fun handleSetPlaybackParameters(
     playbackParameters: PlaybackParameters
-  ): ListenableFuture<*> = dispatch { handlers.setRate(playbackParameters.speed.toDouble()) }
+  ): ListenableFuture<*> = dispatch { it.setRate(playbackParameters.speed.toDouble()) }
 
   /**
    * Every seek-shaped command funnels here; `seekCommand` says which one.
@@ -275,40 +316,50 @@ internal class BroadcastPlayer(
   ): ListenableFuture<*> = when (seekCommand) {
     Player.COMMAND_SEEK_TO_NEXT,
     Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
-    -> dispatch { handlers.skipToNext() }
+    -> dispatch { it.skipToNext() }
 
     Player.COMMAND_SEEK_TO_PREVIOUS,
     Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
-    -> dispatch { handlers.skipToPrevious() }
+    -> dispatch { it.skipToPrevious() }
 
     Player.COMMAND_SEEK_TO_MEDIA_ITEM,
     Player.COMMAND_SEEK_TO_DEFAULT_POSITION,
     -> {
       val current = snapshot
       if (mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != current.timelineIndex) {
-        dispatch { handlers.skipToQueueItem(mediaItemIndex.toDouble()) }
+        dispatch { it.skipToQueueItem(mediaItemIndex.toDouble()) }
       } else {
-        dispatch { handlers.seekTo(positionMs.orZeroIfUnset()) }
+        dispatch { it.seekTo(positionMs.orZeroIfUnset()) }
       }
     }
 
     // COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, COMMAND_SEEK_BACK, COMMAND_SEEK_FORWARD.
-    else -> dispatch { handlers.seekTo(positionMs.orZeroIfUnset()) }
+    else -> dispatch { it.seekTo(positionMs.orZeroIfUnset()) }
   }
 
   private fun Long.orZeroIfUnset(): Double =
     if (this == C.TIME_UNSET) 0.0 else this.toDouble().coerceAtLeast(0.0)
 
   /**
-   * Fire the JS callback and hand media3 a future the app's next broadcast will
-   * complete.
+   * Hand the command to [CommandDispatcher] and give media3 a future the app's
+   * next broadcast will complete.
    *
    * Nitro schedules the JS invocation onto the JS thread itself, so calling
    * from this (main) thread neither blocks nor risks an ANR
    * (https://nitro.margelo.com/docs/types/callbacks).
+   *
+   * The future is created and armed identically whether or not a JS handler
+   * exists right now. During a playback resumption there is none — the command
+   * is held and replayed when the runtime arrives — and the optimistic
+   * placeholder `SimpleBasePlayer` shows in the meantime is exactly the right
+   * thing for the user to see, with [ACK_TIMEOUT_MS] as the honest limit on how
+   * long we will pretend.
    */
-  private fun dispatch(invoke: () -> Unit): ListenableFuture<*> {
-    invoke()
+  private fun dispatch(
+    startsPlayback: Boolean = false,
+    invoke: (MediaSessionHandlers) -> Unit,
+  ): ListenableFuture<*> {
+    commands.dispatch(startsPlayback, invoke)
     val future = SettableFuture.create<Any?>()
     pending.add(future)
     // Without a deadline a JS handler that never broadcasts would wedge the

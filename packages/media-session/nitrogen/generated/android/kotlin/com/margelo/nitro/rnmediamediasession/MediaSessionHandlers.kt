@@ -50,13 +50,16 @@ data class MediaSessionHandlers(
   val customAction: Func_void_std__string_std__string,
   @DoNotStrip
   @Keep
-  val onSleepTimer: Func_void
+  val onSleepTimer: Func_void,
+  @DoNotStrip
+  @Keep
+  val onPlaybackResumption: Func_void
 ) {
   /**
    * Create a new instance of MediaSessionHandlers from Kotlin
    */
-  constructor(play: () -> Unit, pause: () -> Unit, stop: () -> Unit, seekTo: (position: Double) -> Unit, skipToNext: () -> Unit, skipToPrevious: () -> Unit, skipToQueueItem: (index: Double) -> Unit, setRate: (rate: Double) -> Unit, onTaskRemoved: () -> Unit, customAction: (name: String, extras: String) -> Unit, onSleepTimer: () -> Unit):
-         this(Func_void_java(play), Func_void_java(pause), Func_void_java(stop), Func_void_double_java(seekTo), Func_void_java(skipToNext), Func_void_java(skipToPrevious), Func_void_double_java(skipToQueueItem), Func_void_double_java(setRate), Func_void_java(onTaskRemoved), Func_void_std__string_std__string_java(customAction), Func_void_java(onSleepTimer))
+  constructor(play: () -> Unit, pause: () -> Unit, stop: () -> Unit, seekTo: (position: Double) -> Unit, skipToNext: () -> Unit, skipToPrevious: () -> Unit, skipToQueueItem: (index: Double) -> Unit, setRate: (rate: Double) -> Unit, onTaskRemoved: () -> Unit, customAction: (name: String, extras: String) -> Unit, onSleepTimer: () -> Unit, onPlaybackResumption: () -> Unit):
+         this(Func_void_java(play), Func_void_java(pause), Func_void_java(stop), Func_void_double_java(seekTo), Func_void_java(skipToNext), Func_void_java(skipToPrevious), Func_void_double_java(skipToQueueItem), Func_void_double_java(setRate), Func_void_java(onTaskRemoved), Func_void_std__string_std__string_java(customAction), Func_void_java(onSleepTimer), Func_void_java(onPlaybackResumption))
 
   override fun equals(other: Any?): Boolean {
     if (this === other) return true
@@ -72,6 +75,7 @@ data class MediaSessionHandlers(
       && Objects.deepEquals(this.onTaskRemoved, other.onTaskRemoved)
       && Objects.deepEquals(this.customAction, other.customAction)
       && Objects.deepEquals(this.onSleepTimer, other.onSleepTimer)
+      && Objects.deepEquals(this.onPlaybackResumption, other.onPlaybackResumption)
   }
 
   override fun hashCode(): Int {
@@ -86,7 +90,8 @@ data class MediaSessionHandlers(
       setRate,
       onTaskRemoved,
       customAction,
-      onSleepTimer
+      onSleepTimer,
+      onPlaybackResumption
     ).contentDeepHashCode()
   }
 
@@ -98,8 +103,8 @@ data class MediaSessionHandlers(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(play: Func_void, pause: Func_void, stop: Func_void, seekTo: Func_void_double, skipToNext: Func_void, skipToPrevious: Func_void, skipToQueueItem: Func_void_double, setRate: Func_void_double, onTaskRemoved: Func_void, customAction: Func_void_std__string_std__string, onSleepTimer: Func_void): MediaSessionHandlers {
-      return MediaSessionHandlers(play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, onTaskRemoved, customAction, onSleepTimer)
+    private fun fromCpp(play: Func_void, pause: Func_void, stop: Func_void, seekTo: Func_void_double, skipToNext: Func_void, skipToPrevious: Func_void, skipToQueueItem: Func_void_double, setRate: Func_void_double, onTaskRemoved: Func_void, customAction: Func_void_std__string_std__string, onSleepTimer: Func_void, onPlaybackResumption: Func_void): MediaSessionHandlers {
+      return MediaSessionHandlers(play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption)
     }
   }
 }

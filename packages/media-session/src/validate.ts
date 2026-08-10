@@ -302,6 +302,16 @@ export const DEFAULT_STOP_FOREGROUND_ON_PAUSE = true
  */
 export const MAX_STOP_FOREGROUND_TIMEOUT_MS = 600_000
 
+/**
+ * Playback resumption is **off** unless the app asks for it.
+ *
+ * It is the one feature here that starts a foreground service in a process the
+ * user did not open, from a snapshot written by an earlier process. That is a
+ * lot of trust to hand an app by default, so it stays opt-in until it has been
+ * exercised on more hardware than the machine this was written on.
+ */
+export const DEFAULT_PLAYBACK_RESUMPTION = false
+
 export function normalizeConfig(
   config: MediaServiceConfig = {}
 ): MediaSessionConfig {
@@ -321,6 +331,15 @@ export function normalizeConfig(
       assertNonEmptyString(
         android.notificationIcon,
         'config.android.notificationIcon'
+      )
+    }
+    if (
+      android.playbackResumption !== undefined &&
+      typeof android.playbackResumption !== 'boolean'
+    ) {
+      throw invalidArgument(
+        `config.android.playbackResumption must be a boolean, got ` +
+          `${JSON.stringify(android.playbackResumption)}.`
       )
     }
     if (android.stopForegroundTimeoutMs !== undefined) {
@@ -364,6 +383,8 @@ export function normalizeConfig(
             // free to change its own default and an app that did not ask
             // should move with it.
             stopForegroundTimeoutMs: android.stopForegroundTimeoutMs,
+            playbackResumption:
+              android.playbackResumption ?? DEFAULT_PLAYBACK_RESUMPTION,
           },
     ios: ios === undefined ? undefined : { artworkCacheSize: ios.artworkCacheSize },
   }

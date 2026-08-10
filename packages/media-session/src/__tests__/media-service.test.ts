@@ -121,6 +121,10 @@ describe('init lifecycle', () => {
           notificationChannelName: 'Playback',
           notificationIcon: undefined,
           stopForegroundOnPause: true,
+          stopForegroundTimeoutMs: undefined,
+          // Opt-in: a service that can restart the app from a snapshot is not
+          // something an app gets by omission.
+          playbackResumption: false,
         },
         ios: undefined,
       },

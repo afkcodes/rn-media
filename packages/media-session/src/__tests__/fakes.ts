@@ -54,6 +54,13 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
     this.queues.push(items)
   }
 
+  /** Every `setResumptionSnapshot` payload, in order — the native mirror. */
+  readonly resumptionSnapshots: (string | undefined)[] = []
+
+  setResumptionSnapshot(snapshot?: string): void {
+    this.resumptionSnapshots.push(snapshot)
+  }
+
   /* --- Sleep timer: a fake platform timer, driven by `fireSleepTimer()` --- */
 
   /** Every `setSleepTimer` argument, in order. */
@@ -171,6 +178,9 @@ export class RecordingHandler implements MediaHandler {
   }
   onSleepTimer() {
     return this.record('onSleepTimer')
+  }
+  onPlaybackResumption() {
+    return this.record('onPlaybackResumption')
   }
   customAction(name: string, extras?: Record<string, unknown>) {
     return this.record(`customAction(${name},${JSON.stringify(extras) ?? 'undefined'})`)
