@@ -37,8 +37,10 @@
 # our control (see TAG below).
 LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 
-# v0.7.2-rnmedia.2 = upstream v0.7.2 with ffmpeg configure flags added on branch
-# `rn-media-hls`, and nothing else. Two generations of delta, both additive:
+# v0.7.2-rnmedia.3 = upstream v0.7.2 with our delta on branch `rn-media-hls`.
+# Three generations. The first two are ffmpeg configure flags; the third is the
+# fork's FIRST SOURCE PATCH, and that is an escalation worth naming (see
+# ARCHITECTURE §11 — a flag survives a rebase by itself, a patch does not).
 #
 #   rnmedia.1  --enable-demuxer=hls --enable-demuxer=mpegts
 #              Upstream's audio flavour builds ffmpeg with `--disable-all` plus
@@ -54,49 +56,53 @@ LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 #              `overlay` and `equalizer`, so `af=` resolved to nothing even
 #              though `--enable-avfilter` and mpv's lavfi bridge were present.
 #              `aresample` is NOT optional — libavfilter auto-inserts it on any
-#              sample-format disagreement between pads. This makes the iOS
-#              filter set identical to Android's `v1.1.9-rnmedia.2`; the two
-#              platforms are now at parity, no per-platform EQ branching.
+#              sample-format disagreement between pads.
+#   rnmedia.3  patches/mpv-rn-media-pcm-tap.patch — a PCM tap on mpv's client
+#              API, behind `player.visualizer` (ARCHITECTURE §21). Two new
+#              properties: `pcm-tap` (int, rw — samples per channel to retain,
+#              0 = off) and `pcm-tap-frame` (node, ro — interleaved float32 in
+#              a byte array). The tap sits at the end of
+#              `ao_post_process_data()`, after the filter chain and after mpv's
+#              software gain, so it reports what is audible; disarmed it costs
+#              one atomic load per device chunk and allocates nothing.
+#              **The file is byte-identical to the Android fork's
+#              `buildscripts/patches/mpv/004.rn_media_pcm_tap.patch`** — it
+#              applies to mpv 0.35.1 and 0.36.0 alike, touching four source
+#              files and no build-system files. That is what makes the
+#              visualizer one engine rather than an Android feature with an iOS
+#              apology.
 #
 # Verified against the RELEASED asset on a Linux host (never the build log —
 # ARCHITECTURE → Platform truths):
-#   - configure line in the shipped Avutil carries exactly 18 `--enable-filter=`
-#     entries (the 16 above + the pre-existing overlay/equalizer), and still
-#     `--enable-version3` with neither `--enable-gpl` nor `--enable-nonfree`;
-#     `libavutil license: LGPL version 3 or later` is in the binary;
-#   - the filters are genuinely compiled in, not merely requested: every one of
-#     the 16 filter-name strings and their distinctive AVOptions
-#     (`gain_entry`, `asc_level`, `altboundary`, `measured_thresh`, `mgain`,
-#     `replaygain_preamp`, superequalizer's `1b`…`18b` + "set 65Hz band gain")
-#     are present in Avfilter and all absent from rnmedia.1. NOTE the trap: the
-#     bare string `aresample` is present even in rnmedia.1 — it is
-#     libavfilter/formats.c:339 `.conversion_filter`, the name of the filter the
-#     graph *looks up*. aresample is proven instead by af_aresample.c:164's log
-#     format `ch:%d chl:%s fmt:%s r:%dHz -> …`, absent before, present now;
-#   - export sets (Mach-O exports trie) are byte-identical to rnmedia.1 for all
-#     ten frameworks on both slices — Mpv still exports exactly 53 symbols. No
-#     ABI change for anything we link against;
-#   - only Avfilter grew: +103,024 B device / +202,112 B simulator, and its
-#     *imports* go 113 → 156/158 (`av_tx_init/_uninit`, `av_fifo_*`,
-#     `av_expr_parse_and_eval`, `av_opt_get_*`, `av_parse_color`, `av_strtok`)
-#     — all already-exported libavutil surface, i.e. exactly the object files
-#     the 16 flags pull in and nothing else. Avcodec/Avformat/Avutil/Swresample/
-#     Swscale are byte-identical in size; Mpv and the three Mbed* frameworks
-#     differ by 48–1112 B purely because embedded /nix/store build paths changed
-#     length (checked: the only string deltas are those paths).
+#   - the tap is genuinely in the shipped `Mpv.framework`: `pcm-tap`,
+#     `pcm-tap-frame`, and the marker `[rn-media] pcm-tap window=%d` that only
+#     the patched `player/command.c` emits;
+#   - **export sets are byte-identical to rnmedia.2 for all ten frameworks on
+#     both slices** — Mpv still exports exactly 53 symbols. The feature is
+#     reachable only through mpv_get_property/mpv_set_property, so there is no
+#     new exported symbol and no ABI change for anything we link;
+#   - only Mpv grew: **+224 B on the device slice**, +16 768 B on the simulator.
+#     The simulator figure is not 70× more code — it is a fat binary (arm64 +
+#     x86_64) whose arm64 segment alignment is 16 384, so a few hundred bytes of
+#     new code push one segment across a boundary;
+#   - Avcodec/Avfilter/Avformat/Avutil/Swresample/Swscale are byte-identical in
+#     size, as they must be: this release changes no ffmpeg flag;
+#   - the three Mbed* frameworks differ by 16-144 B purely because embedded
+#     /nix/store build paths changed length — the same effect documented for
+#     rnmedia.2.
 # Still LGPLv3: no `--enable-gpl`, no `--enable-nonfree`, no new dependency.
-LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.2
+LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.3
 LIBMPV_DARWIN_BUILD_VARIANT=ios-universal-audio-default
 
 # SHA-256 of
 # libmpv-xcframeworks_${TAG}_${VARIANT}.tar.gz
 # (computed from the published release asset; re-verified on every download,
 # and a mismatch is a hard build failure rather than a warning).
-LIBMPV_DARWIN_BUILD_SHA256=bd4de8fbaa7eae4daa1ba3e5fdf8137280ab5655e47f9f0ab2c3394cd22c1cca
+LIBMPV_DARWIN_BUILD_SHA256=adac151b16c1c46e92312e3cfad4937db47287a1695c06f4ded3133d51343ffd
 
 # --- metadata (informational; verified by inspecting the binaries) -----------
 # All three versions are UNCHANGED from upstream v0.7.2 — the fork's delta is
-# ffmpeg configure flags, not a dependency bump.
+# ffmpeg configure flags plus one mpv source patch, not a dependency bump.
 # mpv                       0.36.0   (MPV_CLIENT_API_VERSION = 2.1)
 # FFmpeg                    6.0      (LGPL: no --enable-gpl, --enable-version3)
 # mbedTLS                   3.4.1

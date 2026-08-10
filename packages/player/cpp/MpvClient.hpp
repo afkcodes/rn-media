@@ -73,6 +73,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -103,6 +104,27 @@ enum class PropertyFormat : std::uint8_t {
   String,
   Number,
   Bool,
+};
+
+/// One member of an `MPV_FORMAT_NODE_MAP` property, as handed to the visitor of
+/// `MpvClient::getPropertyNodeMap`.
+///
+/// Everything here points into mpv's own node, which is freed the moment the
+/// visit returns — a visitor that wants to keep a value must copy it. That is
+/// the whole reason this is a visitor rather than a returned struct: the
+/// visualizer reads a multi-kilobyte byte array up to 60 times a second, and a
+/// value-returning API would allocate and copy it twice per frame.
+struct NodeMember {
+  std::string_view key;
+  /// Set for `INT64`, `DOUBLE` and `FLAG` members (flags arrive as 0 / 1).
+  std::optional<double> number;
+  /// Set for `INT64` and `FLAG` members, without the double round-trip.
+  std::optional<std::int64_t> integer;
+  /// Set for `STRING` members.
+  std::optional<std::string_view> text;
+  /// Set for `BYTE_ARRAY` members; `nullptr` otherwise.
+  const std::uint8_t* bytes = nullptr;
+  std::size_t byteCount = 0;
 };
 
 class MpvClient final {
@@ -151,6 +173,25 @@ public:
   void setPropertyString(const std::string& name, const std::string& value);
   void setPropertyNumber(const std::string& name, double value);
   void setPropertyBool(const std::string& name, bool value);
+
+  /// Read `name` as `MPV_FORMAT_NODE` and visit each member of the resulting
+  /// map exactly once, in mpv's order. Returns false when the property is
+  /// unavailable or is not a map; throws `MpvError` on any other mpv error.
+  ///
+  /// The node is freed before this returns, including when `visit` throws.
+  bool getPropertyNodeMap(const std::string& name, const std::function<void(const NodeMember&)>& visit);
+
+  /// Arm mpv's PCM tap for `frames` samples per channel, or disarm it with 0.
+  ///
+  /// Returns **false** when this libmpv has no `pcm-tap` property, i.e. it was
+  /// not built from the rn-media forks. That is a capability answer, not an
+  /// error, and it is the same answer on both platforms.
+  bool configurePcmTap(int frames);
+
+  /// Read the newest tapped window into `out` as interleaved float32.
+  /// `out` is resized and overwritten, reusing its capacity. Returns false when
+  /// the tap is disarmed or no audio has reached the device yet.
+  bool readPcmTapWindow(std::vector<float>& out, int& channels, int& rate, std::int64_t& seq);
 
   /// Re-observing a name replaces the previous observation.
   void observeProperty(const std::string& name, PropertyFormat format);

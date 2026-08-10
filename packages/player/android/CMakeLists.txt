@@ -13,6 +13,8 @@ add_library(${PACKAGE_NAME} SHARED
 	src/main/cpp/cpp-adapter.cpp
 	../cpp/MpvClient.cpp
 	../cpp/HybridMpvClient.cpp
+	../cpp/Fft.cpp
+	../cpp/PcmTap.cpp
 )
 
 # Add Nitrogen specs :)

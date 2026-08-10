@@ -1,7 +1,9 @@
 #
 # Host-compiled unit tests for the parts of the player core that do not touch
-# libmpv or Nitro: `EventBatch.hpp` (batching + coalescing) and
-# `ClientState.hpp` (the disposed-state machine).
+# libmpv or Nitro: `EventBatch.hpp` (batching + coalescing), `ClientState.hpp`
+# (the disposed-state machine), `Fft` (the visualizer transform) and `PcmTap`
+# (the visualizer engine — its threading, back-pressure and DSP, driven by a
+# fake `TapSource` in place of mpv).
 #
 # Deliberately does NOT link libmpv — those units are pure std by design, which
 # is what makes them testable on a dev machine with no device and no NDK.
@@ -32,6 +34,10 @@ add_executable(player_core_tests
   main.cc
   EventBatchTests.cc
   ClientStateTests.cc
+  FftTests.cc
+  PcmTapTests.cc
+  ../Fft.cpp
+  ../PcmTap.cpp
 )
 
 target_include_directories(player_core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

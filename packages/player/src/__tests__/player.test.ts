@@ -13,6 +13,7 @@ import {
   propertyEvent,
   seekEvent,
   startFileEvent,
+  toneCapture,
 } from './fake-mpv-client'
 
 const URI = 'https://cdn.example.com/track.flac'
@@ -1179,5 +1180,75 @@ describe('Player — destroy', () => {
     })
     expect(() => player.destroy()).not.toThrow()
     expect(player.destroyed).toBe(true)
+  })
+})
+
+describe('Player — visualizer wiring', () => {
+  it('registers the capture listener at create time', async () => {
+    await createPlayer()
+    // Free to register: no sampler thread, no mpv tap and no FFT table exist
+    // until something subscribes, so an app that never draws a spectrum never
+    // pays for one.
+    expect(client.hasVisualizerListener).toBe(true)
+    expect(client.visualizerCalls).toHaveLength(0)
+  })
+
+  it('reports the visualizer as available when mpv has the PCM tap', async () => {
+    const player = await createPlayer()
+    expect(player.visualizer.capabilities.fft).toBe(true)
+    expect(player.visualizer.capabilities.waveform).toBe(true)
+  })
+
+  it('reports it unavailable when the linked libmpv has no `pcm-tap`', async () => {
+    // Exactly what an unpatched binary answers. This is the whole capability
+    // probe: one property read, the same on both platforms, no `Platform.OS`.
+    client.readErrors.set(
+      MpvProperty.pcmTap,
+      '[mpv:-8] mpv_get_property("pcm-tap", DOUBLE): property not found'
+    )
+    const player = await createPlayer()
+    expect(player.visualizer.capabilities.fft).toBe(false)
+    expect(() => player.visualizer.subscribe(() => {})).toThrow(/rn-media forks/)
+  })
+
+  it('never asks mpv for an Android audio session', async () => {
+    await createPlayer()
+    // The old route needed one to attach `android.media.audiofx.Visualizer`.
+    // Tapping mpv needs nothing, so no such option may reach mpv — on iOS it
+    // would be rejected outright.
+    expect(client.initOptions?.['audiotrack-session-id']).toBeUndefined()
+  })
+
+  it('routes native captures to the controller', async () => {
+    const player = await createPlayer()
+    const listener = vi.fn()
+    player.visualizer.subscribe(listener, { bands: 8 })
+    client.emitCapture(toneCapture(4, 0.5, { bins: 33 }))
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener.mock.calls[0]![0].bands).toHaveLength(8)
+  })
+
+  it('keeps the native listener attached by answering true', async () => {
+    const player = await createPlayer()
+    player.visualizer.subscribe(() => {})
+    // The return value is the back-pressure signal; `false` would detach the
+    // listener permanently and the visualizer would die after one frame.
+    expect(client.emitCapture(toneCapture(4, 0.5, { bins: 33 }))).toBe(true)
+  })
+
+  it('disarms the tap on destroy', async () => {
+    const player = await createPlayer()
+    player.visualizer.subscribe(() => {})
+    expect(client.visualizerRunning).toBe(true)
+    player.destroy()
+    expect(client.visualizerRunning).toBe(false)
+    expect(client.visualizerCalls.filter((c) => c.kind === 'stop')).toHaveLength(1)
+  })
+
+  it('costs nothing until something subscribes', async () => {
+    const player = await createPlayer()
+    await player.load(URI)
+    player.play()
+    expect(client.visualizerCalls).toHaveLength(0)
   })
 })

@@ -62,19 +62,52 @@ ext.libmpv = [
     //   different one — without it a chain fails with "'aresample' filter not
     //   present, cannot convert formats". +104 KB/ABI stripped (+1.7 %).
     //   All 16 are LGPL: every GPL-gated filter in ffmpeg n6.0 is a video filter.
-    release   : 'v1.1.9-rnmedia.2',
+    //
+    // …rnmedia.3 — a SOURCE PATCH, the fork's first
+    //   (`buildscripts/patches/mpv/004.rn_media_pcm_tap.patch`): a PCM tap on
+    //   mpv's client API, behind `player.visualizer`. Two new properties —
+    //   `pcm-tap` (int, rw; samples per channel to retain, 0 = off) and
+    //   `pcm-tap-frame` (node, ro; interleaved float32 in a byte array) — and
+    //   no new exported symbol, so the ABI is unchanged: the export set is
+    //   byte-identical to rnmedia.2 on all four ABIs (53 dynamic symbols).
+    //   The tap sits at the end of `ao_post_process_data()`, after the filter
+    //   chain and after mpv's software gain, so it reports what is audible;
+    //   disarmed it costs one atomic load per device chunk and allocates
+    //   nothing. +2.4 KB/ABI (+0.037 %). The identical patch file is in
+    //   libmpv-darwin-build — one engine, not an Android feature.
+    //   Proof it is in the SHIPPED .so (never the build log — see
+    //   ARCHITECTURE → Platform truths, the waf stale-relink trap): the string
+    //   `[rn-media] pcm-tap window=`, which only the patched player/command.c
+    //   emits, is present in every stripped artifact.
+    //
+    // …rnmedia.4 — `005.mpv_dup_node_byte_array.patch`, without which rnmedia.3's
+    //   tap is unreadable. Every MPV_FORMAT_NODE property is copied out of its
+    //   handler through copy_node() -> dup_node(), and mpv 0.35.1's dup_node has
+    //   no MPV_FORMAT_BYTE_ARRAY arm: the node falls into `default:` and is
+    //   stamped `(mpv_format)-1`. On device the map's scalars arrived intact
+    //   (channels 2, frames 2048, seq 1082) while `samples` came through empty —
+    //   which looks exactly like a tap with no audio rather than a copy that
+    //   dropped a field. The fix is upstream mpv's own, copied verbatim; it
+    //   landed in mpv 0.36.0, so the darwin fork needs nothing and stays on
+    //   v0.7.2-rnmedia.3. That asymmetry is a version fact, not a platform one.
+    //   +2.6 KB/ABI total (+0.04 %); export set still byte-identical (53 syms).
+    release   : 'v1.1.9-rnmedia.4',
     // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
     flavor    : 'default',
     // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
     // Must match the tag the headers in cpp/third_party/mpv are vendored from.
     // Unchanged from v1.1.9 — the delta is ffmpeg flags, not an mpv bump.
     mpvVersion: '0.35.1',
+    // FFmpeg version inside that release. Machine-readable for
+    // scripts/check-upstream.mjs, which parses this block — until now FFmpeg
+    // existed here only as prose in the comments above.
+    ffmpegVersion: 'n6.0',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
-        'arm64-v8a'  : 'fa978932c2ed03739573f647fccba7ba2abc00a5a27bfd1e519956791ffc9ada',
-        'armeabi-v7a': '4ab075bc572330d47c22113c77226a390b15715c4f83730e4b3c4ba206ede954',
-        'x86'        : '23443af26320fbbb057df547317dd4c889fc18ad87c9f295fdc0be90fa1bfe41',
-        'x86_64'     : '38021d3c17e9be880033fa255e6a74fbcc1cbfef714b0f216cc9e335cbc57436',
+        'arm64-v8a'  : '291e3f92c571cb87c780d8c79566ae14a129811761f4027db0315adb03ceed47',
+        'armeabi-v7a': '68a75d7d6256f07932b8cfd77e2a295334f7f6dc91d945f0c0f81b214462a76e',
+        'x86'        : 'de8a0bb26b199ac4281909ca9a878978fb745ebf406b077a8f75057ff2a74f32',
+        'x86_64'     : '8b8094b1e9033741ba8c3d81a3da3631016f7eb71a150f2da13dab8fc60918eb',
     ],
 ]
 
