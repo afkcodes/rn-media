@@ -1,0 +1,70 @@
+name: Upstream currency
+
+# CLAUDE.md → Dependency policy → Currency rule:
+#
+#   "Engine pieces (mpv, ffmpeg via our binary forks), media3, the Nitro pair,
+#    and the tested RN version track latest stable: evaluate within two weeks of
+#    an upstream stable release […] A scheduled CI watcher compares our pins to
+#    upstream latest and opens a tracking issue when we fall behind."
+#
+# This workflow is that watcher, and *surfacing* is the whole of its job. It
+# never bumps a pin and never opens a PR: the currency rule is evaluate-then-
+# ship (shipped-artifact proofs, option-semantics audit, patch-series rebase,
+# device re-verification), and a bot cannot do any of that. Weekly is chosen to
+# match the two-week evaluation window with a full week of slack.
+#
+# All comparison logic lives in scripts/check-upstream.mjs — plain Node, zero
+# dependencies — so `node scripts/check-upstream.mjs` reproduces this run on a
+# laptop with no npm install and no token. Debugging a watcher you can only run
+# by pushing to main is how watchers rot.
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # Mondays 06:17 UTC. Deliberately offset from Dependabot's weekly Monday
+    # sweep so the two do not land in the queue together.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+  # A change to the watcher itself re-runs it immediately: the issue upkeep is
+  # idempotent, so this costs nothing and proves the edit works on the commit
+  # that made it rather than up to seven days later.
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/upstream-currency.yml'
+      - 'scripts/check-upstream.mjs'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Compare pins against upstream
+    runs-on: ubuntu-latest
+    # Every upstream source is retried with backoff; this bounds the worst case
+    # where several of them are timing out at once.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Needed to create the `upstream-drift` label, and to open/update/close
+      # the single tracking issue. Nothing else is written.
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          # No `cache: npm` on purpose: the script has zero dependencies and
+          # never runs `npm ci`, so there is nothing to restore.
+
+      # No `npm ci` step. The script is dependency-free by design.
+      - name: Check upstream currency
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/check-upstream.mjs --github
