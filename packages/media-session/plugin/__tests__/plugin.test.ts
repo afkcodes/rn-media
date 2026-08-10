@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import type {
+  AndroidConfig,
   ConfigPlugin,
   ExportedConfig,
   ExportedConfigWithProps,
@@ -59,6 +60,34 @@ function modConfig<T>(
   }
 }
 
+type AndroidManifest = AndroidConfig.Manifest.AndroidManifest
+type ManifestApplication = AndroidConfig.Manifest.ManifestApplication
+type ManifestReceiver = NonNullable<ManifestApplication['receiver']>[number]
+
+const RECEIVER_NAME = 'androidx.media3.session.MediaButtonReceiver'
+const MEDIA_BUTTON_ACTION = 'android.intent.action.MEDIA_BUTTON'
+
+/** What `expo prebuild` hands the manifest mod for a fresh template app. */
+function baseManifest(receivers?: ManifestReceiver[]): AndroidManifest {
+  return {
+    manifest: {
+      $: { 'xmlns:android': 'http://schemas.android.com/apk/res/android' },
+      queries: [],
+      application: [
+        {
+          $: { 'android:name': '.MainApplication' },
+          activity: [{ $: { 'android:name': '.MainActivity' } }],
+          ...(receivers === undefined ? {} : { receiver: receivers }),
+        },
+      ],
+    },
+  }
+}
+
+function receiversOf(manifest: AndroidManifest): ManifestReceiver[] {
+  return manifest.manifest.application?.[0]?.receiver ?? []
+}
+
 async function runInfoPlistMod(
   config: ExpoConfig,
   initial: InfoPlist = {}
@@ -70,6 +99,22 @@ async function runInfoPlistMod(
     modConfig(config, 'ios', 'infoPlist', initial, {
       projectRoot: '/app',
       platformProjectRoot: '/app/ios',
+    })
+  )
+  return result.modResults
+}
+
+async function runManifestMod(
+  config: ExpoConfig,
+  initial: AndroidManifest = baseManifest()
+): Promise<AndroidManifest> {
+  const mod = withMods(config).mods?.android?.manifest
+  if (!mod) throw new Error('expected an android.manifest mod to be registered')
+
+  const result = await mod(
+    modConfig(config, 'android', 'manifest', initial, {
+      projectRoot: '/app',
+      platformProjectRoot: '/app/android',
     })
   )
   return result.modResults
@@ -276,5 +321,145 @@ describe('withAndroidNotificationIcon (dangerous mod)', () => {
     expect(await runInfoPlistMod(config)).toEqual({
       UIBackgroundModes: ['audio'],
     })
+  })
+})
+
+describe('withMediaButtonReceiver (android.manifest)', () => {
+  it('registers no manifest mod unless playbackResumption is on', () => {
+    // Off by default, and off when explicitly false. The receiver changes
+    // media-button routing for the whole app; it may only appear because
+    // someone asked for it.
+    expect(
+      withMods(withRnMediaMediaSession(baseConfig())).mods?.android?.manifest
+    ).toBeUndefined()
+    expect(
+      withMods(withRnMediaMediaSession(baseConfig(), { playbackResumption: false }))
+        .mods?.android?.manifest
+    ).toBeUndefined()
+    // …and an unrelated option does not drag it in either.
+    expect(
+      withMods(
+        withRnMediaMediaSession(baseConfig(), {
+          androidNotificationIcon: './ic_notification.xml',
+        })
+      ).mods?.android?.manifest
+    ).toBeUndefined()
+  })
+
+  it('adds the receiver media3 looks for', async () => {
+    const manifest = await runManifestMod(
+      withRnMediaMediaSession(baseConfig(), { playbackResumption: true })
+    )
+
+    // The exact shape the package README documents for bare projects — the
+    // plugin is that copy-paste, not a variation on it.
+    expect(receiversOf(manifest)).toEqual([
+      {
+        $: { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
+        'intent-filter': [
+          { action: [{ $: { 'android:name': MEDIA_BUTTON_ACTION } }] },
+        ],
+      },
+    ])
+  })
+
+  it('is idempotent across repeated prebuilds', async () => {
+    const config = withRnMediaMediaSession(baseConfig(), {
+      playbackResumption: true,
+    })
+
+    const first = await runManifestMod(config)
+    const second = await runManifestMod(config, first)
+
+    expect(receiversOf(second)).toHaveLength(1)
+    expect(second).toEqual(first)
+  })
+
+  it('leaves a receiver the app already declared exactly as it is', async () => {
+    const handWritten: ManifestReceiver = {
+      $: {
+        'android:name': RECEIVER_NAME,
+        'android:exported': 'true',
+        'android:enabled': 'true',
+      },
+      'intent-filter': [
+        { action: [{ $: { 'android:name': MEDIA_BUTTON_ACTION } }] },
+      ],
+    }
+
+    const manifest = await runManifestMod(
+      withRnMediaMediaSession(baseConfig(), { playbackResumption: true }),
+      baseManifest([handWritten])
+    )
+
+    expect(receiversOf(manifest)).toEqual([handWritten])
+  })
+
+  it('repairs a declaration the package manager could not resolve', async () => {
+    // A receiver with no MEDIA_BUTTON filter is invisible to
+    // `queryBroadcastReceivers`, so media3 reads the app as unable to resume —
+    // the receiver looks present and the feature is silently inert.
+    const manifest = await runManifestMod(
+      withRnMediaMediaSession(baseConfig(), { playbackResumption: true }),
+      baseManifest([
+        {
+          $: { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
+          'intent-filter': [
+            { action: [{ $: { 'android:name': 'com.example.SOMETHING_ELSE' } }] },
+          ],
+        },
+      ])
+    )
+
+    const [receiver] = receiversOf(manifest)
+    expect(receiver?.$).toEqual({
+      'android:name': RECEIVER_NAME,
+      'android:exported': 'true',
+    })
+    expect(receiver?.['intent-filter']).toEqual([
+      { action: [{ $: { 'android:name': 'com.example.SOMETHING_ELSE' } }] },
+      { action: [{ $: { 'android:name': MEDIA_BUTTON_ACTION } }] },
+    ])
+  })
+
+  it('keeps every other receiver the app declares', async () => {
+    const unrelated: ManifestReceiver = {
+      $: { 'android:name': '.BootReceiver', 'android:exported': 'false' },
+    }
+
+    const manifest = await runManifestMod(
+      withRnMediaMediaSession(baseConfig(), { playbackResumption: true }),
+      baseManifest([unrelated])
+    )
+
+    expect(receiversOf(manifest)).toHaveLength(2)
+    expect(receiversOf(manifest)[0]).toEqual(unrelated)
+  })
+
+  it('still applies the iOS background mode and the icon mod alongside it', async () => {
+    const config = withRnMediaMediaSession(baseConfig(), {
+      playbackResumption: true,
+      androidNotificationIcon: './ic_notification.xml',
+    })
+
+    expect(await runInfoPlistMod(config)).toEqual({
+      UIBackgroundModes: ['audio'],
+    })
+    expect(withMods(config).mods?.android?.dangerous).toBeDefined()
+    expect(receiversOf(await runManifestMod(config))).toHaveLength(1)
+  })
+
+  it('applies the manifest mod once when the plugin is listed twice', async () => {
+    const once = withRnMediaMediaSessionRunOnce(baseConfig(), {
+      playbackResumption: true,
+    })
+    const twice = withRnMediaMediaSessionRunOnce(once, {
+      playbackResumption: true,
+    })
+
+    expect(withMods(twice).mods?.android?.manifest).toBe(
+      withMods(once).mods?.android?.manifest
+    )
+    expect(receiversOf(await runManifestMod(twice))).toHaveLength(1)
   })
 })

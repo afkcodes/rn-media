@@ -1,6 +1,7 @@
 import { createRunOncePlugin, type ConfigPlugin } from 'expo/config-plugins'
 
 import { withBackgroundAudio } from './withBackgroundAudio'
+import { withMediaButtonReceiver } from './withMediaButtonReceiver'
 import { withAndroidNotificationIcon } from './withNotificationIcon'
 
 /**
@@ -25,6 +26,24 @@ export interface MediaSessionPluginProps {
    * small icon.
    */
   readonly androidNotificationIcon?: string
+
+  /**
+   * Add media3's `MediaButtonReceiver` to the generated Android manifest.
+   *
+   * Required by — and only by — playback resumption after process death
+   * (`android.playbackResumption` at `MediaService.init`): media3 reads the
+   * declaration as the app's promise that it can resume, and without it the
+   * System UI never offers a resumption card and a headset play cannot revive a
+   * killed process. Set both or neither.
+   *
+   * Off by default, and deliberately not merged in from the library's own
+   * manifest: it changes media-button routing for every app that installs the
+   * package. Bare (non-prebuild) projects paste the receiver into their own
+   * `AndroidManifest.xml` instead — see the package README.
+   *
+   * @default false
+   */
+  readonly playbackResumption?: boolean
 }
 
 const withRnMediaMediaSession: ConfigPlugin<MediaSessionPluginProps | void> = (
@@ -32,12 +51,16 @@ const withRnMediaMediaSession: ConfigPlugin<MediaSessionPluginProps | void> = (
   props
 ) => {
   const iconPath = props ? props.androidNotificationIcon : undefined
+  const playbackResumption = props ? props.playbackResumption === true : false
 
   const withAudio = withBackgroundAudio(config)
+  const withReceiver = playbackResumption
+    ? withMediaButtonReceiver(withAudio)
+    : withAudio
 
   return iconPath === undefined
-    ? withAudio
-    : withAndroidNotificationIcon(withAudio, iconPath)
+    ? withReceiver
+    : withAndroidNotificationIcon(withReceiver, iconPath)
 }
 
 const pkg = require('../../package.json') as { name: string; version: string }
@@ -55,6 +78,7 @@ export default createRunOncePlugin(
 export {
   withRnMediaMediaSession,
   withBackgroundAudio,
+  withMediaButtonReceiver,
   withAndroidNotificationIcon,
 }
 export {

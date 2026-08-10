@@ -98,6 +98,37 @@ android {
     disable "GradleCompatible"
   }
 
+  // Local JVM unit tests for the pure-logic Kotlin in this module: the
+  // resumption record parser (`ResumptionStore`) and the channel-priority merge
+  // (`Snapshot`). Both are decided by data, run before any JavaScript exists in
+  // the process, and were previously only observable on a device.
+  //
+  // Consumer-invisible by construction: `src/test` is compiled by the
+  // `test*UnitTest` tasks alone (no `assemble*` reaches it) and the
+  // `testImplementation` dependencies belong to no published variant — they are
+  // absent from `releaseApiElements`/`releaseRuntimeElements`, which is
+  // everything an app consuming this module sees.
+  testOptions {
+    unitTests {
+      // The `android.jar` on a unit-test classpath is the *mockable* stub jar:
+      // every method throws `RuntimeException("Stub!")` unless this is set, in
+      // which case it returns 0/null/false instead. Only two Android calls are
+      // reachable from the code under test — `Log.w` (a diagnostic) and
+      // `SystemClock.elapsedRealtime()` (the anchor origin, which the tests
+      // assert relative to, never absolutely) — so a defaulted stub is the
+      // honest answer for both. `org.json` is *not* left to the stub; a real
+      // implementation is on the test classpath below.
+      returnDefaultValues = true
+
+      all { test ->
+        // The schema-version guard reads `../src/persistence.ts`. A Test task's
+        // working directory is not a contract worth resting on, so the package
+        // root is handed over explicitly.
+        test.systemProperty 'rnMedia.packageRoot', project.projectDir.parentFile.absolutePath
+      }
+    }
+  }
+
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_1_8
     targetCompatibility JavaVersion.VERSION_1_8
@@ -141,6 +172,16 @@ dependencies {
   // types on its compile classpath, and two different media3 versions in one app is a
   // guaranteed `NoSuchMethodError`.
   api "androidx.media3:media3-session:${getExtOrDefault('media3Version')}"
+
+  // ---- local JVM unit tests only (see `testOptions` above) ----------------
+  testImplementation "junit:junit:4.13.2"
+  // A *real* `org.json`. The mockable `android.jar` ships stubs of these exact
+  // classes, so without this every `JSONObject` in a unit test parses to
+  // nothing and the parser tests would pass by agreeing about emptiness.
+  // Declared dependencies precede the mockable jar on the unit-test runtime
+  // classpath, so this one wins (verified by the tests themselves: they assert
+  // parsed values, which a stub cannot produce).
+  testImplementation "org.json:json:20260719"
 }
 
 react {

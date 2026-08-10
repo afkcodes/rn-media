@@ -20,6 +20,11 @@ on:
       - 'packages/player/android/**'
       - 'packages/audio-session/android/**'
       - 'packages/media-session/android/**'
+      # The Kotlin resumption reader duplicates this file's
+      # `PERSISTENCE_SCHEMA_VERSION`, and `SchemaVersionSyncTest` is what keeps
+      # the two in step — so a change here has to run this workflow even though
+      # nothing Android moved.
+      - 'packages/media-session/src/persistence.ts'
       - '**/package-lock.json'
       - '**/react-native.config.js'
       - '**/nitro.json'
@@ -33,6 +38,7 @@ on:
       - 'packages/player/android/**'
       - 'packages/audio-session/android/**'
       - 'packages/media-session/android/**'
+      - 'packages/media-session/src/persistence.ts'
       - '**/package-lock.json'
       - '**/react-native.config.js'
       - '**/nitro.json'
@@ -76,6 +82,50 @@ jobs:
       - name: Run Gradle build
         working-directory: apps/example/android
         run: ./gradlew assembleDebug --no-daemon --build-cache
+
+      # A build is not a check. `lintRelease` was broken at HEAD for days while
+      # this workflow stayed green, because assembling never runs lint — the
+      # "a green pipeline only proves what it actually runs" trap, in this repo.
+      #
+      # Runs in this job rather than a separate one so it reuses the Gradle
+      # cache and the already-downloaded libmpv binaries, and so the required
+      # status check stays a single name.
+      #
+      # Scoped to one ABI on purpose: lint pulls in `externalNativeBuild`, so
+      # without this it would configure and build CMake for all four
+      # architectures to produce a report that does not depend on any of them.
+      - name: Run Android lint (library modules)
+        working-directory: apps/example/android
+        run: >-
+          ./gradlew
+          :rn-media_player:lintRelease
+          :rn-media_audio-session:lintRelease
+          :rn-media_media-session:lintRelease
+          -PreactNativeArchitectures=arm64-v8a
+          --no-daemon --build-cache
+
+      # The JVM half of `media-session`: the resumption record parser, the
+      # channel-priority merge, and the guard that keeps Kotlin's
+      # `SCHEMA_VERSION` equal to `persistence.ts`'s. No device, no emulator,
+      # no CMake — these tasks do not touch the NDK.
+      - name: Run Kotlin unit tests (media-session)
+        working-directory: apps/example/android
+        run: >-
+          ./gradlew :rn-media_media-session:testReleaseUnitTest
+          -PreactNativeArchitectures=arm64-v8a
+          --no-daemon --build-cache
+
+      - name: Upload lint and unit-test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-lint-and-test-reports
+          path: |
+            packages/*/android/build/reports/lint-results-*.html
+            packages/*/android/build/reports/lint-results-*.txt
+            packages/media-session/android/build/reports/tests/**
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Stop Gradle daemon
         working-directory: apps/example/android

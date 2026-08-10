@@ -77,6 +77,10 @@ internal object ResumptionStore {
    *
    * Called on the JS thread and returns immediately.
    */
+  // ApplySharedPref suppressed deliberately (ARCHITECTURE §20): apply()'s flush
+  // is only guaranteed at lifecycle transitions, and this feature exists for the
+  // process that gets none. The write is already on a dedicated background thread.
+  @android.annotation.SuppressLint("ApplySharedPref")
   fun putSession(context: Context, json: String?) {
     val app = context.applicationContext
     synchronized(pending) { pending[0] = json ?: "" }
@@ -101,18 +105,11 @@ internal object ResumptionStore {
    * thread and a file write there is exactly the kind of jank CLAUDE.md
    * principle 1 forbids. Same writer thread as the session.
    */
+  // Deliberate commit() — same rationale as putSession above.
+  @android.annotation.SuppressLint("ApplySharedPref")
   fun putConfig(context: Context, config: AndroidMediaSessionConfig?) {
     val app = context.applicationContext
-    val json = config?.let {
-      JSONObject()
-        .put("channelId", it.notificationChannelId)
-        .put("channelName", it.notificationChannelName)
-        .put("icon", it.notificationIcon)
-        .put("stopForegroundOnPause", it.stopForegroundOnPause)
-        .put("stopForegroundTimeoutMs", it.stopForegroundTimeoutMs)
-        .put("playbackResumption", it.playbackResumption)
-        .toString()
-    }
+    val json = config?.let(::encodeConfig)
     writer.post {
       try {
         val editor = prefs(app).edit()
@@ -123,6 +120,26 @@ internal object ResumptionStore {
       }
     }
   }
+
+  /**
+   * The mirrored config's wire shape, in one place.
+   *
+   * Split out of [putConfig] purely so it can be paired with [readConfig] in a
+   * plain JVM test: [putConfig] itself hands the string to a `HandlerThread`,
+   * which does not exist off-device, so an encode/decode round trip is the only
+   * way to prove the two halves agree on field names. A `null` in any optional
+   * field drops the key (`JSONObject.put` removes rather than stores `null`),
+   * which is exactly what [readConfig]'s optional readers expect.
+   */
+  internal fun encodeConfig(config: AndroidMediaSessionConfig): String =
+    JSONObject()
+      .put("channelId", config.notificationChannelId)
+      .put("channelName", config.notificationChannelName)
+      .put("icon", config.notificationIcon)
+      .put("stopForegroundOnPause", config.stopForegroundOnPause)
+      .put("stopForegroundTimeoutMs", config.stopForegroundTimeoutMs)
+      .put("playbackResumption", config.playbackResumption)
+      .toString()
 
   /**
    * Does this app declare a receiver for `ACTION_MEDIA_BUTTON`?
@@ -137,6 +154,9 @@ internal object ResumptionStore {
    * `playbackResumption` and see nothing happen. Asked once per `initialize`
    * purely so that failure has a log line.
    */
+  // Lint QueryPermissionsNeeded is a false positive here: the query is scoped
+  // to our own package via setPackage(), and an app is always visible to itself.
+  @android.annotation.SuppressLint("QueryPermissionsNeeded")
   fun hasMediaButtonReceiver(context: Context): Boolean = try {
     val intent = android.content.Intent(android.content.Intent.ACTION_MEDIA_BUTTON)
       .setPackage(context.packageName)
@@ -320,6 +340,12 @@ internal object ResumptionStore {
    * exactly what it does not have. A mismatch here is read as "written by a
    * version I do not understand" and resumption is skipped — the same answer
    * `restorePersisted` gives the app.
+   *
+   * The duplication is guarded, not merely documented: `SchemaVersionSyncTest`
+   * reads the number out of `persistence.ts` and fails this module's build if
+   * the two ever disagree. That is why this is `internal` rather than
+   * `private` — the object it lives in is already `internal`, so nothing about
+   * the module's surface changes.
    */
-  private const val SCHEMA_VERSION = 1
+  internal const val SCHEMA_VERSION = 1
 }

@@ -301,6 +301,13 @@ const service = withPersistence(
 </receiver>
 ```
 
+On **Expo prebuild** that block is not yours to keep — `android/` is
+regenerated — so the [config plugin](#options) writes it for you:
+
+```json
+["@rn-media/media-session", { "playbackResumption": true }]
+```
+
 Three requirements, and the library logs which one you are missing:
 
 1. **`playbackResumption: true`.** Off by default — this path starts a foreground
@@ -572,7 +579,7 @@ What it does:
 | Platform | Change | Why |
 | --- | --- | --- |
 | iOS | merges `audio` into `UIBackgroundModes` | without it iOS suspends the app on backgrounding and the audio session is torn down mid-track |
-| Android | nothing | this package's own manifest already merges the foreground-service permissions and the `mediaPlayback` service into the app |
+| Android | nothing by default | this package's own manifest already merges the foreground-service permissions and the `mediaPlayback` service into the app |
 
 The merge is additive and idempotent: existing modes such as `voip` survive, and
 a plist that already lists `audio` is left alone, so re-running prebuild is a
@@ -581,13 +588,16 @@ directly and through another library) applies it once.
 
 ### Options
 
-Everything above needs no options. One is available:
+Everything above needs no options. Two are available:
 
 ```json
 {
   "expo": {
     "plugins": [
-      ["@rn-media/media-session", { "androidNotificationIcon": "./assets/ic_notification.xml" }]
+      ["@rn-media/media-session", {
+        "androidNotificationIcon": "./assets/ic_notification.xml",
+        "playbackResumption": true
+      }]
     ]
   }
 }
@@ -608,9 +618,23 @@ and media3 would silently fall back to its own icon.
   name (lowercase, digits, `_`, letter-first); the plugin fails the prebuild
   rather than letting `aapt2` do it later.
 
+`playbackResumption` — adds media3's `MediaButtonReceiver` to the generated
+`AndroidManifest.xml`, the manifest half of [playback
+resumption](#playback-resumption-after-process-death). Off by default, and set
+it **only** together with `android.playbackResumption: true` at
+`MediaService.init` — the two are one feature, and the receiver alone does
+nothing but change how media buttons are routed.
+
+- It is not merged in from the library's own manifest on purpose: media3 reads
+  the declaration as your app's promise that it can resume, and an AAR cannot
+  make that promise on behalf of every app that installs it.
+- The mod is idempotent — a receiver you already declared is left exactly as it
+  is, so repeated prebuilds and a hand-written declaration both stay put.
+
 Bare React Native projects do not need the plugin at all: add
-`UIBackgroundModes` to `Info.plist` and drop the drawable into
-`android/app/src/main/res` yourself.
+`UIBackgroundModes` to `Info.plist`, paste the `MediaButtonReceiver` block
+above into `android/app/src/main/AndroidManifest.xml`, and drop the drawable
+into `android/app/src/main/res` yourself.
 
 ## Development
 
@@ -619,4 +643,15 @@ npm run codegen       # nitrogen + bob build
 npm run typecheck     # tsc --noEmit (strict), src + plugin
 npm test              # vitest — src and plugin suites
 npm run build:plugin  # tsc -p plugin → plugin/build (what app.plugin.js loads)
+```
+
+The Kotlin half has its own JVM suite — the resumption record parser, the
+channel-priority merge, and the guard that keeps `ResumptionStore.SCHEMA_VERSION`
+equal to `PERSISTENCE_SCHEMA_VERSION` in `src/persistence.ts`. It needs the
+Android SDK (it runs through the example app's Gradle build) but no device, and
+CI runs both of these on every Android-touching change:
+
+```sh
+npm run test:android  # :rn-media_media-session:testReleaseUnitTest
+npm run lint:android  # :rn-media_media-session:lintRelease
 ```
