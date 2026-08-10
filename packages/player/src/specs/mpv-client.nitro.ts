@@ -96,6 +96,55 @@ export interface MpvEvent {
 }
 
 /**
+ * One analysed window of the audio mpv last handed to the audio device.
+ *
+ * @remarks
+ * The PCM itself never crosses into JavaScript. mpv's `pcm-tap-frame` property
+ * (added by the rn-media libmpv patch — see ARCHITECTURE §11 and §21) is read on
+ * a native sampler thread, downmixed, windowed and transformed there, and only
+ * the spectrum makes the trip. That is a performance decision, not a layering
+ * one: a 2048-point FFT is ~135 k float operations, which is nothing in C++ and
+ * is real work in Hermes, and it keeps the per-frame payload at ~4 KB of
+ * magnitudes instead of ~16 KB of samples.
+ *
+ * Everything *above* the transform — dB mapping, log-spaced bands, smoothing,
+ * peak ballistics — stays in TypeScript, per subscriber, where it is unit-tested
+ * without a device (ARCHITECTURE §5).
+ */
+export interface VisualizerCapture {
+  /**
+   * `fftSize / 2 + 1` little-endian `Float32` linear magnitudes, normalised so
+   * that a full-scale sinusoid reads `1.0`. Read it as a `Float32Array`.
+   *
+   * Bin `k` is centred on `k * sampleRate / fftSize` Hz.
+   */
+  readonly magnitudes: ArrayBuffer
+  /**
+   * `fftSize` little-endian `Float32` mono samples in `[-1, 1]`, **unwindowed**,
+   * or `undefined` when the subscriber did not ask for time-domain data.
+   */
+  readonly waveform?: ArrayBuffer
+  /** Transform length in samples. */
+  readonly fftSize: number
+  /** Sample rate of the tapped audio, in Hz. */
+  readonly sampleRate: number
+  /** `Date.now()`-comparable timestamp taken natively when the window was analysed. */
+  readonly capturedAt: number
+  /**
+   * mpv's tap sequence number — one increment per chunk the audio device
+   * consumed. Two captures with the same `seq` carry the same spectrum by
+   * construction, because they analysed the same samples.
+   */
+  readonly seq: number
+  /**
+   * Ticks skipped since the previous capture because JavaScript had not
+   * finished with the last one. Steadily non-zero means the listener cannot
+   * keep up with the requested frame rate.
+   */
+  readonly dropped: number
+}
+
+/**
  * A thin, complete binding over one `mpv_handle` (one `mpv_create()` core).
  *
  * One instance == one player core; create as many as you need via
@@ -182,6 +231,50 @@ export interface MpvClient
    */
   setEventBatchListener(
     onEventBatch: (events: MpvEvent[]) => boolean
+  ): void
+
+  /**
+   * Arm mpv's PCM tap and start delivering analysed windows.
+   *
+   * Restarts cleanly when already running, which is what lets a second
+   * subscriber widen the shared native parameters without a gap.
+   *
+   * @param fftSize - Transform length; a power of two in `[64, 16384]`.
+   * @param fps - Delivery rate in `[1, 60]`. This is the *render* rate: new
+   * spectral content arrives no faster than the audio device consumes chunks
+   * (~20-45 Hz on Android), and the TypeScript smoothing is what turns one into
+   * the other.
+   * @param waveform - Also deliver time-domain samples.
+   *
+   * @throws `[visualizer:unavailable]` when the linked libmpv has no `pcm-tap`
+   * property, i.e. it was not built from the rn-media forks. Same error, same
+   * code path, on both platforms.
+   */
+  startVisualizer(fftSize: number, fps: number, waveform: boolean): void
+
+  /**
+   * Stop sampling and disarm mpv's tap. Idempotent.
+   *
+   * After this, mpv frees its ring and the audio thread's tap path is a single
+   * atomic load per device chunk — the feature genuinely costs nothing when
+   * nobody is looking.
+   */
+  stopVisualizer(): void
+
+  /**
+   * Register the (single) visualizer listener. Pass before
+   * {@link startVisualizer}.
+   *
+   * As with {@link setEventBatchListener}, the listener MUST return `true` to
+   * keep receiving captures; returning `false` detaches it. The returned
+   * completion promise is the back-pressure clock — exactly one capture is in
+   * flight at a time, and ticks that arrive while JavaScript is still busy are
+   * dropped rather than queued, because a stale spectrum has no value.
+   *
+   * Calling this again replaces the previous listener.
+   */
+  setVisualizerListener(
+    onCapture: (capture: VisualizerCapture) => boolean
   ): void
 
   /**

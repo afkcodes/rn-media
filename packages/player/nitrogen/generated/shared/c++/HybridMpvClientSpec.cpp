@@ -26,6 +26,9 @@ namespace margelo::nitro::rnmediaplayer {
       prototype.registerHybridMethod("observeProperty", &HybridMpvClientSpec::observeProperty);
       prototype.registerHybridMethod("unobserveProperty", &HybridMpvClientSpec::unobserveProperty);
       prototype.registerHybridMethod("setEventBatchListener", &HybridMpvClientSpec::setEventBatchListener);
+      prototype.registerHybridMethod("startVisualizer", &HybridMpvClientSpec::startVisualizer);
+      prototype.registerHybridMethod("stopVisualizer", &HybridMpvClientSpec::stopVisualizer);
+      prototype.registerHybridMethod("setVisualizerListener", &HybridMpvClientSpec::setVisualizerListener);
       prototype.registerHybridMethod("attachVideoOutput", &HybridMpvClientSpec::attachVideoOutput);
       prototype.registerHybridMethod("detachVideoOutput", &HybridMpvClientSpec::detachVideoOutput);
       prototype.registerHybridMethod("getRawHandle", &HybridMpvClientSpec::getRawHandle);

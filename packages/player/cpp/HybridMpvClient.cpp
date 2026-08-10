@@ -322,12 +322,110 @@ bool MpvFlushCoordinator::runOneFlush() {
 }
 
 // ---------------------------------------------------------------------------
+// VisualizerDelivery
+// ---------------------------------------------------------------------------
+
+void VisualizerDelivery::attach(rnmedia::PcmTap* tap) {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _tap = tap;
+}
+
+void VisualizerDelivery::detach() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _tap = nullptr;
+  _listener = nullptr;
+}
+
+void VisualizerDelivery::setListener(const Listener& listener) {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _listener = listener;
+}
+
+void VisualizerDelivery::clearListener() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _listener = nullptr;
+}
+
+void VisualizerDelivery::complete() {
+  rnmedia::PcmTap* tap = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    tap = _tap;
+  }
+  if (tap != nullptr) {
+    tap->onDeliveryComplete();
+  }
+}
+
+void VisualizerDelivery::deliver(rnmedia::AnalysedFrame&& frame) {
+  Listener listener;
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    listener = _listener;
+  }
+  if (!listener) {
+    complete();
+    return;
+  }
+
+  VisualizerCapture capture;
+  // `move`, not `copy`: the vectors were built for exactly this hop, so the
+  // spectrum reaches JS without a second allocation.
+  capture.magnitudes = ArrayBuffer::move(std::move(frame.magnitudes));
+  if (!frame.waveform.empty()) {
+    capture.waveform = ArrayBuffer::move(std::move(frame.waveform));
+  }
+  capture.fftSize = static_cast<double>(frame.fftSize);
+  capture.sampleRate = static_cast<double>(frame.sampleRate);
+  capture.capturedAt = frame.capturedAt;
+  capture.seq = static_cast<double>(frame.seq);
+  capture.dropped = static_cast<double>(frame.dropped);
+
+  std::shared_ptr<Promise<bool>> completion;
+  try {
+    completion = listener(capture);
+  } catch (...) {
+    // The JS runtime (or its Dispatcher) is gone. Stop delivering rather than
+    // spinning on a dead callback.
+    clearListener();
+    complete();
+    return;
+  }
+
+  if (completion == nullptr) {
+    complete();
+    return;
+  }
+
+  std::weak_ptr<VisualizerDelivery> weakSelf = weak_from_this();
+  completion->addOnResolvedListener([weakSelf](const bool& keepListening) {
+    auto self = weakSelf.lock();
+    if (self == nullptr) {
+      return;
+    }
+    if (!keepListening) {
+      self->clearListener();
+    }
+    self->complete();
+  });
+  completion->addOnRejectedListener([weakSelf](const std::exception_ptr&) {
+    auto self = weakSelf.lock();
+    if (self == nullptr) {
+      return;
+    }
+    // A throwing listener is a JS bug, not a reason to stop the visualizer.
+    // Release the slot so the next tick can still be delivered.
+    self->complete();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // HybridMpvClient
 // ---------------------------------------------------------------------------
 
 HybridMpvClient::HybridMpvClient()
     : HybridObject(TAG), _flusher(std::make_shared<MpvFlushCoordinator>()),
-      _pending(std::make_shared<PendingCommands>()) {
+      _pending(std::make_shared<PendingCommands>()), _visualizer(std::make_shared<VisualizerDelivery>()) {
   // Captured by value: both are shared_ptrs, so the event thread can call them
   // even while HybridMpvClient is being torn down.
   auto flusher = _flusher;
@@ -344,6 +442,13 @@ HybridMpvClient::~HybridMpvClient() {
 }
 
 void HybridMpvClient::destroy() {
+  // Order matters. `stop()` joins the sampler thread, so after it returns
+  // nothing can read a property or deliver a frame; only then is it safe to
+  // take the mpv handle away.
+  if (_tap != nullptr) {
+    _tap->stop();
+  }
+  _visualizer->detach();
   if (_client != nullptr) {
     _client->destroy(); // joins the event thread; mpv teardown goes background
   }
@@ -410,6 +515,37 @@ void HybridMpvClient::unobserveProperty(const std::string& name) {
 void HybridMpvClient::setEventBatchListener(
     const std::function<std::shared_ptr<Promise<bool>>(const std::vector<MpvEvent>&)>& onEventBatch) {
   _flusher->setListener(onEventBatch);
+}
+
+void HybridMpvClient::startVisualizer(double fftSize, double fps, bool waveform) {
+  if (_tap == nullptr) {
+    // `_client` is a unique_ptr member that outlives the tap (declaration
+    // order, and `destroy()` stops the tap first), so capturing the raw pointer
+    // is safe for the tap's whole lifetime.
+    rnmedia::MpvClient* client = _client.get();
+    rnmedia::TapSource source{
+        .configure = [client](int frames) { return client->configurePcmTap(frames); },
+        .read = [client](std::vector<float>& out, int& channels, int& rate, std::int64_t& seq) {
+          return client->readPcmTapWindow(out, channels, rate, seq);
+        },
+    };
+    auto delivery = _visualizer;
+    _tap = std::make_unique<rnmedia::PcmTap>(
+        std::move(source), [delivery](rnmedia::AnalysedFrame&& frame) { delivery->deliver(std::move(frame)); });
+    _visualizer->attach(_tap.get());
+  }
+  _tap->start(static_cast<int>(fftSize), static_cast<int>(fps), waveform);
+}
+
+void HybridMpvClient::stopVisualizer() {
+  if (_tap != nullptr) {
+    _tap->stop();
+  }
+}
+
+void HybridMpvClient::setVisualizerListener(
+    const std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture&)>& onCapture) {
+  _visualizer->setListener(onCapture);
 }
 
 void HybridMpvClient::attachVideoOutput(uint64_t /* handle */) {

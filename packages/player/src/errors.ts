@@ -205,6 +205,66 @@ function parseNativeError(message: string): ParsedNativeError | undefined {
   return { tag: match[1], detail: (match[2] ?? '').trim() }
 }
 
+/**
+ * Matches the `[visualizer:<tag>]` marker **anywhere** in the message, not just
+ * at the start.
+ *
+ * That is not defensive vagueness — it is the observed wire format. A native
+ * throw reaches JS wrapped by Nitro, so what arrives is
+ * `MpvClient.startVisualizer(...): [visualizer:unavailable] …` and sometimes a
+ * trailing stack. An anchored pattern silently downgraded every tagged failure
+ * to `invalid-state` (caught on device, 2026-08-11), which in turn hid the
+ * app's affordance for it.
+ */
+const VISUALIZER_TAG = /\[visualizer:([^\]]+)\]\s*([\s\S]*)$/
+
+/**
+ * Cut a stack trace off the end of a message.
+ *
+ * The tag's detail is written for a human to read in a UI; the frames after it
+ * belong in a log, and pasting a 20-frame trace into an error banner is how a
+ * typed taxonomy stops being useful.
+ */
+function withoutStackTrace(detail: string): string {
+  const frame = detail.search(/\n\s*at\s/)
+  return (frame === -1 ? detail : detail.slice(0, frame)).trim()
+}
+
+/**
+ * Map a throw from the native visualizer engine onto the typed taxonomy.
+ *
+ * @param thrown - Whatever the native call threw.
+ * @returns The typed error. Never `undefined` — an untagged throw becomes an
+ * `invalid-state` carrying the original message, so nothing is swallowed.
+ *
+ * @remarks
+ * Deliberately separate from {@link toPlayerError}: an unclassified failure
+ * here must not be labelled `mpv` with a fabricated `raw` mpv string. The
+ * native side tags the one failure it can predict,
+ * `[visualizer:unavailable]` — a libmpv without the PCM tap patch.
+ *
+ * There is no `permission-denied` member any more, and that absence is the
+ * feature: the old Android route went through `android.media.audiofx.Visualizer`,
+ * which the platform gates on `RECORD_AUDIO` for every audio session. Tapping
+ * mpv needs no permission at all, on either platform, so no consuming app has to
+ * put a microphone permission in its manifest.
+ */
+export function toVisualizerError(thrown: unknown): PlayerError {
+  if (thrown instanceof PlayerErrorException) return thrown.playerError
+  const message = messageOf(thrown)
+  const match = VISUALIZER_TAG.exec(message)
+  const tag = match?.[1]
+  const detail = withoutStackTrace(match?.[2] ?? message)
+  switch (tag) {
+    case 'unavailable':
+      return { code: 'unsupported', message: detail }
+    case 'invalid-state':
+      return { code: 'invalid-state', message: detail }
+    default:
+      return { code: 'invalid-state', message: detail }
+  }
+}
+
 function messageOf(thrown: unknown): string {
   if (thrown instanceof Error) return thrown.message
   if (typeof thrown === 'string') return thrown

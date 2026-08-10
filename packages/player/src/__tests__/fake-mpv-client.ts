@@ -6,6 +6,7 @@ import type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  VisualizerCapture,
 } from '../specs/mpv-client.nitro'
 
 /**
@@ -60,10 +61,24 @@ export class FakeMpvClient implements MpvClient {
   /** Set to make `setProperty*` throw with this message. */
   setPropertyRejection: string | undefined
 
+  /** Set to make `startVisualizer()` throw with this message. */
+  visualizerRejection: string | undefined
+
   /** Return values of every `emit()` so far — the back-pressure signal. */
   readonly listenerReturns: boolean[] = []
 
+  /**
+   * Every `startVisualizer` call, in order, and every `stopVisualizer` as
+   * `'stop'`. This is the leak evidence: a subscribe/unsubscribe cycle must
+   * leave a matched pair, and nothing running afterwards.
+   */
+  readonly visualizerCalls: (
+    | { readonly kind: 'start'; readonly fftSize: number; readonly fps: number; readonly waveform: boolean }
+    | { readonly kind: 'stop' }
+  )[] = []
+
   #listener: ((events: MpvEvent[]) => boolean) | undefined
+  #visualizerListener: ((capture: VisualizerCapture) => boolean) | undefined
 
   /** Whether a batch listener is currently registered. */
   get hasListener(): boolean {
@@ -140,6 +155,38 @@ export class FakeMpvClient implements MpvClient {
 
   setEventBatchListener(onEventBatch: (events: MpvEvent[]) => boolean): void {
     this.#listener = onEventBatch
+  }
+
+  startVisualizer(fftSize: number, fps: number, waveform: boolean): void {
+    if (this.visualizerRejection !== undefined) {
+      throw new Error(this.visualizerRejection)
+    }
+    this.visualizerCalls.push({ kind: 'start', fftSize, fps, waveform })
+  }
+
+  stopVisualizer(): void {
+    this.visualizerCalls.push({ kind: 'stop' })
+  }
+
+  setVisualizerListener(onCapture: (capture: VisualizerCapture) => boolean): void {
+    this.#visualizerListener = onCapture
+  }
+
+  /** Whether a visualizer listener is currently registered. */
+  get hasVisualizerListener(): boolean {
+    return this.#visualizerListener !== undefined
+  }
+
+  /** Whether a native capture is running, by the fake's own bookkeeping. */
+  get visualizerRunning(): boolean {
+    const last = this.visualizerCalls.at(-1)
+    return last !== undefined && last.kind === 'start'
+  }
+
+  /** Deliver one capture, exactly as the native sampler would. */
+  emitCapture(capture: VisualizerCapture): boolean {
+    if (this.#visualizerListener === undefined) return false
+    return this.#visualizerListener(capture)
   }
 
   attachVideoOutput(_handle: UInt64): void {
@@ -232,4 +279,58 @@ export function logEvent(
 /** A `kind: 'shutdown'` event. */
 export function shutdownEvent(): MpvEvent {
   return { kind: 'shutdown' }
+}
+
+// ---------------------------------------------------------------------------
+// Visualizer fixture builders
+// ---------------------------------------------------------------------------
+
+/**
+ * A synthetic {@link VisualizerCapture}, the shape the native sampler delivers.
+ *
+ * `magnitudes` are **linear**, calibrated so `1.0` is a full-scale sinusoid —
+ * the same calibration the C++ suite asserts against a real transform, so the
+ * numbers a TypeScript test writes here mean what they mean on a device.
+ */
+export function visualizerCapture(options: {
+  readonly magnitudes: readonly number[]
+  readonly waveform?: readonly number[]
+  readonly sampleRate?: number
+  readonly capturedAt?: number
+  readonly seq?: number
+  readonly dropped?: number
+}): VisualizerCapture {
+  const fftSize = (options.magnitudes.length - 1) * 2
+  const capture: VisualizerCapture = {
+    magnitudes: Float32Array.from(options.magnitudes).buffer,
+    waveform:
+      options.waveform === undefined
+        ? undefined
+        : Float32Array.from(options.waveform).buffer,
+    fftSize,
+    sampleRate: options.sampleRate ?? 48000,
+    capturedAt: options.capturedAt ?? 1_000,
+    seq: options.seq ?? 1,
+    dropped: options.dropped ?? 0,
+  }
+  return capture
+}
+
+/**
+ * A capture whose spectrum is silent except for one bin — the easiest way to
+ * assert that a given band picked up a given frequency.
+ */
+export function toneCapture(
+  bin: number,
+  amplitude: number,
+  options: { readonly bins?: number; readonly sampleRate?: number; readonly seq?: number } = {}
+): VisualizerCapture {
+  const bins = options.bins ?? 1025
+  const magnitudes = new Array<number>(bins).fill(0)
+  magnitudes[bin] = amplitude
+  return visualizerCapture({
+    magnitudes,
+    sampleRate: options.sampleRate ?? 48000,
+    seq: options.seq,
+  })
 }

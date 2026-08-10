@@ -142,6 +142,106 @@ Notes:
   platform branching is needed. On an older or overridden binary the call fails
   honestly with a `mpv` `PlayerError` carrying `errno: -11`.
 
+### Visualizer (spectrum + waveform)
+
+```tsx
+import { useVisualizer } from '@rn-media/player'
+
+function Bars({ player }) {
+  const { frame, error } = useVisualizer(player, { bands: 28 })
+  if (error) return <Text>{error.message}</Text>
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+      {Array.from(frame?.bands ?? []).map((value, i) => (
+        <View key={i} style={{ width: 6, height: 3 + value * 57 }} />
+      ))}
+    </View>
+  )
+}
+```
+
+Or imperatively, which is what the hook is built on:
+
+```ts
+if (player.visualizer.capabilities.fft) {
+  const stop = player.visualizer.subscribe(
+    (frame) => paint(frame.bands),  // Float32Array, [0, 1], already smoothed
+    { bands: 32, fps: 30, waveform: false }
+  )
+  stop() // disarms mpv's tap
+}
+```
+
+A `VisualizerFrame` carries `bands` (log-spaced, dB-mapped, asymmetrically
+smoothed — paint them directly and the bounce is already there), `peaks`
+(classic peak-hold caps: each snaps up instantly, hangs for `peakHoldFrames`,
+then falls under accumulating `peakGravity` — the floating markers above the
+bars in a Winamp-style analyser), `magnitudes` (raw per-bin **linear**
+magnitudes where `1.0` is a full-scale sinusoid, `fftSize / 2 + 1` long, for
+your own mel/Bark/chroma mapping), `gainDb` (what the auto-gain is currently
+doing) and — only with `{ waveform: true }` — `waveform`, `peak` and `rms` for
+an oscilloscope or VU meter.
+
+**How it works, and what that buys you:**
+
+- **Both platforms, one code path, no permission.** The samples come from mpv
+  itself, through two properties (`pcm-tap`, `pcm-tap-frame`) added by this
+  project's own libmpv patch — the same patch file in both binary forks. There is
+  no `Platform.OS` anywhere in the feature and **nothing to add to your
+  manifest**. (The Android-only route through
+  `android.media.audiofx.Visualizer` would have required
+  `android.permission.RECORD_AUDIO` from every consuming app, capped you at
+  ~20 fps and 8-bit data, and had no iOS half at all. See ARCHITECTURE §21.)
+- **It taps what you hear.** The tap sits where mpv hands audio to the device —
+  after the filter chain and after mpv's software gain — so your EQ, ReplayGain
+  and volume are all in the picture.
+- **It needs binaries that carry the patch.** Android `v1.1.9-rnmedia.3`+ or iOS
+  `v0.7.2-rnmedia.3`+, which is what this package pins. On anything older
+  `capabilities.fft` is `false` and `subscribe()` throws a typed `unsupported`
+  `PlayerError` — it never silently does nothing.
+- **30 fps by default, 60 available and reached.** That is the *delivery* rate.
+  New spectral content arrives no faster than the audio device consumes chunks
+  (measured at ~20-45 Hz on Android, where `ao_audiotrack` writes one
+  `getMinBufferSize() × 2` chunk at a time), and the asymmetric smoothing is what
+  turns a stepped target into continuous motion. Measured in a release build of
+  `apps/example`: **60 requested, 60.0 delivered, zero dropped.** `frame.dropped`
+  tells you when your painting cannot keep up — and note that a *debug* build of
+  the same screen managed 24-26, so measure this in release or you will blame the
+  wrong layer.
+- **Zero cost when nobody is looking.** No sampler thread, no FFT table, no
+  ring — mpv's tap is disarmed and its whole write path is a single atomic load
+  per device chunk. The first `subscribe()` creates all of it, the last
+  unsubscribe frees it. Reading `capabilities` allocates nothing.
+- **The FFT is native, the optics are yours.** The PCM never crosses into
+  JavaScript: it is downmixed, Hann-windowed and transformed on a native sampler
+  thread, and only the spectrum makes the trip (~4 KB per frame). Everything
+  above that — bands, dB window, tilt, auto-gain, smoothing, peak ballistics —
+  is TypeScript, per subscriber, and unit-tested without a device.
+- **Subscribers share one engine.** `fftSize`, `fps` and `waveform` are resolved
+  as the union across live subscribers; `bands`, the dB window, `tiltDbPerOctave`
+  and the smoothing are per subscriber, so two components can paint the same
+  audio with different ballistics.
+
+Two defaults exist because a spectrum that is technically correct still looks
+broken, and both are switchable:
+
+- **`tiltDbPerOctave: 3`.** Music's power falls at roughly 3 dB per octave.
+  Drawn literally, the top half of the display barely moves whatever is playing.
+  Set `0` for a physically literal spectrum.
+- **`autoGain: true`.** A fixed dB window cannot serve both a `-8 LUFS` master
+  and a quiet acoustic recording — one pegs every bar, the other never leaves the
+  floor. The gain is bounded (`-6`…`+18 dB`), backs off four times faster than it
+  builds, and holds still below `-95 dBFS` so it can never amplify a noise floor
+  into a full-height display. Set `false` for a calibrated meter whose height
+  means one fixed thing.
+
+`useVisualizer(player, options, enabled)` re-renders at the frame rate by
+design, so keep it in a small leaf component. `apps/example` shows the render
+pattern worth copying: the coloured column and the LED grid are laid out once
+and never touched, and each frame moves **two** Views per band by `transform`
+only — no per-frame layout. For anything heavier, subscribe imperatively and
+drive an animated value instead of React state.
+
 ### ReplayGain (loudness normalisation)
 
 ```ts

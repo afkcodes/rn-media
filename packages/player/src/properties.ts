@@ -123,6 +123,29 @@ export const MpvProperty = {
    * if any entry fails.
    */
   audioFilters: 'af',
+  /**
+   * `pcm-tap` — int, read/write. Samples per channel mpv retains for the
+   * visualizer; `0` (the default) disarms the tap.
+   *
+   * Added by this project's libmpv patch (ARCHITECTURE §11, §21), so reading it
+   * is also the availability probe: a libmpv without the patch answers
+   * "property not found" and `player.visualizer.capabilities.fft` is `false`.
+   * Identical on both platforms — it is the same source patch in both forks.
+   *
+   * Setting it directly is legal and does nothing useful on its own: the
+   * sampler thread that reads {@link pcmTapFrame} lives in native code and is
+   * driven by `player.visualizer.subscribe()`.
+   */
+  pcmTap: 'pcm-tap',
+  /**
+   * `pcm-tap-frame` — node, read-only. The newest retained window, as a map of
+   * `sample_rate` / `channels` / `frames` / `pts_us` / `seq` plus `samples`, a
+   * byte array of interleaved float32.
+   *
+   * Listed for completeness; nothing in TypeScript reads it. It is consumed by
+   * the native sampler, which never lets the PCM cross into JavaScript.
+   */
+  pcmTapFrame: 'pcm-tap-frame',
 } as const
 
 /**
