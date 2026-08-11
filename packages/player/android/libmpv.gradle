@@ -137,7 +137,25 @@ ext.libmpv = [
     //   which is FFmpeg 8.x plus libplacebo. That is a real regression against
     //   §11's "~3 MB/ABI" cost note and is accepted deliberately as the price
     //   of currency; it is the number to attack next (see the fork's README).
-    release   : 'v1.1.9-rnmedia.5',
+    //
+    // …rnmedia.6 — patch `006.rn_media_prefetch_hook`, engine otherwise
+    //   untouched. mpv's `prefetch-playlist` opens the next entry's RAW url and
+    //   never runs client hooks (upstream calls that permanent), so a
+    //   URL-rewriting resolver made prefetch actively worse: the boundary
+    //   strcmp in `open_demux_reentrant` threw the prefetched stream away while
+    //   blocking the core. The patch fires `on_prefetch_load` from the prefetch
+    //   path and exposes read-only `prefetch-playlist-entry-id` (valid only
+    //   while that hook is open). No new exports — it rides
+    //   `mpv_hook_add`/`mpv_hook_continue`, so the 55-symbol contract above
+    //   holds unchanged; the marker set grew to five (004's two + 006's three),
+    //   asserted by `rn-media-release.sh` before packaging as always. A
+    //   device-free regression harness (21 assertions) runs in the fork's CI.
+    //   Byte-identical patch with darwin v0.7.2-rnmedia.5 (first lockstep
+    //   release); the canonical copy and its tree-equivalence proof live in
+    //   afkcodes/rn-media-engine (patches/004-prefetch-hook) — patches are
+    //   edited THERE and synced to the forks, never edited in place.
+    //   Cost: arm64-v8a +2 216 bytes.
+    release   : 'v1.1.9-rnmedia.6',
     // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
     flavor    : 'default',
     // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
@@ -158,10 +176,10 @@ ext.libmpv = [
     libplaceboVersion: '6.338.2',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
-        'arm64-v8a'  : 'a6eea49030ef59f1becbdc63c3071516a79452ff77f4c9085a8e05ea1f302eca',
-        'armeabi-v7a': 'e4e219a0545041f82e82fc62b16953dcc9c6d741736552b54ea622044d02216c',
-        'x86'        : 'e983cba7b59639e97693c1dda19cfb2e0893948f4ce9be8e5dafe8c9f1ce3bb3',
-        'x86_64'     : 'ad98e0b5ae3b6ffd15f347ad629429a2154aea3a445ad0f4d38855a6720a302c',
+        'arm64-v8a'  : 'b59aebc9420680985fa661751fa1ed597323195d93adeeba56bae3302ec2d42e',
+        'armeabi-v7a': '0ceac3c4726eccbb5efc34f26aecc20d077fe591a89ad986214a6fdcf70bd7f7',
+        'x86'        : '8106ef430cca1230377e512d4190bd67150efbdd8af950def5a99eea0be9643a',
+        'x86_64'     : 'a924a82d430e7f0bc2e19c88a14fa27d2d6ab71cf70fb23b7eda1631c47aa186',
     ],
 ]
 

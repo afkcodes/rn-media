@@ -144,14 +144,29 @@ LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 # Still LGPLv3: no `--enable-gpl`, no `--enable-nonfree`. libplacebo is
 # LGPLv2.1+ and is folded into an LGPL dylib that is itself dynamically linked,
 # so the relink obligation is still satisfied at the framework boundary.
-LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.4
+# --- rnmedia.5 — patch 006 (prefetch hook), engine otherwise untouched -------
+# `on_prefetch_load` client hook on mpv's prefetch path + read-only
+# `prefetch-playlist-entry-id`, so a URL resolver can rewrite the next entry at
+# prefetch time and mpv reuses the prefetched stream at the boundary (upstream
+# never runs hooks there and says it never will). Byte-identical patch with the
+# Android fork's 006 (first LOCKSTEP release: v1.1.9-rnmedia.6); canonical copy
+# + tree-equivalence proof in afkcodes/rn-media-engine patches/004-prefetch-hook
+# — patches are edited THERE and synced to the forks, never in place. Applied
+# with --fuzz=0 (the older patch lines still ride GNU patch's default fuzz 2;
+# fixing the whole series is #32).
+# Verified against THIS released asset on a Linux host: the three 006 markers
+# (`on_prefetch_load`, `prefetch-playlist-entry-id`,
+# `[rn-media] prefetch hook resolved: `) present on the device slice, pcm-tap
+# markers intact, export list still exactly 54 `mpv_*` names (hooks ride
+# mpv_hook_add/mpv_hook_continue — no new symbol).
+LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.5
 LIBMPV_DARWIN_BUILD_VARIANT=ios-universal-audio-default
 
 # SHA-256 of
 # libmpv-xcframeworks_${TAG}_${VARIANT}.tar.gz
 # (computed from the published release asset; re-verified on every download,
 # and a mismatch is a hard build failure rather than a warning).
-LIBMPV_DARWIN_BUILD_SHA256=9d3efc13f44234cec818f07a6b62d14ae2b2427eeb7b081702a6cc04c20c0d1d
+LIBMPV_DARWIN_BUILD_SHA256=81d4bc96ad47e0dab4b812c088bcf4547ef9f78e7d2dfc485bad7a30c2992080
 
 # --- metadata (informational; verified by inspecting the binaries) -----------
 # mpv                       0.41.0   (MPV_CLIENT_API_VERSION = 2.5)
