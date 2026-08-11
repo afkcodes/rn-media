@@ -173,6 +173,7 @@ LIBMPV_DARWIN_BUILD_SHA256=81d4bc96ad47e0dab4b812c088bcf4547ef9f78e7d2dfc485bad7
 # FFmpeg                    8.1.2    (LGPL: no --enable-gpl, --enable-version3)
 # libplacebo                6.338.2  (static, every GPU backend disabled)
 # mbedTLS                   3.4.1
+# libxml2                   2.11.5   (static, inside Avformat)
 # xcframework slices        ios-arm64, ios-arm64_x86_64-simulator
 LIBMPV_MPV_VERSION=0.41.0
 LIBMPV_FFMPEG_VERSION=8.1.2
@@ -183,6 +184,18 @@ LIBMPV_FFMPEG_VERSION=8.1.2
 # under mobile cross-files, and the Android half pins the same version.
 LIBMPV_LIBPLACEBO_VERSION=6.338.2
 LIBMPV_MBEDTLS_VERSION=3.4.1
+# libxml2 is FFmpeg's (dashdec/hls), built static and folded into Avformat —
+# there is no eleventh framework for it. Machine-readable for
+# scripts/check-upstream.mjs, whose libxml2 row compares this against upstream
+# and against the Android pin; the two forks do NOT currently agree (Android
+# ships 2.10.3, and mbedTLS above diverges the same way: 3.6.1 there, 3.4.1
+# here). Value is the darwin fork's own `packages.lock.nix` at the pinned tag.
+LIBMPV_LIBXML2_VERSION=2.11.5
+
+# Read by scripts/check-upstream.mjs and printed verbatim next to the libplacebo
+# row, which — exactly like FFmpeg's — is MEANT to read BEHIND: 7.x is newer and
+# unusable here.
+LIBMPV_LIBPLACEBO_PIN_NOTE="not a lag: 6.338.2 is exactly mpv 0.41's declared minimum (dependency('libplacebo', version: '>=6.338.2')), and 7.x drops symbols mpv 0.41's csputils.h still references under mobile cross-files. Revisit when an mpv release is itself built against the 7.x API."
 
 # Read by scripts/check-upstream.mjs and printed verbatim next to the FFmpeg
 # row, which is MEANT to read BEHIND: our FFmpeg is chosen by what the pinned

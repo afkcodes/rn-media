@@ -58,11 +58,11 @@
     "@semantic-release/git": "^11.0.1",
     "@types/react": "19.2.0",
     "conventional-changelog-conventionalcommits": "^10.2.1",
-    "nitrogen": "^0.36.1",
+    "nitrogen": "^0.36.5",
     "react": "19.2.3",
-    "react-native": "0.86.0",
+    "react-native": "0.86.2",
     "react-native-builder-bob": "^0.43.0",
-    "react-native-nitro-modules": "^0.36.1",
+    "react-native-nitro-modules": "^0.36.5",
     "semantic-release": "^25.0.7",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
@@ -115,8 +115,7 @@
       [
         "typescript",
         {
-          "project": "tsconfig.build.json",
-          "tsc": "./node_modules/.bin/tsc"
+          "project": "tsconfig.build.json"
         }
       ]
     ]

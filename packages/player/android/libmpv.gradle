@@ -174,6 +174,26 @@ ext.libmpv = [
     // libplacebo became a MANDATORY mpv dependency in 0.37 and is now part of
     // what the binary contains, so it is a pin field rather than a footnote.
     libplaceboVersion: '6.338.2',
+    // Printed verbatim in the libplacebo row, which — like FFmpeg's — is MEANT
+    // to read BEHIND. Same rule as ffmpegPinNote: no apostrophes, the watcher
+    // parses this block with a single-quoted-value regex.
+    libplaceboPinNote: 'not a lag: 6.338.2 is exactly mpv 0.41 declared minimum, and 7.x drops symbols mpv 0.41 csputils.h still references under mobile cross-files. Revisit when an mpv release is itself built against the 7.x API.',
+    // The two remaining engine sub-dependencies. Both are FFmpeg dependencies
+    // (`dep_ffmpeg=(libxml2 mbedtls)` in the fork build scripts), statically
+    // linked into libmpv.so, and until now they existed here only as prose.
+    // Machine-readable so scripts/check-upstream.mjs can compare them and, more
+    // to the point, so a divergence from the iOS pin is visible: these two are
+    // the engine pieces the two forks do NOT currently agree on (iOS ships
+    // mbedTLS 3.4.1 / libxml2 2.11.5).
+    //
+    // Values are the fork build scripts own, at the pinned tag
+    // (buildscripts/include/depinfo.sh → v_mbedtls, v_libxml2 at
+    // v1.1.9-rnmedia.6). mbedTLS is additionally proven in the SHIPPED jar:
+    // the string `Mbed TLS 3.6.1` is present in arm64-v8a/libmpv.so. libxml2
+    // keeps no version string through the static link, so depinfo.sh at the tag
+    // is the only source for it.
+    mbedtlsVersion: '3.6.1',
+    libxml2Version: '2.10.3',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
         'arm64-v8a'  : 'b59aebc9420680985fa661751fa1ed597323195d93adeeba56bae3302ec2d42e',
