@@ -155,7 +155,92 @@ ext.libmpv = [
     //   afkcodes/rn-media-engine (patches/004-prefetch-hook) — patches are
     //   edited THERE and synced to the forks, never edited in place.
     //   Cost: arm64-v8a +2 216 bytes.
-    release   : 'v1.1.9-rnmedia.6',
+    // …rnmedia.7 — THE PARITY RELEASE. No engine bump (still mpv 0.41.0 /
+    //   FFmpeg 8.1.2 / libplacebo 6.338.2) and no new rn-media patch: what
+    //   changes is that the two forks stop being two builds that happen to
+    //   share a version number. Cut in lockstep with darwin
+    //   v0.7.2-rnmedia.6 — the iconv work spans both forks, so shipping one
+    //   alone would have re-opened the divergence it closes. Verified after
+    //   release, not before: `workshop verify-artifacts` over the released
+    //   assets is 12 slices x 10 categories = 120 cells, 0 FAIL.
+    //
+    //   mpv is now configured EXHAUSTIVELY on both platforms: 103 options
+    //   each, 101 of them identical, and the only two that differ are the
+    //   platform's own audio output (`audiotrack` here, `audiounit` there).
+    //   Android used to pass 27 and leave ~95 at mpv's `auto` default, which
+    //   is not a configuration — it is a bet that the NDK never satisfies a
+    //   probe we did not want satisfied. That is the same hazard the darwin
+    //   half hit with `ao_avfoundation` (ARCHITECTURE §11), closed on both
+    //   sides. FFmpeg shares 123 audio flags; the per-platform remainder is
+    //   build shape (static-into-one-`.so` here vs separate dylibs on Apple),
+    //   platform-native bits (`--enable-jni`, AudioToolbox) and the
+    //   `--disable-all` idiom, all declared intentional in the workshop
+    //   manifest.
+    //
+    //   What we GAINED, what iOS gained, and what went away:
+    //   • cover art — the 8 image decoders (bmp gif jpeg2000 jpegls mjpeg png
+    //     tiff webp) are now on BOTH. Eight, not the nine we used to pass:
+    //     `--enable-decoder=ljpeg` matches nothing in any FFmpeg, so it was
+    //     deleted here rather than copied there.
+    //   • TrueHD + DTS-HD on both (iOS demuxed `.thd` and then could not
+    //     decode it).
+    //   • zlib — added HERE (`--enable-zlib`, Matroska compressed track
+    //     headers); it was iOS-only. Free: the NDK sysroot ships `zlib.h` and
+    //     `libz.so` at API 21.
+    //   • iconv — added HERE, and this is the one that decides the direction
+    //     of the whole release. bionic has no `iconv(3)` until API 28 and this
+    //     fork builds at API 21 to keep Android 5–8 working, so the cheap fix
+    //     was to turn iconv OFF on iOS and call the two equal. That is exactly
+    //     the platform-capped compromise CLAUDE.md rejects, and it was
+    //     reversed: the fork now VENDORS GNU libiconv 1.19, built STATIC into
+    //     `libmpv.so` — no new `DT_NEEDED` (still `libm libandroid libdl
+    //     libc`), no new file to ship, LGPL-2.1-or-later like the artifact
+    //     itself. Both platforms now convert non-UTF-8 metadata: legacy
+    //     charset tags, ICY stream titles from Shoutcast/Icecast radio, CUE
+    //     sheets and playlists. Proof in the SHIPPED `.so`: libiconv's own
+    //     encoding-alias table (`CP1251`, `SHIFT_JIS`, `EUC-KR`, `KOI8-R`,
+    //     `BIG5`, …) is present where rnmedia.6 had none of it.
+    //   • mbedTLS 3.6.1 → 3.6.7 (current 3.6 LTS point release); iOS came from
+    //     3.4.1, so the two forks now terminate TLS with one stack.
+    //   • libxml2 REMOVED (see `libxml2Version` below).
+    //   • the five image ENCODERS removed. This is an audio engine; nothing
+    //     encodes an image. The decoders are the cover-art feature.
+    //   • dead flags removed on both (`--enable-decoder=ljpeg`,
+    //     `--enable-protocol=hls`, `--enable-protocol=srt` matched nothing in
+    //     FFmpeg 8.1.2 and were warned about on every build). The option
+    //     audit now resolves 190/190 component flags against 8.1.2 AND
+    //     against master, where it was 190/193.
+    //   • supply chain — every source is verified after fetching. Clones
+    //     assert the expected COMMIT (content-addressed, so a moved tag cannot
+    //     change what a SHA resolves to) and libiconv, the one real tarball,
+    //     is `sha256sum -c`'d. `media-kit-android-helper` had been pinned off
+    //     the moving `main` branch: two builds a week apart could package
+    //     different helper code with no version change anywhere.
+    //
+    //   Cost: arm64-v8a jar 3 885 723 → 4 466 123 bytes (+14.9 %); the other
+    //   three ABIs +15.8 % to +17.3 % (armeabi-v7a 3 662 342 → 4 296 782,
+    //   x86 3 897 370 → 4 553 602, x86_64 3 978 033 → 4 608 220). That is
+    //   libiconv plus zlib, and it stacks on top of rnmedia.5's +27 %; both
+    //   feed the size work tracked as #30.
+    //
+    //   AND THE INCIDENT, recorded because the lesson is a release-gate rule:
+    //   four intermediate commits on `rn-media-hls` reported GREEN CI while
+    //   producing no engine at all. `bundle.sh` had no `set -e`, so when mpv
+    //   failed to configure the `libmpv.so` copy failed too, `zip` packed what
+    //   was left, and the job exited 0 — 480 KB artifacts where a real build
+    //   is ~15 MB, and nothing was looking at that number. Now guarded three
+    //   ways: `set -euo pipefail`, a per-jar assertion that `lib/<abi>/
+    //   libmpv.so` is actually present, and an independent size check in the
+    //   workflow itself. A green checkmark is not an artifact (ARCHITECTURE →
+    //   Platform truths, 2026-08-12).
+    //
+    //   Flags, pins and patches are now GENERATED from
+    //   afkcodes/rn-media-engine (`manifest/flags.json`, `manifest/engine.json`,
+    //   `patches/`) — edited THERE, never in the fork. `workshop sync --check`
+    //   fails that repo's CI if this fork drifts, and `workshop
+    //   verify-artifacts` is the cross-platform gate that reads the released
+    //   binaries rather than the build logs.
+    release   : 'v1.1.9-rnmedia.7',
     // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
     flavor    : 'default',
     // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
@@ -178,28 +263,53 @@ ext.libmpv = [
     // to read BEHIND. Same rule as ffmpegPinNote: no apostrophes, the watcher
     // parses this block with a single-quoted-value regex.
     libplaceboPinNote: 'not a lag: 6.338.2 is exactly mpv 0.41 declared minimum, and 7.x drops symbols mpv 0.41 csputils.h still references under mobile cross-files. Revisit when an mpv release is itself built against the 7.x API.',
-    // The two remaining engine sub-dependencies. Both are FFmpeg dependencies
-    // (`dep_ffmpeg=(libxml2 mbedtls)` in the fork build scripts), statically
-    // linked into libmpv.so, and until now they existed here only as prose.
-    // Machine-readable so scripts/check-upstream.mjs can compare them and, more
-    // to the point, so a divergence from the iOS pin is visible: these two are
-    // the engine pieces the two forks do NOT currently agree on (iOS ships
-    // mbedTLS 3.4.1 / libxml2 2.11.5).
+    // The remaining engine sub-dependencies. Machine-readable so
+    // scripts/check-upstream.mjs can compare them against upstream and against
+    // the iOS pin — a fork-to-fork disagreement is itself a finding, because
+    // CLAUDE.md makes parity a gate. As of rnmedia.7 there is no disagreement
+    // left: both forks run mbedTLS 3.6.7 and neither ships libxml2.
     //
     // Values are the fork build scripts own, at the pinned tag
-    // (buildscripts/include/depinfo.sh → v_mbedtls, v_libxml2 at
-    // v1.1.9-rnmedia.6). mbedTLS is additionally proven in the SHIPPED jar:
-    // the string `Mbed TLS 3.6.1` is present in arm64-v8a/libmpv.so. libxml2
-    // keeps no version string through the static link, so depinfo.sh at the tag
-    // is the only source for it.
-    mbedtlsVersion: '3.6.1',
-    libxml2Version: '2.10.3',
+    // (buildscripts/include/depinfo.sh → v_mbedtls at v1.1.9-rnmedia.7), and
+    // are generated from afkcodes/rn-media-engine `manifest/engine.json`.
+    // mbedTLS is additionally proven in the SHIPPED jar: the string
+    // `Mbed TLS 3.6.7` is present in arm64-v8a/libmpv.so.
+    mbedtlsVersion: '3.6.7',
+    // Read by scripts/check-upstream.mjs and printed verbatim next to the row.
+    // No apostrophes (single-quoted-value regex).
+    mbedtlsPinNote: 'top of the 3.6 LTS line by choice: 4.x is a new major built around the PSA-crypto-only API, and whether FFmpeg 8.1.2 mbedTLS TLS backend builds against it is UNVERIFIED as of 2026-08-12 - evaluate 4.x only with a compile proof, not a version bump.',
+    // 'none' = NOT SHIPPED, and it is a value rather than a deleted line on
+    // purpose: absence has to be stated, or a reader cannot tell "we removed
+    // it" from "nobody recorded it". libxml2 was a FFmpeg dependency here
+    // (`--enable-libxml2`), and FFmpeg reaches it from exactly one place: the
+    // DASH demuxer. Neither fork has ever enabled that demuxer, so this
+    // artifact was linking an XML parser nothing could reach — an attack
+    // surface and ~1 MB with no feature behind it. Removed in rnmedia.7 rather
+    // than aligned: the iOS audio variant dropped it in the same lockstep
+    // release (the darwin fork still pins 2.15.3, but only inside the VIDEO
+    // variant we do not build), so both AUDIO artifacts now agree — no
+    // libxml2, no DASH. If DASH is ever wanted, both platforms get the demuxer
+    // AND libxml2 together, and this field goes back to a version.
+    // scripts/check-upstream.mjs treats 'none' as "component not shipped": the
+    // row prints Ours='not shipped' with status 'info', does no upstream
+    // lookup for that platform, and is never counted as behind/unknown — but
+    // 'none' on ONE side while the other carries a version is still printed as
+    // a divergence, loudly.
+    libxml2Version: 'none',
+    // Vendored GNU libiconv, static inside libmpv.so — Android-only BY ROUTE,
+    // not by capability: Apple's libc already provides iconv and bionic does
+    // not until API 28, while this fork builds at API 21 to keep Android 5–8
+    // working. See the rnmedia.7 note above for why vendoring rather than
+    // disabling on iOS was the only acceptable direction. Not read by
+    // check-upstream.mjs (GNU ships tarballs on ftp.gnu.org, with no release
+    // feed to poll); recorded here because it is inside the artifact we ship.
+    libiconvVersion: '1.19',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
-        'arm64-v8a'  : 'b59aebc9420680985fa661751fa1ed597323195d93adeeba56bae3302ec2d42e',
-        'armeabi-v7a': '0ceac3c4726eccbb5efc34f26aecc20d077fe591a89ad986214a6fdcf70bd7f7',
-        'x86'        : '8106ef430cca1230377e512d4190bd67150efbdd8af950def5a99eea0be9643a',
-        'x86_64'     : 'a924a82d430e7f0bc2e19c88a14fa27d2d6ab71cf70fb23b7eda1631c47aa186',
+        'arm64-v8a'  : '07beb7ba49d1b3f872eadf2c9a5a665e17ea55c5ac2c5ee10aaa13fdd927b59f',
+        'armeabi-v7a': '1b144ab0041aabae7be58245530f3411f8e3c8d9210ae03cb89e091c705045ef',
+        'x86'        : 'f8033e18a50dffc1a21347bbbc5b7e9bd8140e1443d9b098069c95391424a4bf',
+        'x86_64'     : '0d27b5ecce296f1c86e2095330163004d34a2e1f3679b8f9964b0e036be6c45b',
     ],
 ]
 

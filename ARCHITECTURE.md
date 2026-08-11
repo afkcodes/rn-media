@@ -121,8 +121,8 @@ timelines unseekable and dropped the scrubber).
 ### 11. Binaries: pinned, forked, LGPL, dynamically linked
 Prebuilt libmpv comes from our forks of media-kit's build repos, and as of
 2026-08-11 **both platforms ship the same engine, from the same sources, for the
-first time**: `afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.5` and
-`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.4`, both mpv **0.41.0**
+first time**: `afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.7` and
+`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.6`, both mpv **0.41.0**
 (`MPV_CLIENT_API_VERSION` 2.5), FFmpeg **8.1.2**, libplacebo **6.338.2**. Each is
 pinned by exact tag + SHA-256 (hard build failure on mismatch) and cached for
 offline builds; the repo owner is itself a pin field on both platforms, so
@@ -263,6 +263,48 @@ device slice went 6 811 280 → 8 048 768 bytes (+18.2 %), and `Mpv.framework`
 alone 1 856 352 → 2 675 912 (+44 %) because libplacebo now lives inside it. That
 is a real regression against §1's "~3 MB/ABI" framing, accepted deliberately as
 the price of currency, and it is the number to attack next.
+
+**The parity release, 2026-08-12** — Android `v1.1.9-rnmedia.7` (`4200e83`) and
+iOS `v0.7.2-rnmedia.6` (`96334d4`), cut in lockstep because the iconv work spans
+both forks. Same engine as rnmedia.5/.4 (mpv 0.41.0, FFmpeg 8.1.2, libplacebo
+6.338.2) and no new rn-media patch; what changed is that the two builds stop
+merely sharing a version number. mpv is now configured **exhaustively on both
+platforms — 103 options each, 101 identical, the only two differing being
+`audiotrack` vs `audiounit`** (Android used to pass 27 and leave ~95 at mpv's
+`auto` default, which is the same hazard as the `avfoundation` probe, unclosed);
+FFmpeg shares 123 audio flags, and every remaining difference is declared
+intentional in the workshop manifest. Capability was aligned **UP, never down**:
+iOS gained the 8 cover-art decoders and the TrueHD decoder (it had the demuxer,
+so `.thd` demuxed and then failed to decode — a gap shaped like a corrupt file);
+Android gained zlib (compressed Matroska heads) and **iconv**. iconv is the
+direction statement: bionic has no `iconv(3)` until API 28 and the fork builds at
+API 21 to keep Android 5–8 alive, so the cheap fix was to switch iconv off on
+iOS and call that parity — the platform-capped compromise CLAUDE.md rejects. It
+was reversed by **vendoring GNU libiconv 1.19 statically into `libmpv.so`**
+(LGPL-2.1-or-later, no new `DT_NEEDED`, no new file to ship), so both platforms
+now convert non-UTF-8 metadata, ICY stream titles, CUE sheets and playlists. The
+ceiling was broken, not lowered. Also: mbedTLS **3.6.7** on both (iOS came from
+3.4.1, Android from 3.6.1 — one TLS stack now); **libxml2 removed from both**,
+because FFmpeg reaches it only from the DASH demuxer neither fork enables, so the
+artifacts were linking an XML parser nothing could reach — both pin files record
+that absence as the value `none`, which `scripts/check-upstream.mjs` prints as an
+`info` row rather than drift; image *encoders* dropped (nothing encodes an
+image); dead flags dropped on both, taking the FFmpeg option audit to 190/190
+against 8.1.2 *and* master; iOS applies its **whole** patch series at `--fuzz=0
+--no-backup-if-mismatch`, closing the fuzz trap this section has warned about
+since the 0.41 bump; and every Android source fetch is now commit-asserted or
+checksummed. **The iOS Simulator AO fix ships here**: the simulator slice had no
+audio output compiled in at all (the meson line gated `-Daudiounit=enabled` on
+`os == ios` exactly), and with it patch 007 — found by the first run of the
+workshop's `verify-artifacts`, four generations after the fact. Cost: Android
+`arm64-v8a` jar 3 885 723 → 4 466 123 B (+14.9 %), the other three ABIs +15.8 %
+to +17.3 %, which is libiconv plus zlib stacking on rnmedia.5's +27 % and feeds
+the size work in #30; iOS `Avcodec` +27.8 % for the decoders, the simulator slice
++21 632 B for the AO, the device `Mpv` slice +384 B. Flags, pins and patches are
+now **canonically owned by `afkcodes/rn-media-engine`** and generated into the
+forks — `workshop sync --check` fails on fork drift, `workshop verify-artifacts`
+scores the RELEASED binaries (120 cells, 0 FAIL at this pair), and neither reads
+a build log.
 
 **The two forks are still not equally verified**: the Android build is confirmed
 playing HLS on a device and its PCM tap is confirmed feeding a visualizer on one;
@@ -819,6 +861,24 @@ build is how you conclude the wrong thing about where the ceiling is.
   `-Daudiounit=enabled`; at meson's default `auto` the probe would have failed
   identically and the build would have SUCCEEDED with no audio output in it. Link
   flags meant for one artifact belong on that artifact's target.
+- **A green CI checkmark is not an artifact** (2026-08-12). Four intermediate
+  commits on the Android fork's `rn-media-hls` branch reported a green build
+  while producing no engine at all: `bundle.sh` had no `set -e`, so a failed mpv
+  configure left the `libmpv.so` copy failing too, `zip` packed whatever was on
+  disk, and the job exited 0 with 480 KB jars where a real build is ~15 MB.
+  Nothing in the pipeline was reading that number, so the only signal anyone had
+  was the exit code, and the exit code was lying. Guarded three ways now:
+  `set -euo pipefail` in the bundler, a per-jar assertion that
+  `lib/<abi>/libmpv.so` is actually present, and an independent size check in the
+  workflow itself. **The rule: a release gate asserts artifact CONTENT and SIZE,
+  never an exit code.** This is the same lesson as "verify flags in the shipped
+  artifact, never the build log", escalated one level — there the log was merely
+  uninformative, here the *job status* was actively reassuring. Cross-platform
+  enforcement is `workshop verify-artifacts` in `afkcodes/rn-media-engine`, which
+  downloads the RELEASED assets of both forks and scores every slice against
+  every category (12 x 10 = 120 cells at the rnmedia.7/.6 pair, 0 FAIL); its very
+  first run is what found the iOS simulator slice shipping with no audio output
+  compiled in, four generations after the fact.
 - **generator scaffolds contain load-bearing "dead code"**: the ReactPackage
   class is the only trigger of `System.loadLibrary` — deleting it fails only
   at runtime.

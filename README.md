@@ -498,7 +498,7 @@ pattern that satisfies the relink obligation. Ship your app's licenses screen
 with the mpv/FFmpeg notices.
 
 Both binaries come from our public forks of media-kit's build scripts —
-[`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.5)
+[`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.7)
 and [`libmpv-darwin-build`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.4)
 — both mpv 0.41.0 / FFmpeg 8.1.2, so the two platforms run one engine. The delta
 versus upstream is additive ffmpeg configure flags (the `hls`/`mpegts` demuxers,

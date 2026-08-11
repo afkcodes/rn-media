@@ -9,8 +9,8 @@
 
 `v0.41.0` is the mpv version the pinned prebuilt binaries are built from — see
 `v_mpv` in
-[`buildscripts/include/depinfo.sh`](https://github.com/afkcodes/libmpv-android-audio-build/blob/v1.1.9-rnmedia.5/buildscripts/include/depinfo.sh)
-of `afkcodes/libmpv-android-audio-build` at tag `v1.1.9-rnmedia.5`. Keep this tag in sync
+[`buildscripts/include/depinfo.sh`](https://github.com/afkcodes/libmpv-android-audio-build/blob/v1.1.9-rnmedia.7/buildscripts/include/depinfo.sh)
+of `afkcodes/libmpv-android-audio-build` at tag `v1.1.9-rnmedia.7` (headers byte-identical since v1.1.9-rnmedia.5 — mpv 0.41.0 throughout). Keep this tag in sync
 with the pinned release in `packages/player/android/libmpv.gradle` (Android) and
 the iOS equivalent.
 
@@ -63,7 +63,7 @@ the AAR), which is what LGPL relinking requires.
 
 The prebuilt `libmpv.so` additionally exports `mpv_lavc_set_java_vm(void *vm)`,
 added by our fork's
-[`002.lavc_set_java_vm.patch`](https://github.com/afkcodes/libmpv-android-audio-build/blob/v1.1.9-rnmedia.5/buildscripts/patches/mpv/002.lavc_set_java_vm.patch)
+[`002.lavc_set_java_vm.patch`](https://github.com/afkcodes/libmpv-android-audio-build/blob/v1.1.9-rnmedia.7/buildscripts/patches/mpv/002.lavc_set_java_vm.patch)
 (originally media-kit's, rebased onto 0.41 — mpv 0.37 deleted `libmpv/mpv.def`,
 so the export now rides on the `MPV_EXPORT` attribute alone).
 It is **not** part of upstream `client.h`, so it is not patched into this
