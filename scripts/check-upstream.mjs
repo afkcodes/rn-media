@@ -35,6 +35,15 @@
  *     not map onto an upstream version, so they are context rows, never drift.
  *     What is compared for the engine is the mpv/ffmpeg version embedded in
  *     the binaries, which the pin files record as metadata.
+ *   - The engine is more than mpv+FFmpeg: mbedTLS, libplacebo and libxml2 are
+ *     compiled into the same artifact, so they get rows too, once per platform.
+ *     They are per-fork build-script choices, which means the two platforms CAN
+ *     disagree — and a disagreement is itself a finding (CLAUDE.md makes parity
+ *     a gate), so it is printed loudly rather than resolved silently.
+ *   - The engine's richer source of truth is the workshop repo
+ *     (afkcodes/rn-media-engine, manifest/engine.json). This watcher does not
+ *     read it, on purpose: it parses the pin files in THIS repo, so it reports
+ *     what rn-media actually ships. It is the safety net, not the manifest.
  */
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -450,6 +459,118 @@ async function fetchRepoLatestRelease(/** @type {string} */ repo) {
   return { version: String(r.data.tag_name ?? ''), date: isoDate(r.data.published_at) };
 }
 
+// ── engine sub-dependencies (mbedTLS, libplacebo, libxml2) ───────────────────
+//
+// None of these three publishes a usable "latest release" endpoint for our
+// purposes, so all three are resolved from the TAG list and sorted here:
+//   - mbedTLS's `/releases/latest` exists but names the tag `mbedtls-4.2.0`
+//     while the tag list uses `v4.2.0`, and it cannot answer the question that
+//     actually matters for a pin on an LTS branch ("what is newest on 3.x?").
+//   - libplacebo publishes tags, not releases.
+//   - libxml2 does not live on GitHub at all; it is GNOME GitLab.
+// Same reasoning as fetchFfmpegLines: tag order from an API is never the order
+// you want, so ordering is always our job.
+
+/** Tags that name a plain stable version. `v3.6.7`, `mbedtls-4.2.0`, `2.10.3`
+ *  match; `v6.337.0-rc1`, `polarssl-1.1.0-rc0`, `yotta-2.3.2` do not. */
+const STABLE_TAG = /^(?:v|mbedtls-)?(\d+(?:\.\d+){1,3})$/;
+
+/**
+ * All tags of a GitHub repo, paged.
+ * @param {string} repo @param {number} [maxPages] mbedTLS is 3 pages of 100
+ *   today (polarssl-era tags included); 5 leaves room without spending the
+ *   unauthenticated 60/h rate limit on a repo that will never need it.
+ * @returns {Promise<{ tags: { name: string, commitUrl: string }[] } | { error: string }>}
+ */
+async function fetchGithubTags(repo, maxPages = 5) {
+  /** @type {{ name: string, commitUrl: string }[]} */
+  const tags = [];
+  let url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+  for (let page = 0; page < maxPages && url; page++) {
+    const r = await gh(url);
+    if (!r.ok) return { error: r.error };
+    if (!Array.isArray(r.data)) return { error: 'unexpected tags payload' };
+    for (const t of r.data) tags.push({ name: String(t.name), commitUrl: t?.commit?.url ?? '' });
+    const link = r.headers.get('link') ?? '';
+    const next = /<([^>]+)>;\s*rel="next"/.exec(link);
+    url = next ? next[1] : '';
+  }
+  return { tags };
+}
+
+/**
+ * All tags of a GitLab project. Unlike GitHub's, this payload carries the
+ * commit date inline, so no follow-up request is needed for the release date.
+ * @param {string} host @param {string} project e.g. `GNOME/libxml2`
+ * @returns {Promise<{ tags: { name: string, date: string }[] } | { error: string }>}
+ */
+async function fetchGitlabTags(host, project) {
+  const r = await getJson(`https://${host}/api/v4/projects/${encodeURIComponent(project)}/repository/tags?per_page=100`);
+  if (!r.ok) return r;
+  if (!Array.isArray(r.data)) return { error: 'unexpected tags payload' };
+  return { tags: r.data.map((/** @type {any} */ t) => ({ name: String(t.name), date: isoDate(t?.commit?.committed_date) })) };
+}
+
+/**
+ * Highest stable tag, plus the highest stable tag on OUR OWN major line.
+ *
+ * The line matters because "behind" is not always the whole story for a
+ * sub-dependency: mbedTLS 3.6 is a maintained LTS branch while 4.x is a new
+ * API generation, so `3.6.1 → 3.6.7` and `3.6.1 → 4.2.0` are two different
+ * findings and the row should be able to say both. The line note is emitted
+ * only when it differs from the overall latest, so a component whose major
+ * never changes (libxml2 has been 2.x since forever) does not print noise.
+ *
+ * @param {{ name: string, date?: string }[]} tags @param {string|null|undefined} ours
+ */
+function pickLatestTag(tags, ours) {
+  /** @type {{ name: string, version: string, date?: string }[]} */
+  const stable = [];
+  for (const t of tags) {
+    const m = STABLE_TAG.exec(t.name);
+    if (m) stable.push({ ...t, version: m[1] });
+  }
+  if (stable.length === 0) return { error: 'no stable version tags found' };
+  const best = (/** @type {typeof stable} */ list) =>
+    list.reduce((a, b) => (compareVersions(b.version, a.version) > 0 ? b : a));
+  const latest = best(stable);
+  let line = null;
+  if (ours) {
+    const major = parseInt(String(ours).replace(/^[nv]/, ''), 10);
+    const sameLine = stable.filter((t) => parseInt(t.version, 10) === major);
+    if (sameLine.length) line = best(sameLine);
+  }
+  return { latest, line: line && compareVersions(line.version, latest.version) !== 0 ? line : null };
+}
+
+/**
+ * A GitHub-hosted engine sub-dependency. One extra request resolves the
+ * winning tag's date; a failure there costs the date, never the comparison.
+ * @param {string} repo @param {string|null|undefined} ours
+ */
+async function fetchGithubTagLatest(repo, ours) {
+  const r = await fetchGithubTags(repo);
+  if ('error' in r) return { error: r.error };
+  const picked = pickLatestTag(r.tags, ours);
+  if ('error' in picked) return { error: picked.error };
+  const t = /** @type {{ name: string, version: string, commitUrl?: string }} */ (picked.latest);
+  let date = '';
+  if (t.commitUrl) {
+    const c = await gh(t.commitUrl);
+    if (c.ok) date = isoDate(c.data?.commit?.committer?.date ?? c.data?.commit?.author?.date);
+  }
+  return { version: t.version, date, line: picked.line };
+}
+
+/** libxml2 lives on GNOME GitLab; there is no upstream GitHub repo, only mirrors. */
+async function fetchLibxml2Latest(/** @type {string|null|undefined} */ ours) {
+  const r = await fetchGitlabTags('gitlab.gnome.org', 'GNOME/libxml2');
+  if ('error' in r) return { error: r.error };
+  const picked = pickLatestTag(r.tags, ours);
+  if ('error' in picked) return { error: picked.error };
+  return { version: picked.latest.version, date: picked.latest.date ?? '', line: picked.line };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Row building
 // ─────────────────────────────────────────────────────────────────────────────
@@ -504,7 +625,25 @@ async function collect() {
   const nitrogen = collapseNpmPin(pkgs, 'nitrogen');
   const rn = collapseNpmPin(pkgs, 'react-native');
 
-  const [mpv, ffmpeg, media3, nitroRuntimeLatest, nitrogenLatest, rnLatest, androidBase, iosBase] = await Promise.all([
+  // Line hint for the sub-dependency resolvers: the LOWER of the two platform
+  // pins, for the same reason collapseNpmPin reports the lowest npm pin as
+  // "ours" — if either fork lags, we lag.
+  const lowerPin = (/** @type {string|undefined} */ a, /** @type {string|undefined} */ b) =>
+    a && b ? (compareVersions(a, b) <= 0 ? a : b) : a || b;
+
+  const [
+    mpv,
+    ffmpeg,
+    media3,
+    nitroRuntimeLatest,
+    nitrogenLatest,
+    rnLatest,
+    androidBase,
+    iosBase,
+    mbedtls,
+    libplacebo,
+    libxml2,
+  ] = await Promise.all([
     fetchMpvLatest(),
     fetchFfmpegLines(),
     fetchMedia3Latest(),
@@ -513,10 +652,30 @@ async function collect() {
     fetchNpmLatest('react-native'),
     fetchRepoLatestRelease('media-kit/libmpv-android-audio-build'),
     fetchRepoLatestRelease('media-kit/libmpv-darwin-build'),
+    fetchGithubTagLatest('Mbed-TLS/mbedtls', lowerPin(android.values.mbedtlsVersion, ios.values.LIBMPV_MBEDTLS_VERSION)),
+    // haasn is libplacebo's own author and upstream's own mirror; the darwin
+    // fork fetches its tarballs from there too, because code.videolan.org
+    // refuses connections from some networks.
+    fetchGithubTagLatest('haasn/libplacebo', lowerPin(android.values.libplaceboVersion, ios.values.LIBMPV_LIBPLACEBO_VERSION)),
+    fetchLibxml2Latest(lowerPin(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION)),
   ]);
 
   const androidSrc = android.error ? '' : `${rel(android.file)}:${android.lines.mpvVersion ?? android.blockStartLine}`;
   const iosSrc = ios.error ? '' : `${rel(ios.file)}:${ios.lines.LIBMPV_MPV_VERSION ?? 1}`;
+  /** Per-field source location, so a row points at the line it was read from. */
+  const androidField = (/** @type {string} */ k) => (android.error ? '' : `${rel(android.file)}:${android.lines[k] ?? android.blockStartLine}`);
+  const iosField = (/** @type {string} */ k) => (ios.error ? '' : `${rel(ios.file)}:${ios.lines[k] ?? 1}`);
+
+  /**
+   * The engine is ONE engine — CLAUDE.md makes platform parity a GATE, not a
+   * preference — so the two forks disagreeing about what is inside them is a
+   * finding in its own right, exactly like collapseNpmPin's distinct-set check
+   * one axis over. Compared with compareVersions rather than by string, because
+   * the FFmpeg pins spell the same version two ways (`n8.1.2` vs `8.1.2`) and
+   * that is formatting, not drift.
+   * @param {string|undefined} a Android pin @param {string|undefined} b iOS pin
+   */
+  const divergence = (a, b) => (a && b && compareVersions(a, b) !== 0 ? `DIVERGENT across platforms: Android ${a}, iOS ${b}` : '');
 
   /** @type {Row[]} */
   const rows = [];
@@ -531,7 +690,11 @@ async function collect() {
       latest: mpv.version,
       latestError: mpv.error,
       released: mpv.date,
-      notes: [androidSrc && `pin: ${androidSrc}`, 'embedded in our fork build; bumping means rebasing the fork'],
+      notes: [
+        androidSrc && `pin: ${androidSrc}`,
+        divergence(android.values.mpvVersion, ios.values.LIBMPV_MPV_VERSION),
+        'embedded in our fork build; bumping means rebasing the fork',
+      ],
     }),
   );
   rows.push(
@@ -542,7 +705,7 @@ async function collect() {
       latest: mpv.version,
       latestError: mpv.error,
       released: mpv.date,
-      notes: [iosSrc && `pin: ${iosSrc}`],
+      notes: [iosSrc && `pin: ${iosSrc}`, divergence(android.values.mpvVersion, ios.values.LIBMPV_MPV_VERSION)],
     }),
   );
 
@@ -587,8 +750,113 @@ async function collect() {
         notes: [
           src && `pin: ${src}`,
           pinNote && `PINNED DELIBERATELY: ${pinNote}`,
+          divergence(android.values.ffmpegVersion, ios.values.LIBMPV_FFMPEG_VERSION),
           ffPrevNote,
           'a fresh FFmpeg major can be days old — read the line ages before treating this as urgent',
+        ],
+      }),
+    );
+  }
+
+  // ── engine sub-dependencies: mbedTLS, libplacebo, libxml2.
+  //
+  //    These are not "extras": they are compiled INTO the artifact we ship, so
+  //    a CVE in any of them is a CVE in rn-media. Until now only mpv and FFmpeg
+  //    were watched, which meant the engine's own TLS stack could go stale in
+  //    total silence.
+  //
+  //    Two things make these rows different from mpv/FFmpeg:
+  //      1. They are per-fork build-script choices, so the two platforms CAN
+  //         disagree — and today they do. That is what `divergence()` prints.
+  //      2. Being behind can be correct (libplacebo 7.x does not build against
+  //         mpv 0.41), so, exactly like FFmpeg, each pin file may carry a
+  //         free-text rationale that is surfaced verbatim.
+  //
+  //    The richer source of truth for the engine as a whole is the workshop
+  //    repo (afkcodes/rn-media-engine, manifest/engine.json). This watcher
+  //    deliberately does NOT read it: it parses the pin files that are actually
+  //    in THIS repo, so it reports what rn-media ships rather than what the
+  //    workshop intends. It is the safety net, not the manifest.
+  for (const sub of /** @type {{ component: string, ours: string|undefined, oursError: string|null, src: string, pinNote: string|undefined, upstream: any, diverge: string, extra?: string }[]} */ ([
+    {
+      component: 'mbedTLS (Android engine)',
+      ours: android.values.mbedtlsVersion,
+      oursError: android.error ?? (android.values.mbedtlsVersion ? null : 'no `mbedtlsVersion` in ext.libmpv'),
+      src: androidField('mbedtlsVersion'),
+      pinNote: android.values.mbedtlsPinNote,
+      upstream: mbedtls,
+      diverge: divergence(android.values.mbedtlsVersion, ios.values.LIBMPV_MBEDTLS_VERSION),
+      extra: 'FFmpeg TLS backend, statically linked into the engine — a CVE here is a CVE in ours',
+    },
+    {
+      component: 'mbedTLS (iOS engine)',
+      ours: ios.values.LIBMPV_MBEDTLS_VERSION,
+      oursError: ios.error ?? (ios.values.LIBMPV_MBEDTLS_VERSION ? null : 'no LIBMPV_MBEDTLS_VERSION'),
+      src: iosField('LIBMPV_MBEDTLS_VERSION'),
+      pinNote: ios.values.LIBMPV_MBEDTLS_PIN_NOTE,
+      upstream: mbedtls,
+      diverge: divergence(android.values.mbedtlsVersion, ios.values.LIBMPV_MBEDTLS_VERSION),
+      extra: 'ships as the Mbedcrypto/Mbedtls/Mbedx509 frameworks in the xcframework bundle',
+    },
+    {
+      component: 'libplacebo (Android engine)',
+      ours: android.values.libplaceboVersion,
+      oursError: android.error ?? (android.values.libplaceboVersion ? null : 'no `libplaceboVersion` in ext.libmpv'),
+      src: androidField('libplaceboVersion'),
+      pinNote: android.values.libplaceboPinNote,
+      upstream: libplacebo,
+      diverge: divergence(android.values.libplaceboVersion, ios.values.LIBMPV_LIBPLACEBO_VERSION),
+      extra: 'MANDATORY since mpv 0.37 and reached from non-video code, so it cannot be stripped',
+    },
+    {
+      component: 'libplacebo (iOS engine)',
+      ours: ios.values.LIBMPV_LIBPLACEBO_VERSION,
+      oursError: ios.error ?? (ios.values.LIBMPV_LIBPLACEBO_VERSION ? null : 'no LIBMPV_LIBPLACEBO_VERSION'),
+      src: iosField('LIBMPV_LIBPLACEBO_VERSION'),
+      pinNote: ios.values.LIBMPV_LIBPLACEBO_PIN_NOTE,
+      upstream: libplacebo,
+      diverge: divergence(android.values.libplaceboVersion, ios.values.LIBMPV_LIBPLACEBO_VERSION),
+      extra: 'static inside Mpv.framework — bumping it does not change the framework count',
+    },
+    {
+      component: 'libxml2 (Android engine)',
+      ours: android.values.libxml2Version,
+      oursError: android.error ?? (android.values.libxml2Version ? null : 'no `libxml2Version` in ext.libmpv'),
+      src: androidField('libxml2Version'),
+      pinNote: android.values.libxml2PinNote,
+      upstream: libxml2,
+      diverge: divergence(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION),
+      extra: 'FFmpeg --enable-libxml2 (DASH/HLS manifest parsing); upstream is GNOME GitLab, not GitHub',
+    },
+    {
+      component: 'libxml2 (iOS engine)',
+      ours: ios.values.LIBMPV_LIBXML2_VERSION,
+      oursError: ios.error ?? (ios.values.LIBMPV_LIBXML2_VERSION ? null : 'no LIBMPV_LIBXML2_VERSION'),
+      src: iosField('LIBMPV_LIBXML2_VERSION'),
+      pinNote: ios.values.LIBMPV_LIBXML2_PIN_NOTE,
+      upstream: libxml2,
+      diverge: divergence(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION),
+      extra: 'static inside Avformat',
+    },
+  ])) {
+    const up = sub.upstream;
+    const line = 'error' in up ? null : up.line;
+    rows.push(
+      compareRow({
+        component: sub.component,
+        ours: sub.ours,
+        oursError: sub.oursError,
+        latest: 'error' in up ? null : up.version,
+        latestError: 'error' in up ? up.error : null,
+        released: 'error' in up ? '' : up.date,
+        notes: [
+          sub.src && `pin: ${sub.src}`,
+          sub.pinNote && `PINNED DELIBERATELY: ${sub.pinNote}`,
+          sub.diverge,
+          // An LTS/maintenance branch is a real answer to "are we behind":
+          // mbedTLS 3.6 is maintained while 4.x is a new API generation.
+          line ? `newest on our own ${String(sub.ours ?? '').split('.')[0]}.x line: ${line.version}${line.date ? ` (${line.date})` : ''}` : '',
+          sub.extra,
         ],
       }),
     );
