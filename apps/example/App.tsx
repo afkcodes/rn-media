@@ -1253,6 +1253,15 @@ function VisualizerStats({
  *    itself, so there is no `RECORD_AUDIO` in this app's manifest and nothing to
  *    prompt for — which is the practical difference between tapping the engine
  *    and tapping the platform.
+ * 3. **It switches itself off when nobody can see it.** Lock the screen with
+ *    the visualizer running and the audio keeps playing while the tap, the
+ *    sampler thread and the 60 Hz re-render all stop — `useVisualizer`'s
+ *    `pauseWhenInactive` (on by default) drops the subscription on `AppState`
+ *    and takes it back on return. This app passes nothing for it; the log line
+ *    below is only so the transition is visible in logcat. That default matters
+ *    because the frames are **native** callbacks: unlike a JS timer they do not
+ *    freeze in the background, so an ungated visualizer would spend a locked
+ *    screen rendering to nobody.
  */
 function Visualizer({
   player,
@@ -1288,6 +1297,18 @@ function Visualizer({
   React.useEffect(() => {
     if (error !== undefined) setOn(false);
   }, [error]);
+
+  // One line per foreground transition while the visualizer is switched on, so
+  // a lock/unlock soak can be read straight off logcat. Cheap by construction:
+  // `active` changes when the subscription does, which is twice per lock cycle.
+  React.useEffect(() => {
+    if (!on) return;
+    console.log(
+      `[example] visualizer: ${
+        active ? 'subscribed' : 'paused — app is not in the foreground'
+      }`,
+    );
+  }, [on, active]);
 
   const capabilities = player?.visualizer.capabilities;
   const supported = capabilities?.fft === true;
