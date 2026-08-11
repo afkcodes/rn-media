@@ -1,8 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
+import { AppState, type AppStateStatus } from 'react-native'
 import type { Player } from '../player'
 import type { PlayerError } from '../errors'
 import { toVisualizerError } from '../errors'
 import type { VisualizerFrame, VisualizerOptions } from '../visualizer'
+
+/**
+ * Whether an `AppState` value means there is a screen that can actually show a
+ * frame.
+ *
+ * `'unknown'` — and the `null` the Android implementation really holds before
+ * its first lifecycle callback, which the type does not admit to — deliberately
+ * count as foreground. A hook that is mounting has a UI, and refusing to start
+ * on an indeterminate value would strand the visualizer until the next
+ * `AppState` change, which on Android is the *next* time the user leaves.
+ */
+function isForeground(status: AppStateStatus | null | undefined): boolean {
+  return status !== 'background' && status !== 'inactive'
+}
 
 /** What {@link useVisualizer} returns. */
 export interface UseVisualizerResult {
@@ -25,7 +40,13 @@ export interface UseVisualizerResult {
    * needs none, on either platform.
    */
   readonly error: PlayerError | undefined
-  /** Whether a subscription is currently live. */
+  /**
+   * Whether a subscription is currently live.
+   *
+   * This is `false` while the app is not in the foreground (unless
+   * `pauseWhenInactive` was turned off) — a paused visualizer is genuinely not
+   * subscribed, not merely ignored.
+   */
   readonly active: boolean
 }
 
@@ -39,6 +60,9 @@ export interface UseVisualizerResult {
  * @param options - Per-subscriber tuning; see {@link VisualizerOptions}.
  * @param enabled - Set `false` to drop the subscription without unmounting —
  * e.g. while the visualizer is off screen. Defaults to `true`.
+ * @param pauseWhenInactive - Drop the subscription whenever the app leaves the
+ * foreground, and take it back when it returns. **Defaults to `true`**, and
+ * should stay that way; see below.
  * @returns The newest {@link VisualizerFrame}, plus any typed error.
  *
  * @remarks
@@ -52,6 +76,32 @@ export interface UseVisualizerResult {
  * Unsubscribing is what releases the platform effect, so unmounting (or
  * flipping `enabled` to `false`) genuinely returns the audio framework to its
  * idle state — there is no hidden capture left running.
+ *
+ * **Why `pauseWhenInactive` defaults to on.** The frames are native callbacks,
+ * so unlike a JS timer they do *not* freeze when the app goes to the
+ * background — the sampler thread keeps delivering and this hook keeps calling
+ * `setState`, at up to 60 Hz, against a display that cannot present anything.
+ * Left alone through a long screen-off that is tens of thousands of pointless
+ * renders and a matching amount of CPU and battery spent drawing to nobody, and
+ * the app is busy working through them at the moment the user unlocks. Pausing
+ * on `AppState` costs nothing while visible and removes the whole class of
+ * problem: because the native tap is *derived from* the listener set, dropping
+ * the subscription disarms mpv's ring and stops the sampler thread outright.
+ *
+ * **Audio is untouched by this.** Only the visual feed pauses; playback,
+ * the media session and everything else keep running in the background exactly
+ * as before.
+ *
+ * On resume the same `options` are used, so nothing has to be re-plumbed — but
+ * the subscription is a *new* one, which means smoothing, peak caps and
+ * auto-gain start from rest and {@link UseVisualizerResult.frame} is
+ * `undefined` for a frame or two. Bars come back up from zero rather than
+ * continuing mid-bounce.
+ *
+ * Set it to `false` only for a surface that is genuinely painting while
+ * inactive (a Live Activity, a widget, an external display). For a non-UI
+ * consumer, the escape hatch is `player.visualizer.subscribe()` directly: the
+ * imperative API is never `AppState`-gated, and never has been.
  *
  * @example
  * ```tsx
@@ -71,11 +121,15 @@ export interface UseVisualizerResult {
 export function useVisualizer(
   player: Player | undefined | null,
   options?: VisualizerOptions,
-  enabled = true
+  enabled = true,
+  pauseWhenInactive = true
 ): UseVisualizerResult {
   const [frame, setFrame] = useState<VisualizerFrame | undefined>(undefined)
   const [error, setError] = useState<PlayerError | undefined>(undefined)
   const [active, setActive] = useState(false)
+  const [foreground, setForeground] = useState(() =>
+    pauseWhenInactive ? isForeground(AppState.currentState) : true
+  )
 
   // Options are compared by value, not identity: callers overwhelmingly pass an
   // object literal, and keying the effect on identity would tear the native
@@ -85,7 +139,24 @@ export function useVisualizer(
   optionsRef.current = options
 
   useEffect(() => {
-    if (!player || player.destroyed || !enabled) {
+    if (!pauseWhenInactive) {
+      setForeground(true)
+      return
+    }
+    // Re-read instead of trusting the mount-time value: the app can leave the
+    // foreground between the first render and this effect, and that transition
+    // would otherwise be missed for the lifetime of the subscription.
+    setForeground(isForeground(AppState.currentState))
+    const subscription = AppState.addEventListener('change', (next) => {
+      setForeground(isForeground(next))
+    })
+    return () => subscription.remove()
+  }, [pauseWhenInactive])
+
+  const live = enabled && foreground
+
+  useEffect(() => {
+    if (!player || player.destroyed || !live) {
       setActive(false)
       return
     }
@@ -110,7 +181,7 @@ export function useVisualizer(
     }
     // `key` stands in for `options` by value; `optionsRef` carries the object.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [player, enabled, key])
+  }, [player, live, key])
 
   return { frame, error, active }
 }
