@@ -101,7 +101,21 @@ The native layer is implemented; §1's shapes were adjusted where Nitro forced i
   `profile`/`include` ordering is unsupported.
 - Deprecated mpv `idle` event is not forwarded; observe `core-idle` instead.
 
-## 3. TS public API (`packages/player/src/`)
+AS-BUILT ADDENDUM (2026-08-11): source resolution. Six methods on the spec —
+`installSourceResolver(timeoutMs)` / `uninstallSourceResolver()` /
+`setResolvedSource(logical, resolved, ttlMs)` / `clearResolvedSources()` /
+`completeResolution(logical, resolvedOrNull)` /
+`setResolutionRequestListener(cb: (request: SourceResolutionRequest) => void)`,
+where `SourceResolutionRequest` is `{ uri: string; entryId?: number }`.
+Deliberately a separate callback channel, NOT a new `MpvEventKind`: a
+core-blocking resolution request must not queue behind the event batch's
+one-in-flight back-pressure clock, and the enum stays clear of the JNI/macro
+traps above. Hook handling (mpv `on_load` + our fork's `on_prefetch_load`)
+lives on the existing event thread; cache hits are synchronous native lookups;
+the bounded play-time hold is `ResolutionGate` in `cpp/SourceResolution.hpp`
+(unit-tested host-side). Hooks are registered lazily on first install and can
+never be unregistered (mpv has no API for it) — an uninstalled resolver leaves
+a pass-through handler that continues immediately.
 
 ```ts
 const player = await Player.create({ /* typed options + raw mpv overrides */ });

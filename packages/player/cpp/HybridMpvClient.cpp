@@ -420,20 +420,60 @@ void VisualizerDelivery::deliver(rnmedia::AnalysedFrame&& frame) {
 }
 
 // ---------------------------------------------------------------------------
+// SourceResolutionDelivery
+// ---------------------------------------------------------------------------
+
+void SourceResolutionDelivery::setListener(const Listener& listener) {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _listener = listener;
+}
+
+void SourceResolutionDelivery::clearListener() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _listener = nullptr;
+}
+
+void SourceResolutionDelivery::deliver(const std::string& url, std::optional<std::int64_t> entryId) {
+  Listener listener;
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    listener = _listener;
+  }
+  if (!listener) {
+    // No listener means nobody can answer. Throwing is how the caller learns
+    // not to hold mpv's core open waiting for one.
+    throw std::runtime_error("no source-resolution listener");
+  }
+
+  SourceResolutionRequest request;
+  request.uri = url;
+  if (entryId.has_value()) {
+    // int64 -> double. mpv's playlist entry ids are a monotonic counter per
+    // core, so this is exact for any playlist a human could build.
+    request.entryId = static_cast<double>(*entryId);
+  }
+  listener(request);
+}
+
+// ---------------------------------------------------------------------------
 // HybridMpvClient
 // ---------------------------------------------------------------------------
 
 HybridMpvClient::HybridMpvClient()
     : HybridObject(TAG), _flusher(std::make_shared<MpvFlushCoordinator>()),
-      _pending(std::make_shared<PendingCommands>()), _visualizer(std::make_shared<VisualizerDelivery>()) {
-  // Captured by value: both are shared_ptrs, so the event thread can call them
-  // even while HybridMpvClient is being torn down.
+      _pending(std::make_shared<PendingCommands>()), _visualizer(std::make_shared<VisualizerDelivery>()),
+      _resolution(std::make_shared<SourceResolutionDelivery>()) {
+  // Captured by value: all three are shared_ptrs, so the event thread can call
+  // them even while HybridMpvClient is being torn down.
   auto flusher = _flusher;
   auto pending = _pending;
-  _client = std::make_unique<rnmedia::MpvClient>([flusher]() { flusher->onBatchReady(); },
-                                                 [pending](std::uint64_t replyId, int error) {
-                                                   pending->settle(replyId, error);
-                                                 });
+  auto resolution = _resolution;
+  _client = std::make_unique<rnmedia::MpvClient>(
+      [flusher]() { flusher->onBatchReady(); },
+      [pending](std::uint64_t replyId, int error) { pending->settle(replyId, error); },
+      [resolution](const std::string& url, std::optional<std::int64_t> entryId) {
+        resolution->deliver(url, entryId);
+      });
   _flusher->attach(_client.get());
 }
 
@@ -450,8 +490,12 @@ void HybridMpvClient::destroy() {
   }
   _visualizer->detach();
   if (_client != nullptr) {
+    // `MpvClient::destroy()` aborts the resolution gate *before* joining, so an
+    // event thread parked in a play-time hook hold is released rather than
+    // waited out. The listener is dropped afterwards, once nothing can call it.
     _client->destroy(); // joins the event thread; mpv teardown goes background
   }
+  _resolution->clearListener();
   _pending->rejectAll(std::make_exception_ptr(rnmedia::DisposedError("command")));
   _flusher->detach();
 }
@@ -546,6 +590,32 @@ void HybridMpvClient::stopVisualizer() {
 void HybridMpvClient::setVisualizerListener(
     const std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture&)>& onCapture) {
   _visualizer->setListener(onCapture);
+}
+
+void HybridMpvClient::setSourceResolutionListener(
+    const std::function<void(const SourceResolutionRequest&)>& onRequest) {
+  _resolution->setListener(onRequest);
+}
+
+void HybridMpvClient::installSourceResolver(double timeoutMs) {
+  _client->installSourceResolver(static_cast<std::int64_t>(timeoutMs));
+}
+
+void HybridMpvClient::uninstallSourceResolver() {
+  _client->uninstallSourceResolver();
+}
+
+void HybridMpvClient::setResolvedSource(const std::string& logical, const std::string& resolved, double ttlMs) {
+  _client->setResolvedSource(logical, resolved, static_cast<std::int64_t>(ttlMs));
+}
+
+void HybridMpvClient::clearResolvedSources() {
+  _client->clearResolvedSources();
+}
+
+void HybridMpvClient::completeResolution(const std::string& logical, const std::optional<std::string>& resolved,
+                                         double ttlMs) {
+  _client->completeResolution(logical, resolved, static_cast<std::int64_t>(ttlMs));
 }
 
 void HybridMpvClient::attachVideoOutput(uint64_t /* handle */) {

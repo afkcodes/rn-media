@@ -199,6 +199,25 @@ export function metadataByKeyProperty(key: string): string {
 }
 
 /**
+ * The property that yields the *logical* URI of the `index`-th playlist entry.
+ *
+ * mpv `input.rst`: "``playlist/N/filename`` — Filename of the Nth entry." It is
+ * the string that was passed to `loadfile`, unchanged: a load hook rewrites
+ * `stream-open-filename` on the way to the stream layer and never touches the
+ * playlist, so this stays the key a resolver's answer is cached under no matter
+ * how many times the entry has been resolved.
+ *
+ * Read on demand — two reads when the queue moves — rather than observed:
+ * playlist entries do not change under us, and observing `playlist` as a whole
+ * would deliver a node this library has no use for.
+ *
+ * @param index - 0-based playlist index, `< playlist-count`.
+ */
+export function playlistFilenameProperty(index: number): string {
+  return `playlist/${index}/filename`
+}
+
+/**
  * mpv's `volume` property is a percentage: `100` is unattenuated output.
  *
  * The public {@link PlayerState.volume} is normalised to `0..1`, so every

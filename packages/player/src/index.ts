@@ -22,6 +22,7 @@ export type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  SourceResolutionRequest,
   VisualizerCapture,
 } from './specs/mpv-client.nitro'
 
@@ -104,8 +105,19 @@ export {
   metadataByKeyProperty,
   metadataKeyProperty,
   metadataValueProperty,
+  playlistFilenameProperty,
 } from './properties'
 export type { ObservedProperty } from './properties'
+
+export {
+  DEFAULT_RESOLVER_TIMEOUT_MS,
+  DEFAULT_RESOLVER_TTL_MS,
+  SourceResolverController,
+} from './source-resolver'
+export type {
+  SourceResolver,
+  SourceResolverOptions,
+} from './source-resolver'
 
 export {
   createInitialState,

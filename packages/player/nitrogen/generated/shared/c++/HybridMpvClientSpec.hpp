@@ -19,6 +19,8 @@ namespace margelo::nitro::rnmediaplayer { enum class MpvFormat; }
 namespace margelo::nitro::rnmediaplayer { struct MpvEvent; }
 // Forward declaration of `VisualizerCapture` to properly resolve imports.
 namespace margelo::nitro::rnmediaplayer { struct VisualizerCapture; }
+// Forward declaration of `SourceResolutionRequest` to properly resolve imports.
+namespace margelo::nitro::rnmediaplayer { struct SourceResolutionRequest; }
 
 #include <string>
 #include <unordered_map>
@@ -29,6 +31,7 @@ namespace margelo::nitro::rnmediaplayer { struct VisualizerCapture; }
 #include "MpvEvent.hpp"
 #include <functional>
 #include "VisualizerCapture.hpp"
+#include "SourceResolutionRequest.hpp"
 
 namespace margelo::nitro::rnmediaplayer {
 
@@ -76,6 +79,12 @@ namespace margelo::nitro::rnmediaplayer {
       virtual void startVisualizer(double fftSize, double fps, bool waveform) = 0;
       virtual void stopVisualizer() = 0;
       virtual void setVisualizerListener(const std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture& /* capture */)>& onCapture) = 0;
+      virtual void setSourceResolutionListener(const std::function<void(const SourceResolutionRequest& /* request */)>& onRequest) = 0;
+      virtual void installSourceResolver(double timeoutMs) = 0;
+      virtual void uninstallSourceResolver() = 0;
+      virtual void setResolvedSource(const std::string& logical, const std::string& resolved, double ttlMs) = 0;
+      virtual void clearResolvedSources() = 0;
+      virtual void completeResolution(const std::string& logical, const std::optional<std::string>& resolved, double ttlMs) = 0;
       virtual void attachVideoOutput(uint64_t handle) = 0;
       virtual void detachVideoOutput() = 0;
       virtual uint64_t getRawHandle() = 0;

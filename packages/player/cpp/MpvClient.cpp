@@ -27,6 +27,45 @@ constexpr const char* kAudioOnlyDefaults[][2] = {
 constexpr const char* kLogLevelKey = "log-level";
 constexpr const char* kDefaultLogLevel = "warn";
 
+/// The hook mpv fires on its **prefetch** path. Not an upstream hook: stock
+/// `prefetch_next()` calls `start_open()` on the raw playlist filename and
+/// never enters the hook pipeline (mpv 0.41.0 `player/loadfile.c:1276-1286`),
+/// and upstream documents that as permanent ("This does not work with URLs
+/// resolved by the youtube-dl wrapper, and it won't" — `options.rst`, on
+/// `--prefetch-playlist`). Our forks add it. On a libmpv that does not, this
+/// name simply never fires — `mpv_hook_add` accepts unknown names by design
+/// (`client.h`: "if the name is unknown, the hook event will simply be never
+/// raised"), so registering it costs nothing and breaks nothing.
+constexpr const char* kPrefetchLoadHook = "on_prefetch_load";
+/// Stock mpv's load hook, fired between "assign the raw URL to
+/// `stream_open_filename`" and "open it" (`loadfile.c:1725`). It fires for the
+/// same entry the prefetch hook already saw, which is exactly why the cache has
+/// to be deterministic.
+constexpr const char* kLoadHook = "on_load";
+/// `client.h`: "Use 0 as a neutral default." Lua scripts conventionally use 50
+/// and lower priorities run first, so ours runs ahead of any script — which is
+/// what we want, since we are the ones who know the resolved URL.
+constexpr int kHookPriority = 0;
+
+/// The property a load hook rewrites. mpv `input.rst`: "This property should be
+/// set only during the `on_load` or `on_load_fail` hooks, otherwise it will
+/// have no effect."
+///
+/// NOTE (mpv 0.41.0 `player/command.c:564`): the *getter* runs the value
+/// through `mp_normalize_path`, which passes URLs and `-` through verbatim but
+/// makes a **relative local path absolute against the CWD**. So the key this
+/// cache sees for a relative path is not the string the caller passed. Key
+/// resolutions off URLs (or absolute paths); the TypeScript layer documents the
+/// same constraint.
+constexpr const char* kStreamOpenFilename = "stream-open-filename";
+/// Read-only int64 added by the rn-media fork alongside `on_prefetch_load`, and
+/// readable ONLY while that hook is open — at prefetch time mpv's own
+/// `playlist-current-pos` still points at the *playing* entry, and
+/// `MPV_EVENT_START_FILE` (which carries `playlist_entry_id` on the normal
+/// path) has not been sent for the entry being prefetched. Hence: read it
+/// before `mpv_hook_continue`, never after.
+constexpr const char* kPrefetchEntryId = "prefetch-playlist-entry-id";
+
 std::string tagged(int code, const std::string& message) {
   return std::string(kErrorTagPrefix) + std::to_string(code) + "] " + message + ": " + mpv_error_string(code);
 }
@@ -90,8 +129,10 @@ MpvError::MpvError(int code, const std::string& message) : std::runtime_error(ta
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-MpvClient::MpvClient(BatchReadyFn onBatchReady, CommandReplyFn onCommandReply)
-    : _onBatchReady(std::move(onBatchReady)), _onCommandReply(std::move(onCommandReply)) {
+MpvClient::MpvClient(BatchReadyFn onBatchReady, CommandReplyFn onCommandReply,
+                     ResolutionRequestFn onResolutionRequest)
+    : _onBatchReady(std::move(onBatchReady)), _onCommandReply(std::move(onCommandReply)),
+      _onResolutionRequest(std::move(onResolutionRequest)) {
   mpv_handle* handle = mpv_create();
   if (handle == nullptr) {
     throw MpvError(MPV_ERROR_NOMEM, "mpv_create() failed");
@@ -166,10 +207,17 @@ void MpvClient::destroy() noexcept {
   }
 
   _stopRequested.store(true, std::memory_order_release);
+  // Before the join, not after: the event thread may be parked in a play-time
+  // `on_load` hold for up to `resolverTimeoutMs`, and nothing is going to
+  // answer it now. `abort()` releases it and refuses any future hold, so this
+  // join stays bounded and short.
+  _resolverActive.store(false, std::memory_order_release);
+  _resolutionGate.abort();
   if (_eventThread.joinable()) {
     mpv_wakeup(handle);
     _eventThread.join();
   }
+  _resolutionCache.clear();
   _batch.reset();
 
   // `mpv_terminate_destroy` blocks. Nothing else can reach `handle` any more:
@@ -409,6 +457,72 @@ bool MpvClient::readPcmTapWindow(std::vector<float>& out, int& channels, int& ra
   return present && haveSamples;
 }
 
+// ---------------------------------------------------------------------------
+// Dynamic source resolution — JS thread
+// ---------------------------------------------------------------------------
+
+void MpvClient::installSourceResolver(std::int64_t timeoutMs) {
+  _state.requireInitialized("installSourceResolver");
+  std::shared_lock<std::shared_mutex> lock(_handleMutex);
+  if (_handle == nullptr) {
+    throw DisposedError("installSourceResolver");
+  }
+
+  _resolverTimeoutMs.store(timeoutMs > 0 ? timeoutMs : 0, std::memory_order_release);
+
+  {
+    std::lock_guard<std::mutex> hookLock(_hookMutex);
+    // Tracked per hook rather than with one flag, so a partial failure (the
+    // first `mpv_hook_add` succeeded, the second did not) cannot register the
+    // first one twice on the retry — mpv would then invoke our handler twice
+    // per load, each with its own id to continue.
+    if (!_prefetchHookRegistered) {
+      const int status = mpv_hook_add(_handle, 0, kPrefetchLoadHook, kHookPriority);
+      if (status < 0) {
+        throw MpvError(status, std::string("mpv_hook_add(\"") + kPrefetchLoadHook + "\")");
+      }
+      _prefetchHookRegistered = true;
+    }
+    if (!_loadHookRegistered) {
+      const int status = mpv_hook_add(_handle, 0, kLoadHook, kHookPriority);
+      if (status < 0) {
+        throw MpvError(status, std::string("mpv_hook_add(\"") + kLoadHook + "\")");
+      }
+      _loadHookRegistered = true;
+    }
+  }
+
+  _resolverActive.store(true, std::memory_order_release);
+}
+
+void MpvClient::uninstallSourceResolver() noexcept {
+  _resolverActive.store(false, std::memory_order_release);
+  _resolutionCache.clear();
+  // A hook may be parked on the gate right now with nobody left to answer it.
+  // `cancel()` (not `abort()`) releases it and leaves the gate usable, because
+  // a resolver can be installed again later.
+  _resolutionGate.cancel();
+}
+
+void MpvClient::setResolvedSource(const std::string& logical, const std::string& resolved, std::int64_t ttlMs) {
+  _resolutionCache.put(logical, resolved, ttlMs);
+}
+
+void MpvClient::clearResolvedSources() {
+  _resolutionCache.clear();
+}
+
+void MpvClient::completeResolution(const std::string& logical, const std::optional<std::string>& resolved,
+                                   std::int64_t ttlMs) {
+  // Cache first, settle second. The order matters for the prefetch path, which
+  // has no hold to settle: by the time this returns, a `on_load` arriving for
+  // the same entry finds the answer already in the cache and never asks again.
+  if (resolved.has_value()) {
+    _resolutionCache.put(logical, *resolved, ttlMs);
+  }
+  _resolutionGate.complete(logical, resolved);
+}
+
 void MpvClient::observeProperty(const std::string& name, PropertyFormat format) {
   _state.requireInitialized("observeProperty");
   std::shared_lock<std::shared_mutex> lock(_handleMutex);
@@ -464,10 +578,121 @@ std::uint64_t MpvClient::rawHandle() {
 // Event thread
 // ---------------------------------------------------------------------------
 
-bool MpvClient::handleEvent(void* rawEvent) {
+void MpvClient::handleHook(mpv_handle* handle, const std::string& name, std::uint64_t id) noexcept {
+  const bool prefetch = name == kPrefetchLoadHook;
+
+  if (!_resolverActive.load(std::memory_order_acquire)) {
+    // Registered but disarmed — mpv cannot unregister a hook, so this is the
+    // only "off". Continue at once: a pass-through must be indistinguishable
+    // from stock mpv, which is exactly what an unrewritten continue is.
+    mpv_hook_continue(handle, id);
+    return;
+  }
+
+  char* raw = nullptr;
+  if (mpv_get_property(handle, kStreamOpenFilename, MPV_FORMAT_STRING, &raw) < 0 || raw == nullptr) {
+    mpv_hook_continue(handle, id);
+    return;
+  }
+  std::string logical(raw);
+  mpv_free(raw);
+
+  // BEFORE the continue below, never after: the property exists only while this
+  // hook is open (see `kPrefetchEntryId`). A libmpv without the fork patch
+  // answers "no such property", which is a missing id, not an error.
+  std::optional<std::int64_t> entryId;
+  if (prefetch) {
+    std::int64_t value = 0;
+    if (mpv_get_property(handle, kPrefetchEntryId, MPV_FORMAT_INT64, &value) >= 0) {
+      entryId = value;
+    }
+  }
+
+  if (std::optional<std::string> hit = _resolutionCache.lookup(logical); hit.has_value()) {
+    // The whole design in three lines: a cache hit is a synchronous map lookup
+    // plus one property write, with no JavaScript anywhere near mpv's core.
+    if (*hit != logical) {
+      mpv_set_property_string(handle, kStreamOpenFilename, hit->c_str());
+    }
+    mpv_hook_continue(handle, id);
+    return;
+  }
+
+  if (prefetch) {
+    // NEVER wait here. This hook fires mid-track, over live audio, backed only
+    // by what the AO already has queued (0.2 s by default; 816/826 ms measured
+    // on our device, ARCHITECTURE §12). Continue unrewritten — the prefetch
+    // open then succeeds (a URL that needed no resolving) or fails exactly as
+    // stock mpv's would, and either way the entry is opened for real later —
+    // then ask JavaScript, so the answer is in the cache long before the
+    // boundary. mpv arms this hook seconds into the current track, not near its
+    // end, so "long before" is usually a whole track's worth of wall time.
+    mpv_hook_continue(handle, id);
+    if (_onResolutionRequest) {
+      try {
+        _onResolutionRequest(logical, entryId);
+      } catch (...) {
+        // The JS runtime (or its Dispatcher) is gone. Nothing to do: the hook
+        // is already continued and the next load will simply ask again.
+      }
+    }
+    return;
+  }
+
+  // Play time. Holding is safe here in a way it is not on the prefetch path:
+  // this entry has not opened yet, so there is no audio of its own to starve,
+  // and the previous entry has already ended.
+  _resolutionGate.begin(logical);
+  bool asked = false;
+  if (_onResolutionRequest) {
+    try {
+      _onResolutionRequest(logical, std::nullopt);
+      asked = true;
+    } catch (...) {
+      // The JS runtime is gone. Do not hold mpv open waiting for it.
+    }
+  }
+  if (!asked) {
+    _resolutionGate.cancel();
+  }
+  const std::optional<std::string> resolved =
+      _resolutionGate.await(asked ? _resolverTimeoutMs.load(std::memory_order_acquire) : 0);
+
+  if (resolved.has_value() && *resolved != logical) {
+    mpv_set_property_string(handle, kStreamOpenFilename, resolved->c_str());
+  }
+  // On a timeout, a null answer, or no listener at all the URL is left exactly
+  // as mpv wrote it. mpv then opens the logical URL and fails on its own terms,
+  // which arrives as an ordinary `end-file` error and lands in the existing
+  // typed taxonomy. There is deliberately no second error channel for this.
+  mpv_hook_continue(handle, id);
+}
+
+bool MpvClient::handleEvent(mpv_handle* handle, void* rawEvent) {
   auto* event = static_cast<mpv_event*>(rawEvent);
 
   switch (event->event_id) {
+    case MPV_EVENT_HOOK: {
+      auto* hook = static_cast<mpv_event_hook*>(event->data);
+      if (hook == nullptr) {
+        return false;
+      }
+      // Copy both fields out before doing anything: `mpv_event` and everything
+      // it points at are invalidated by the next `mpv_wait_event()`, and this
+      // handler can park for seconds.
+      //
+      // Hooks never enter the batch. Two reasons, both load-bearing: a batch is
+      // delivered one at a time behind a JS completion promise, so a hook event
+      // riding in one would add the whole batch's JS time to a stall that is
+      // holding mpv's core; and mpv defers a hook event behind all pending
+      // property changes anyway (`player/client.c`, `hook_pending`), so the
+      // ordering the batch preserves has already been established upstream.
+      const std::string name = hook->name != nullptr ? hook->name : "";
+      const std::uint64_t id = hook->id;
+      handleHook(handle, name, id);
+      return false;
+    }
+
     case MPV_EVENT_COMMAND_REPLY: {
       // Replies never enter the batch: they resolve a specific Promise and
       // must not be coalesced with, or delayed behind, the event stream.
@@ -567,7 +792,7 @@ void MpvClient::eventLoop(mpv_handle* handle) noexcept {
     // one wake-up carries one coherent set of updates.
     while (event->event_id != MPV_EVENT_NONE) {
       try {
-        scheduleFlush |= handleEvent(event);
+        scheduleFlush |= handleEvent(handle, event);
       } catch (...) {
         // A translation/callback failure must never take down the event
         // thread — that would silently freeze the player forever.

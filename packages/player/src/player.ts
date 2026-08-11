@@ -14,7 +14,14 @@ import {
   metadataByKeyProperty,
   metadataKeyProperty,
   metadataValueProperty,
+  playlistFilenameProperty,
 } from './properties'
+import type { SourceResolver } from './source-resolver'
+import {
+  DEFAULT_RESOLVER_TIMEOUT_MS,
+  DEFAULT_RESOLVER_TTL_MS,
+  SourceResolverController,
+} from './source-resolver'
 import type {
   LoopMode,
   PlayerState,
@@ -265,6 +272,45 @@ export interface PlayerOptions {
   readonly rate?: number
   /** Initial repeat behaviour. */
   readonly loop?: LoopMode
+  /**
+   * Turn the logical URIs in your queue into the URLs mpv actually opens —
+   * signed CDN links, transcode sessions, anything that cannot be written down
+   * ahead of time.
+   *
+   * Setting it here rather than calling {@link Player.setSourceResolver} after
+   * `create()` means it is installed before anything can be loaded, so the very
+   * first entry is resolved ahead of time like every other one. See
+   * {@link SourceResolver} for the determinism requirement.
+   */
+  readonly sourceResolver?: SourceResolver
+  /**
+   * How long a play-time resolution may hold mpv's core while the resolver
+   * answers, in milliseconds. Defaults to
+   * {@link DEFAULT_RESOLVER_TIMEOUT_MS} (10 s); `0` means never hold, i.e. only
+   * pre-resolved URIs are ever rewritten.
+   *
+   * Must be a finite number `>= 0`.
+   *
+   * @remarks
+   * This budget is spent between entries, with the new entry not yet open and
+   * the previous one already ended — there is no audio of the new track to
+   * starve. It is *not* spent on the prefetch path, which never waits at any
+   * value: that hook fires mid-track over live audio with only the device
+   * buffer behind it, so a cache miss there is answered by letting mpv continue
+   * immediately and warming the cache for the play-time pass.
+   *
+   * On timeout the logical URI is used unchanged, mpv fails the load on its own
+   * terms, and the failure arrives as an ordinary typed `error` event.
+   */
+  readonly resolverTimeoutMs?: number
+  /**
+   * How long one resolved URL stays usable, in milliseconds. Defaults to
+   * {@link DEFAULT_RESOLVER_TTL_MS} (10 min).
+   *
+   * Must be a finite number `>= 0`. A `0` disables caching entirely, which also
+   * disables prefetching for resolved sources — see {@link SourceResolver}.
+   */
+  readonly resolverTtlMs?: number
   /**
    * Override how the underlying `MpvClient` is created.
    *
@@ -673,7 +719,20 @@ function assertPlayerOptions(options: PlayerOptions): void {
       `\`gaplessAudio\` must be one of ${GAPLESS_AUDIO_MODES.map((mode) => `'${mode}'`).join(', ')} (mpv's own domain for \`gapless-audio\`); got '${String(options.gaplessAudio)}'.`
     )
   }
+  // Both are our own budgets, not mpv's, so the only invalid values are the
+  // ones that cannot mean anything: negative, NaN, Infinity.
+  assertNonNegative(options.resolverTimeoutMs, 'resolverTimeoutMs')
+  assertNonNegative(options.resolverTtlMs, 'resolverTtlMs')
   if (options.replayGain !== undefined) assertReplayGain(options.replayGain)
+}
+
+function assertNonNegative(value: number | undefined, option: string): void {
+  if (value === undefined) return
+  if (!Number.isFinite(value) || value < 0) {
+    throw invalidArgument(
+      `\`${option}\` must be a finite number >= 0; got ${value}.`
+    )
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -795,6 +854,23 @@ function isTrackChange(event: PlayerEvent): boolean {
 }
 
 /**
+ * Whether an event means "what mpv will open next may have changed".
+ *
+ * The cursor moving is the obvious case; the queue growing or shrinking is the
+ * other one, because `playlist.add()` and `playlist.remove()` change which entry
+ * follows the current one without moving the cursor at all. Both are property
+ * changes this player already observes, which is why resolve-ahead needs no
+ * native event of its own.
+ */
+function isQueueMovement(event: PlayerEvent): boolean {
+  return (
+    event.kind === 'property' &&
+    (event.name === MpvProperty.playlistPos ||
+      event.name === MpvProperty.playlistCount)
+  )
+}
+
+/**
  * The typed audio player.
  *
  * One `Player` owns one mpv core. There is no singleton: create as many as you
@@ -818,6 +894,7 @@ export class Player {
   #currentUri: string | undefined
   #destroyed = false
   #visualizer: VisualizerController | undefined
+  #resolution: SourceResolverController | undefined
 
   readonly #stateListeners = new Set<(state: PlayerState) => void>()
   readonly #eventListeners: {
@@ -868,9 +945,23 @@ export class Player {
     const client = factory()
     const player = new Player(client, now)
     player.#visualizer = new VisualizerController(client)
+    player.#resolution = new SourceResolverController(client, {
+      timeoutMs: options.resolverTimeoutMs ?? DEFAULT_RESOLVER_TIMEOUT_MS,
+      ttlMs: options.resolverTtlMs ?? DEFAULT_RESOLVER_TTL_MS,
+      onError: (error) => {
+        player.#emit('error', error)
+      },
+      now,
+    })
 
     try {
       client.setEventBatchListener((events) => player.#handleBatch(events))
+      // Registered unconditionally, and it costs nothing: no mpv hook is
+      // registered until a resolver is installed, so a player without one never
+      // produces a request for this listener to receive.
+      client.setSourceResolutionListener((request) => {
+        player.#resolution?.handleRequest(request)
+      })
       // Registered unconditionally, and it costs nothing: no sampler thread
       // exists until something subscribes, so an app that never draws a
       // spectrum never pays for one.
@@ -906,6 +997,9 @@ export class Player {
       if (options.muted !== undefined) player.setMuted(options.muted)
       if (options.rate !== undefined) player.setRate(options.rate)
       if (options.loop !== undefined) player.setLoop(options.loop)
+      if (options.sourceResolver !== undefined) {
+        player.setSourceResolver(options.sourceResolver)
+      }
     } catch (thrown) {
       player.destroy()
       throw new PlayerErrorException(toPlayerError(thrown))
@@ -1014,6 +1108,10 @@ export class Player {
   async load(source: string, options: LoadOptions = {}): Promise<void> {
     this.#assertAlive('load')
     this.#currentUri = source
+    // Before the command, not after: `loadfile` makes mpv open the source, and
+    // resolving first is what lets the load hook hit a warm cache instead of
+    // holding mpv's core open while JavaScript answers.
+    this.#resolution?.resolveAhead([source])
     if (options.autoPlay === false) {
       this.#setBool(MpvProperty.pause, true)
     } else if (options.autoPlay === true) {
@@ -1065,6 +1163,16 @@ export class Player {
     const startIndex = options.startIndex ?? 0
     this.#currentUri = sources[startIndex] ?? sources[0]
 
+    // The entry that is about to play, and the one after it. Everything further
+    // out is resolved as the queue reaches it, so a 500-track queue does not
+    // sign 500 URLs up front. With `shuffle` the guess may be wrong, and the
+    // cost of being wrong is one wasted resolution.
+    this.#resolution?.resolveAhead(
+      [sources[startIndex], sources[startIndex + 1]].filter(
+        (source): source is string => source !== undefined
+      )
+    )
+
     if (options.autoPlay === false) {
       this.#setBool(MpvProperty.pause, true)
     } else if (options.autoPlay === true) {
@@ -1093,6 +1201,63 @@ export class Player {
     // "shuffle what's left to play" are the same thing here.
     if (options.shuffle === true) await this.command(['playlist-shuffle'])
     await this.command(['playlist-play-index', String(startIndex)])
+  }
+
+  // -------------------------------------------------------------------------
+  // Source resolution
+  // -------------------------------------------------------------------------
+
+  /**
+   * Install (or remove) the function that turns a queue's logical URIs into the
+   * URLs mpv actually opens.
+   *
+   * @param resolver - See {@link SourceResolver} — read its remarks before
+   * writing one, in particular the determinism requirement. Pass `null` to
+   * remove the current resolver; every URI then passes through untouched again.
+   * @throws {@link PlayerErrorException} if the player has been destroyed, or
+   * if mpv rejects the hook registration.
+   *
+   * @example
+   * ```ts
+   * player.setSourceResolver(async ({ uri }) =>
+   *   uri.startsWith('library://') ? await sign(uri) : uri
+   * )
+   * await player.loadPlaylist(['library://a', 'library://b'])
+   * ```
+   *
+   * @remarks
+   * **What this buys you over resolving in your own code before `loadPlaylist`.**
+   * A URL signed at queue-build time has to stay valid for the whole queue; a
+   * URL resolved through this hook is minted per entry, moments before mpv opens
+   * it, so signature lifetimes can be short. It also survives everything that
+   * changes the queue behind your back — `playlist.next()`, repeat, shuffle,
+   * a resumed session — because mpv asks for whatever entry it is actually
+   * about to play rather than whatever you predicted.
+   *
+   * **Cost when installed but idle.** The current and next entries are resolved
+   * as the queue moves — two calls per track change, de-duplicated and cached —
+   * and each answer is pushed into a native cache that the hook reads
+   * synchronously. Nothing polls, nothing is streamed, and a URI that is already
+   * resolved costs a map lookup.
+   *
+   * **Cost when not installed.** Zero, and that is enforced by construction: the
+   * mpv hooks are registered on the first `setSourceResolver`, never before, so
+   * a player that does not use this feature runs a stock load path.
+   *
+   * **One caveat worth knowing.** mpv normalises the URI it hands back inside
+   * the hook: URLs pass through verbatim, but a *relative* local path is made
+   * absolute against the process's working directory (`mp_normalize_path`,
+   * mpv 0.41.0 `player/command.c:564`). Key your queue off URLs or absolute
+   * paths and this never comes up.
+   */
+  setSourceResolver(resolver: SourceResolver | null): void {
+    this.#assertAlive('setSourceResolver')
+    this.#guard(() => {
+      this.#resolution?.set(resolver)
+    })
+    // Warm the cache for what is already queued, so installing a resolver
+    // mid-playback does not make the next transition pay for a cold resolve.
+    if (resolver !== null) this.#resolveAhead()
   }
 
   // -------------------------------------------------------------------------
@@ -1590,6 +1755,10 @@ export class Player {
     // Before the core goes: the sampler thread reads mpv properties, so it has
     // to be stopped while the handle is still valid.
     this.#visualizer?.destroy()
+    // Native `destroy()` releases any hook parked on the resolver; this drops
+    // the JavaScript half, so an in-flight resolution that settles afterwards
+    // finds nothing to write to.
+    this.#resolution?.destroy()
     this.#stateListeners.clear()
     for (const listeners of Object.values(this.#eventListeners)) {
       listeners.clear()
@@ -1647,7 +1816,55 @@ export class Player {
     }
     for (const emit of emissions) emit()
 
+    // Deliberately reuses the existing discontinuity signals rather than adding
+    // a native event: the queue moving is already visible here, and the whole
+    // point of resolving ahead is to be early, not to be exact.
+    if (
+      this.#resolution?.installed === true &&
+      mapped.some(isQueueMovement) &&
+      next !== previous
+    ) {
+      this.#resolveAhead()
+    }
+
     return !this.#destroyed
+  }
+
+  /**
+   * Resolve the entries mpv is most likely to open next.
+   *
+   * The URIs come from mpv's own playlist (`playlist/N/filename`), not from
+   * whatever this player was last asked to load, because those are the strings
+   * the load hook will ask about — and because the queue can move for reasons
+   * this object never saw (`playlist.next()`, repeat, a shuffle, a resumed
+   * session).
+   *
+   * Two entries, not the whole queue: mpv only ever prefetches one ahead, and
+   * resolving further would mint credentials for tracks that may never play.
+   */
+  #resolveAhead(): void {
+    const resolution = this.#resolution
+    if (resolution === undefined || !resolution.installed) return
+    const { index, count } = this.#state.playlist
+    if (index < 0 || count <= 0) return
+
+    const wanted: number[] = [index]
+    if (index + 1 < count) {
+      wanted.push(index + 1)
+    } else if (this.#state.loop === 'playlist' && count > 1) {
+      // mpv's own `mp_next_file` consults `--loop-playlist`, so entry 0 really
+      // is what comes after the last one here.
+      wanted.push(0)
+    }
+
+    const uris: string[] = []
+    for (const entry of wanted) {
+      const uri = this.#readInBatch(() =>
+        this.#client.getPropertyString(playlistFilenameProperty(entry))
+      )
+      if (uri !== undefined && uri !== '') uris.push(uri)
+    }
+    resolution.resolveAhead(uris)
   }
 
   /**
@@ -1841,7 +2058,8 @@ export class Player {
   }
 
   /**
-   * A property read performed from inside the batch handler.
+   * A property read performed from inside the batch handler (or from another
+   * best-effort path with no caller to answer to, such as resolve-ahead).
    *
    * Unlike {@link #readOptional} this swallows *every* failure: there is no
    * caller to hand an error to on the event path, and letting one escape would
