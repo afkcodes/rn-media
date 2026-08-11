@@ -122,4 +122,7 @@ for framework in ${LIBMPV_EXPECTED_FRAMEWORKS:-Mpv}; do
 done
 
 printf '%s' "${STAMP_CONTENT}" >"${STAMP_FILE}"
-log "ready: mpv ${LIBMPV_MPV_VERSION:-?} / FFmpeg ${LIBMPV_FFMPEG_VERSION:-?} (${LIBMPV_DARWIN_BUILD_VARIANT} ${LIBMPV_DARWIN_BUILD_TAG})"
+# libplacebo is named here even though it ships no framework of its own: it is
+# linked statically into Mpv.framework (mandatory for mpv >= 0.37), so it is part
+# of what was just downloaded and belongs in the one line a developer reads.
+log "ready: mpv ${LIBMPV_MPV_VERSION:-?} / FFmpeg ${LIBMPV_FFMPEG_VERSION:-?} / libplacebo ${LIBMPV_LIBPLACEBO_VERSION:-?} (${LIBMPV_DARWIN_BUILD_VARIANT} ${LIBMPV_DARWIN_BUILD_TAG})"

@@ -2,18 +2,22 @@
 #
 # Consumed by `packages/player/ios/fetch-libmpv.sh` (POSIX `.`-sourced, so:
 # KEY=value only, no spaces around `=`, no shell expansions; quote any value
-# that contains whitespace).
+# that contains whitespace). `scripts/check-upstream.mjs` also parses this file,
+# so a key it knows about must keep its name.
 #
 # Source of truth: https://github.com/afkcodes/libmpv-darwin-build/releases
-# — our fork of media-kit/libmpv-darwin-build, which exists only so the ffmpeg
+# — our fork of media-kit/libmpv-darwin-build, which exists so the ffmpeg
 # configure flags are ours (upstream's audio flavour ships neither the HLS
-# demuxer nor any usable audio filter). The
-# repo owner is a field in the pin below, not a constant, exactly as on Android
-# (`packages/player/android/libmpv.gradle` → `owner`); upstream is 'media-kit'.
+# demuxer nor any usable audio filter) and, since the 0.41 engine bump, so the
+# engine itself is ours. The repo owner is a field in the pin below, not a
+# constant, exactly as on Android (`packages/player/android/libmpv.gradle` →
+# `owner`); upstream is 'media-kit'.
 #
 # Flavour:  `audio` + `default`.
-#   - `audio`   → no video codecs / libass / libplacebo (this package is the
-#                 audio core; video ships later as a separate plugin).
+#   - `audio`   → no video codecs / libass (this package is the audio core;
+#                 video ships later as a separate plugin). NOTE: as of mpv 0.37
+#                 libplacebo can no longer be stripped this way — see
+#                 LIBMPV_LIBPLACEBO_VERSION below.
 #   - `default` → FFmpeg built WITHOUT `--enable-gpl` (no x264/x265/smbclient),
 #                 i.e. LGPL. Never switch to `full`/`encodersgpl` here: those
 #                 are GPL and would relicense every consuming app (PLAN.md §6).
@@ -28,26 +32,35 @@
 # downloaded file, and update TAG + SHA256 + the metadata below together.
 # Bumping the *upstream* version means rebasing the fork's `rn-media-hls` branch
 # onto the new tag and cutting a new `-rnmedia.N` release; the demuxer flags must
-# survive the rebase or `.m3u8` silently regresses to `unsupported-format`, and
-# the filter flags must survive it or `setAudioFilters` regresses to
-# `{code:'mpv', errno:-11}`.
+# survive the rebase or `.m3u8` silently regresses to `unsupported-format`, the
+# filter flags must survive it or `setAudioFilters` regresses to
+# `{code:'mpv', errno:-11}`, and the patch series must be re-applied with
+# `--fuzz=0` — at the 0.41 bump two patches still applied *with fuzz* onto trees
+# that had already absorbed or renamed what they touched (ARCHITECTURE §11).
 
 # GitHub owner/repo of the darwin build scripts. Part of the pin, not a
-# constant: we ship from our own fork so the ffmpeg configure flags are under
-# our control (see TAG below).
+# constant: we ship from our own fork so the ffmpeg configure flags and the
+# engine version are under our control (see TAG below).
 LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 
-# v0.7.2-rnmedia.3 = upstream v0.7.2 with our delta on branch `rn-media-hls`.
-# Three generations. The first two are ffmpeg configure flags; the third is the
-# fork's FIRST SOURCE PATCH, and that is an escalation worth naming (see
-# ARCHITECTURE §11 — a flag survives a rebase by itself, a patch does not).
+# v0.7.2-rnmedia.4 = upstream v0.7.2 with our delta on branch `rn-media-hls`.
+#
+# NOTE ON THE TAG NAME: the `v0.7.2` base no longer describes the contents —
+# upstream v0.7.2 was mpv 0.36.0 / FFmpeg 6.0, and this release is mpv 0.41.0 /
+# FFmpeg 8.1.2. The scheme is kept deliberately: what this pin resolves is
+# repo + tag, and renaming mid-series would break the `-rnmedia.N` lineage for
+# no gain. The fork's release notes say the same thing.
+#
+# Four generations. The first two are ffmpeg configure flags; the third is the
+# fork's first source patch; the fourth is the engine itself.
 #
 #   rnmedia.1  --enable-demuxer=hls --enable-demuxer=mpegts
 #              Upstream's audio flavour builds ffmpeg with `--disable-all` plus
 #              an allow-list that carried neither, so every `.m3u8` failed with
 #              `unsupported-format` — `--enable-protocol=hls` was present but
 #              that is the deprecated `hls://` protocol, useless without the
-#              demuxer.
+#              demuxer. (FFmpeg 8.1.2 has since DELETED that protocol outright,
+#              which is the cleanest possible confirmation of the trap.)
 #   rnmedia.2  the 16 LGPL audio EQ/DSP filters (ARCHITECTURE §18):
 #              aresample aformat anull volume bass treble lowpass highpass
 #              anequalizer superequalizer firequalizer acompressor alimiter
@@ -59,58 +72,109 @@ LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 #              sample-format disagreement between pads.
 #   rnmedia.3  patches/mpv-rn-media-pcm-tap.patch — a PCM tap on mpv's client
 #              API, behind `player.visualizer` (ARCHITECTURE §21). Two new
-#              properties: `pcm-tap` (int, rw — samples per channel to retain,
-#              0 = off) and `pcm-tap-frame` (node, ro — interleaved float32 in
-#              a byte array). The tap sits at the end of
-#              `ao_post_process_data()`, after the filter chain and after mpv's
-#              software gain, so it reports what is audible; disarmed it costs
-#              one atomic load per device chunk and allocates nothing.
-#              **The file is byte-identical to the Android fork's
-#              `buildscripts/patches/mpv/004.rn_media_pcm_tap.patch`** — it
-#              applies to mpv 0.35.1 and 0.36.0 alike, touching four source
-#              files and no build-system files. That is what makes the
-#              visualizer one engine rather than an Android feature with an iOS
-#              apology.
+#              properties: `pcm-tap` (int, rw) and `pcm-tap-frame` (node, ro).
+#              Byte-identical to the Android fork's `004.rn_media_pcm_tap.patch`,
+#              which is what makes the visualizer one engine rather than an
+#              Android feature with an iOS apology.
+#   rnmedia.4  THE ENGINE MOVE. mpv 0.36.0 → 0.41.0, FFmpeg 6.0 → 8.1.2, and a
+#              new mandatory dependency, libplacebo 6.338.2. Both rn-media
+#              platforms now run ONE mpv (0.41.0, client API 2.5) — the vendored
+#              `cpp/third_party/mpv/include/mpv/client.h` is no longer the older
+#              of two headers but simply the header of the binary.
+#
+#              Three things had to change with it, and each is a trap:
+#              • mpv has been meson-only since 0.37 ("waf: remove waf as a build
+#                system"), so this is also a build-system migration.
+#              • libplacebo became a bare `dependency()` in 0.37 and is reached
+#                from core non-video translation units, so it cannot be stripped
+#                the way libass can. It is built with every GPU backend disabled
+#                and linked STATICALLY into Mpv.framework, which is why the
+#                bundle still has exactly ten frameworks and no consuming app
+#                has to embed an eleventh.
+#              • mpv 0.37 deleted `libmpv/mpv.def` and with it the generated
+#                linker version script. `gnu_symbol_visibility: 'hidden'`
+#                governs mpv's own objects and does nothing for a static
+#                archive, and libplacebo's public symbols are
+#                `visibility("default")` regardless of `PL_STATIC`. The fork now
+#                passes ld64 `-Wl,-exported_symbols_list` with an explicit list.
+#
+#              Patch dispositions at this bump: ffmpeg's `dash-base-url-escape`
+#              and `hls-mp4-seek` DELETED (both fixed upstream in 8.1.2 — the
+#              hls one still applied *with fuzz*, which would have inserted a
+#              second redundant reset); `mpv-remove-libass` and
+#              `mpv-rn-media-pcm-tap` taken byte-identical from the Android fork;
+#              `mpv-fix-missing-objc` re-anchored (0.41 gates
+#              `add_languages('objc')` on a detected macOS SDK, which never
+#              resolves in the nix sandbox); `mpv-audiounit-shared-session`
+#              rebased onto `mp_mutex_*`; the two VideoToolbox patches rebased
+#              and gated on the video variant this pin does not use.
 #
 # Verified against the RELEASED asset on a Linux host (never the build log —
 # ARCHITECTURE → Platform truths):
+#   - **the export list is exactly the 54 names in the fork's `mpv.exp`**, on
+#     BOTH slices, with zero non-`mpv_*` entries. Against rnmedia.3's 53 the
+#     diff is a single addition, mpv 0.41's own `mpv_get_time_ns`; nothing was
+#     removed. `pl_*` count in the shipped dylib: **0** — which is the whole
+#     point, since the same patched tree built without an export list (measured
+#     on Linux) exports 453 of libplacebo's symbols alongside the 54;
 #   - the tap is genuinely in the shipped `Mpv.framework`: `pcm-tap`,
 #     `pcm-tap-frame`, and the marker `[rn-media] pcm-tap window=%d` that only
 #     the patched `player/command.c` emits;
-#   - **export sets are byte-identical to rnmedia.2 for all ten frameworks on
-#     both slices** — Mpv still exports exactly 53 symbols. The feature is
-#     reachable only through mpv_get_property/mpv_set_property, so there is no
-#     new exported symbol and no ABI change for anything we link;
-#   - only Mpv grew: **+224 B on the device slice**, +16 768 B on the simulator.
-#     The simulator figure is not 70× more code — it is a fat binary (arm64 +
-#     x86_64) whose arm64 segment alignment is 16 384, so a few hundred bytes of
-#     new code push one segment across a boundary;
-#   - Avcodec/Avfilter/Avformat/Avutil/Swresample/Swscale are byte-identical in
-#     size, as they must be: this release changes no ffmpeg flag;
-#   - the three Mbed* frameworks differ by 16-144 B purely because embedded
-#     /nix/store build paths changed length — the same effect documented for
-#     rnmedia.2.
-# Still LGPLv3: no `--enable-gpl`, no `--enable-nonfree`, no new dependency.
-LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.3
+#   - the engine really is 0.41.0/8.1.2: the `0.41.0` version string is in
+#     `Mpv`, and `Avformat` reports `Lavf62.12.102` (libavformat 62 is the
+#     FFmpeg 8 series; rnmedia.3 shipped `Lavf60.3.100`);
+#   - **exactly one audio output is compiled in.** `AudioUnit (iOS)` is present
+#     and `AVSampleBufferAudioRenderer` — the description string of mpv 0.41's
+#     NEW `ao_avfoundation` — is absent, as are `coreaudio`, `alsa`,
+#     `audiotrack` and `opensles`. (`avfoundation` DOES appear as a substring
+#     twice, both times inside mpv's embedded configuration string, which
+#     literally contains `-Davfoundation=disabled`. Checking for the option name
+#     rather than the driver's own string would have read as a false positive.)
+#   - HLS and the filter set survived the engine bump: `Avformat` still carries
+#     the `hls` demuxer's own log format and the mpegts symbols, and `Avfilter`
+#     still registers all 16 filters incl. `aresample`, `loudnorm`,
+#     `superequalizer`, `firequalizer`, `anequalizer` and `crossfeed`;
+#   - the bundle is still TEN xcframeworks on the two usual slices
+#     (`ios-arm64`, `ios-arm64_x86_64-simulator`): libplacebo is static and
+#     inside `Mpv`, so no consuming app has to embed an eleventh;
+#   - SIZE, honestly. Device slice across all ten: 6 811 280 -> 8 048 768 bytes
+#     (+18.2 %); `Mpv` alone 1 856 352 -> 2 675 912 (+44 %, i.e. libplacebo plus
+#     mpv 0.41); the tarball 8 252 511 -> 9 873 452. The Mbed* three are
+#     byte-identical, as they must be — this release changes no mbedTLS flag.
+# Still LGPLv3: no `--enable-gpl`, no `--enable-nonfree`. libplacebo is
+# LGPLv2.1+ and is folded into an LGPL dylib that is itself dynamically linked,
+# so the relink obligation is still satisfied at the framework boundary.
+LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.4
 LIBMPV_DARWIN_BUILD_VARIANT=ios-universal-audio-default
 
 # SHA-256 of
 # libmpv-xcframeworks_${TAG}_${VARIANT}.tar.gz
 # (computed from the published release asset; re-verified on every download,
 # and a mismatch is a hard build failure rather than a warning).
-LIBMPV_DARWIN_BUILD_SHA256=adac151b16c1c46e92312e3cfad4937db47287a1695c06f4ded3133d51343ffd
+LIBMPV_DARWIN_BUILD_SHA256=9d3efc13f44234cec818f07a6b62d14ae2b2427eeb7b081702a6cc04c20c0d1d
 
 # --- metadata (informational; verified by inspecting the binaries) -----------
-# All three versions are UNCHANGED from upstream v0.7.2 — the fork's delta is
-# ffmpeg configure flags plus one mpv source patch, not a dependency bump.
-# mpv                       0.36.0   (MPV_CLIENT_API_VERSION = 2.1)
-# FFmpeg                    6.0      (LGPL: no --enable-gpl, --enable-version3)
+# mpv                       0.41.0   (MPV_CLIENT_API_VERSION = 2.5)
+# FFmpeg                    8.1.2    (LGPL: no --enable-gpl, --enable-version3)
+# libplacebo                6.338.2  (static, every GPU backend disabled)
 # mbedTLS                   3.4.1
 # xcframework slices        ios-arm64, ios-arm64_x86_64-simulator
-# MinimumOSVersion          9.0 (device slice) / 14.0 (simulator slice)
-LIBMPV_MPV_VERSION=0.36.0
-LIBMPV_FFMPEG_VERSION=6.0
+LIBMPV_MPV_VERSION=0.41.0
+LIBMPV_FFMPEG_VERSION=8.1.2
+# libplacebo became a MANDATORY mpv dependency at 0.37 and is now part of what
+# the binary contains, so it is a pin field rather than a footnote. 6.338.2 is
+# exactly mpv 0.41's declared minimum (`dependency('libplacebo',
+# version: '>=6.338.2')`); 7.x drops symbols 0.41's csputils.h still references
+# under mobile cross-files, and the Android half pins the same version.
+LIBMPV_LIBPLACEBO_VERSION=6.338.2
 LIBMPV_MBEDTLS_VERSION=3.4.1
 
+# Read by scripts/check-upstream.mjs and printed verbatim next to the FFmpeg
+# row, which is MEANT to read BEHIND: our FFmpeg is chosen by what the pinned
+# mpv requires, not by what is newest.
+LIBMPV_FFMPEG_PIN_NOTE="not a lag: mpv 0.41 floors FFmpeg at 6.1 (dependency('libavcodec', version: '>= 60.31.102')), and n9.0 was cut six months after mpv 0.41.0 shipped with no point release. Revisit when an mpv release is itself built against 9.x."
+
 # Frameworks expected in the bundle (used as a post-extraction sanity check).
+# Still ten, and libplacebo did NOT make it eleven: it is built static and
+# folded into Mpv.framework (see rnmedia.4 above).
 LIBMPV_EXPECTED_FRAMEWORKS="Avcodec Avfilter Avformat Avutil Mbedcrypto Mbedtls Mbedx509 Mpv Swresample Swscale"
