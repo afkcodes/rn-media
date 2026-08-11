@@ -55,6 +55,45 @@ react {
 }
 
 /**
+ * Workspace sources are inputs of the JS bundle. (Trap recorded 2026-08-11.)
+ *
+ * The RN Gradle plugin's bundling task (`createBundle<Variant>JsAndAssets`, a
+ * `BundleHermesCTask`) declares exactly one source input: a file tree rooted at `react.root`
+ * — this app, `apps/example` — which additionally excludes `**\/node_modules/**`. In this npm
+ * workspace, Metro resolves `@rn-media/*` from *source* (`"react-native": "src/index"` in each
+ * package.json), reached through the `node_modules/@rn-media/*` symlinks. So every line of
+ * library code that ends up in the bundle is invisible to the task's up-to-date check.
+ *
+ * What that cost us on 2026-08-11: a fix in `packages/player/src` was written at 12:25, the
+ * bundle on disk had been produced at 12:11, and `:app:assembleRelease` at 12:33 reported the
+ * bundle task UP-TO-DATE and packaged the 12:11 bundle. The rebuilt, reinstalled APK ran the
+ * old JS and "verified" the fix as still broken; only deleting
+ * `app/build/generated/assets/react` + `intermediates/assets/release` by hand broke the spell.
+ * A green release build silently shipping stale JS is the worst possible failure mode for an
+ * on-device test bed, so the inputs are declared here explicitly.
+ *
+ * The app's own JS/TS (App.tsx, index.js, SeekBar.tsx, theme.ts, …) is already covered by the
+ * plugin's `root` tree; only the out-of-root workspace packages need adding. Debug variants
+ * load from Metro and get no bundle task at all, hence the name-pattern match rather than a
+ * hardcoded variant: whatever bundles, gets the inputs.
+ */
+def workspaceRoot = file("../../../..")
+def workspacePackageSources = files(["player", "audio-session", "media-session"].collect { pkg ->
+    fileTree(new File(workspaceRoot, "packages/${pkg}/src")) { tree ->
+        // Unit tests never reach the bundle; excluding them keeps `vitest` edits from
+        // invalidating it.
+        tree.exclude("**/__tests__/**")
+    }
+})
+
+tasks.matching { it.name ==~ /^createBundle.*JsAndAssets$/ }.configureEach { bundleTask ->
+    bundleTask.inputs.files(workspacePackageSources)
+            .withPropertyName("rnMediaWorkspacePackageSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .ignoreEmptyDirectories()
+}
+
+/**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
 def enableProguardInReleaseBuilds = false

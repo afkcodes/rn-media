@@ -855,6 +855,26 @@ build is how you conclude the wrong thing about where the ceiling is.
   only when the cursor moved). A read that comes back unavailable means
   *honestly unknown* — the field is dropped and mpv will emit it once it knows,
   because `none → value` compares unequal.
+- **The RN Gradle plugin's bundle task does not track monorepo workspace
+  sources, so a green `assembleRelease` can package a stale JS bundle.**
+  `BundleHermesCTask` declares exactly one source input — a file tree rooted at
+  `react.root` (here `apps/example`) that excludes `**/node_modules/**` — while
+  Metro resolves `@rn-media/*` from *source* (`"react-native": "src/index"`)
+  through the `node_modules/@rn-media/*` symlinks. Every line of library code in
+  the bundle is therefore invisible to the up-to-date check. Bit us 2026-08-11:
+  bundle written 12:11, fix in `packages/player/src` written 12:25, the 12:33
+  build reported `createBundleReleaseJsAndAssets UP-TO-DATE` and shipped the
+  12:11 bundle — the rebuilt, reinstalled APK ran the old JS and *false-verified
+  a fix as still broken*. It cleared only after deleting
+  `app/build/generated/assets/react` and `intermediates/assets/release` by hand.
+  This is the on-device equivalent of the "verify the shipped artifact, never the
+  build log" rule above, one layer up: here the build log was not merely
+  uninformative, it was actively reassuring. Guarded in
+  `apps/example/android/app/build.gradle`, which declares the three
+  `packages/*/src` trees as explicit inputs of every `createBundle*JsAndAssets`
+  task (matched by name pattern, so new variants inherit it; debug loads from
+  Metro and has no bundle task). Note when reproducing: Gradle fingerprints file
+  *content*, so `touch` alone proves nothing — the input has to actually change.
 
 ## Update policy
 
