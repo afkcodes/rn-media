@@ -91,23 +91,77 @@ ext.libmpv = [
     //   landed in mpv 0.36.0, so the darwin fork needs nothing and stays on
     //   v0.7.2-rnmedia.3. That asymmetry is a version fact, not a platform one.
     //   +2.6 KB/ABI total (+0.04 %); export set still byte-identical (53 syms).
-    release   : 'v1.1.9-rnmedia.4',
+    // …rnmedia.5 — THE ENGINE MOVE. mpv 0.35.1 → 0.41.0, FFmpeg n6.0 → n8.1.2,
+    //   plus a new mandatory dependency, libplacebo 6.338.2. mpv has been
+    //   meson-only since 0.37 ("waf: remove waf as a build system"), so this
+    //   release is also the fork's build-system migration.
+    //
+    //   Versions were picked by evidence, not by "latest": the FFmpeg floor is
+    //   mpv 0.41's own `dependency('libavcodec', version: '>= 60.31.102')`
+    //   (= FFmpeg 6.1); n9.0 was deliberately NOT taken, having been cut six
+    //   months after mpv 0.41 shipped with no point release yet.
+    //
+    //   libplacebo is not a choice: mpv 0.37 replaced the `libplacebo` build
+    //   option with a bare `dependency()`, and reaches it from core non-video
+    //   translation units, so it cannot be stripped the way libass can.
+    //
+    //   Three of the fork's five patches went away because upstream absorbed
+    //   them: `001.audiotrack_threadsafe` (mpv 0.41 ships the same refcount fix
+    //   using `mp_static_mutex`), `005.mpv_dup_node_byte_array` (mpv 0.36 — the
+    //   companion this pin's rnmedia.4 note describes), and FFmpeg's
+    //   `dash_base_url_escape` (FFmpeg 8.1.2). `002`/`003`/`004` were rebased.
+    //
+    //   ONE THING TO KNOW ABOUT THE EXPORT SET, because it breaks the invariant
+    //   the notes above rely on: mpv's waf build generated a linker version
+    //   script from `libmpv/mpv.def`, and 0.37 deleted that file, leaving meson
+    //   with only `gnu_symbol_visibility: 'hidden'` — which governs mpv's own
+    //   objects and does nothing at all for the static archives. The first 0.41
+    //   build of this fork exported **4020** symbols instead of 55, all of
+    //   FFmpeg and zlib among them, which in an RN app that also links FFmpeg
+    //   makes symbol binding a coin toss. The fork now ships its own
+    //   `include/mpv.ver` plus `--exclude-libs=ALL`, and the result is exact:
+    //   **55 `mpv_*` symbols, none of the previous 53 removed**, and the only
+    //   two additions are mpv 0.41's own `mpv_del_property` and
+    //   `mpv_get_time_ns`. So the "export set is byte-identical" rule still
+    //   holds across a fork generation; it just cannot hold across an engine
+    //   bump that adds API, and this is what it changed to.
+    //
+    //   Verified in the SHIPPED artifacts on all four ABIs, never the build log:
+    //   55 exports with zero non-`mpv_*`, 16 KB page alignment (`-Wl,-z,
+    //   max-page-size=16384` survives meson's `c_link_args` handling — it is
+    //   passed explicitly, because `-Dc_link_args` REPLACES the env `LDFLAGS`
+    //   rather than appending to it), the PCM-tap marker string present, and no
+    //   libass/freetype/fribidi/harfbuzz in DT_NEEDED.
+    //
+    //   Cost: arm64-v8a 6.39 → 8.19 MB stripped (jar 3.06 → 3.89 MB, +27 %),
+    //   which is FFmpeg 8.x plus libplacebo. That is a real regression against
+    //   §11's "~3 MB/ABI" cost note and is accepted deliberately as the price
+    //   of currency; it is the number to attack next (see the fork's README).
+    release   : 'v1.1.9-rnmedia.5',
     // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
     flavor    : 'default',
     // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
     // Must match the tag the headers in cpp/third_party/mpv are vendored from.
-    // Unchanged from v1.1.9 — the delta is ffmpeg flags, not an mpv bump.
-    mpvVersion: '0.35.1',
+    // As of rnmedia.5 this is an mpv bump, not just flags.
+    mpvVersion: '0.41.0',
     // FFmpeg version inside that release. Machine-readable for
     // scripts/check-upstream.mjs, which parses this block — until now FFmpeg
     // existed here only as prose in the comments above.
-    ffmpegVersion: 'n6.0',
+    ffmpegVersion: 'n8.1.2',
+    // Read by scripts/check-upstream.mjs and printed verbatim in the FFmpeg
+    // row. This row is MEANT to read BEHIND: our FFmpeg is chosen by what the
+    // pinned mpv requires, not by what is newest. No apostrophes here — the
+    // watcher parses this block with a single-quoted-value regex.
+    ffmpegPinNote: 'not a lag: mpv 0.41 floors FFmpeg at 6.1, and n9.0 was cut six months after mpv 0.41.0 shipped with no point release. Revisit when an mpv release is itself built against 9.x.',
+    // libplacebo became a MANDATORY mpv dependency in 0.37 and is now part of
+    // what the binary contains, so it is a pin field rather than a footnote.
+    libplaceboVersion: '6.338.2',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
-        'arm64-v8a'  : '291e3f92c571cb87c780d8c79566ae14a129811761f4027db0315adb03ceed47',
-        'armeabi-v7a': '68a75d7d6256f07932b8cfd77e2a295334f7f6dc91d945f0c0f81b214462a76e',
-        'x86'        : 'de8a0bb26b199ac4281909ca9a878978fb745ebf406b077a8f75057ff2a74f32',
-        'x86_64'     : '8b8094b1e9033741ba8c3d81a3da3631016f7eb71a150f2da13dab8fc60918eb',
+        'arm64-v8a'  : 'a6eea49030ef59f1becbdc63c3071516a79452ff77f4c9085a8e05ea1f302eca',
+        'armeabi-v7a': 'e4e219a0545041f82e82fc62b16953dcc9c6d741736552b54ea622044d02216c',
+        'x86'        : 'e983cba7b59639e97693c1dda19cfb2e0893948f4ce9be8e5dafe8c9f1ce3bb3',
+        'x86_64'     : 'ad98e0b5ae3b6ffd15f347ad629429a2154aea3a445ad0f4d38855a6720a302c',
     ],
 ]
 

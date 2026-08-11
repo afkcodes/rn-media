@@ -625,8 +625,53 @@ function needsHlsDemuxer(source: string): boolean {
 }
 
 /**
- * Build the third `loadfile` argument — mpv's per-file option list, which is
- * `opt1=value1,opt2=value2,…` (mpv 0.35.1 `input.rst`, `loadfile`).
+ * The `index` argument of `loadfile`, meaning "not an insertion".
+ *
+ * @remarks
+ * mpv 0.38 inserted a new third parameter into `loadfile`, shifting the option
+ * list from third place to fourth:
+ *
+ * ```text
+ * 0.35:  loadfile <url> [<flags> [<options>]]
+ * 0.41:  loadfile <url> [<flags> [<index> [<options>]]]
+ * ```
+ *
+ * `index` is an `OPT_INT` used only by the `insert-at` actions, and mpv's own
+ * manual is blunt about the consequence: "This breaks all existing uses of this
+ * command which make use of the argument to include the list of options […] the
+ * third argument now needs to be set to -1 if the fourth argument needs to be
+ * used" (mpv 0.41 `input.rst`, `loadfile`).
+ *
+ * So every call that carries file options must pass this placeholder first.
+ * Getting it wrong is not a compile error and not even a loud runtime one — the
+ * option string would simply be parsed as an integer and the command would fail,
+ * which on this library's hottest path (every `.m3u8`, which always carries
+ * `demuxer=lavf`) means HLS silently stops loading.
+ */
+const LOADFILE_NO_INDEX = '-1'
+
+/**
+ * Assemble a `loadfile` argument vector for the pinned engine.
+ *
+ * Kept as one function so the `index` placeholder above is written down once
+ * rather than at each of the three call sites.
+ */
+function buildLoadfileArgs(
+  source: string,
+  flags: string,
+  fileOptions: string | undefined
+): string[] {
+  const args = ['loadfile', source, flags]
+  // Only append the placeholder when there is a fourth argument to reach —
+  // a bare `loadfile <url> <flags>` is identical in every mpv version.
+  if (fileOptions !== undefined) args.push(LOADFILE_NO_INDEX, fileOptions)
+  return args
+}
+
+/**
+ * Build the per-file option list `loadfile` takes as its LAST argument —
+ * `opt1=value1,opt2=value2,…` (mpv 0.41 `input.rst`, `loadfile`). See
+ * {@link LOADFILE_NO_INDEX} for why it is no longer the third.
  *
  * @remarks
  * This is also where the HLS guard lives. mpv's *playlist* demuxer claims
@@ -884,9 +929,7 @@ export class Player {
       options.startPosition,
       source
     )
-    const args = ['loadfile', source, 'replace']
-    if (fileOptions !== undefined) args.push(fileOptions)
-    await this.command(args)
+    await this.command(buildLoadfileArgs(source, 'replace', fileOptions))
   }
 
   /**
@@ -947,9 +990,7 @@ export class Player {
         options.startPosition,
         source
       )
-      const args = ['loadfile', source, 'append']
-      if (fileOptions !== undefined) args.push(fileOptions)
-      await this.command(args)
+      await this.command(buildLoadfileArgs(source, 'append', fileOptions))
     }
     // Shuffle before the jump, never after: the jump is what starts playback,
     // and shuffling a playing queue would renumber the entry mpv just started.
@@ -1073,14 +1114,14 @@ export class Player {
   readonly playlist: PlaylistApi = {
     add: async (source, options) => {
       this.#assertAlive('playlist.add')
-      const args = [
-        'loadfile',
-        source,
-        options?.playNow === true ? 'append-play' : 'append',
-      ]
       const fileOptions = formatFileOptions(undefined, undefined, source)
-      if (fileOptions !== undefined) args.push(fileOptions)
-      await this.command(args)
+      await this.command(
+        buildLoadfileArgs(
+          source,
+          options?.playNow === true ? 'append-play' : 'append',
+          fileOptions
+        )
+      )
     },
     remove: async (index) => {
       this.#assertAlive('playlist.remove')
