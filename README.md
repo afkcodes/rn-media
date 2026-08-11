@@ -136,7 +136,9 @@ player.setRate(1.5);           // pitch-corrected
 player.setVolume(0.5);         // 0..1
 player.setLoop('playlist');    // 'off' | 'track' | 'playlist'
 
-await player.playlist.add(uri, { playNow: true });
+await player.playlist.add(uri);                       // to the end
+await player.playlist.add(uri, { position: 'next' }); // play it after this one
+await player.playlist.add(uri, { position: 0 });      // exact index; rejected if out of range
 await player.playlist.move(0, 4);
 await player.playlist.jumpTo(2);  // plays it; { autoPlay: false } to stay paused
 await player.playlist.shuffle();  // mpv playlist-shuffle; unshuffle() undoes it, once

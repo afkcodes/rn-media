@@ -146,6 +146,13 @@ interface Track extends MediaItem {
  *    not, and it is long enough that the seek bar (in-app and on the lock
  *    screen) is actually usable: a 12-second track is under one thumb-width
  *    per 15 seconds of travel. Also the track the EQ presets are judged on.
+ *
+ * One measurement caveat (2026-08-12): the only finite natural boundary in
+ * this queue (4 → 5) is a FORMAT CHANGE — 44100Hz mono → 44100Hz stereo — so
+ * `gapless-audio=weak` reopens the audio device there (~330 ms + an expected
+ * underrun), exactly as documented. ARCHITECTURE §12's 25 ms gapless handover
+ * was measured across two identically-encoded entries; this queue cannot
+ * reproduce that number and is not supposed to.
  */
 const TRACKS: readonly Track[] = [
   {

@@ -40,6 +40,7 @@ import type {
   MpvEvent,
   MpvFormat,
   MpvLogLevel,
+  PrefetchStartedEvent,
 } from './specs/mpv-client.nitro'
 
 /**
@@ -407,6 +408,39 @@ export interface PlayerEventMap {
    * so a player nobody is asking pays nothing.
    */
   metadataChanged: (metadata: Metadata) => void
+  /**
+   * mpv started opening the **next** queue entry ahead of time.
+   *
+   * Fires once per prefetched entry, at the instant mpv releases its opener
+   * thread on it — which is seconds *into* the current track (mpv arms the
+   * prefetch on the first cache poll after the current file is fully read), not
+   * near the boundary. Use it to know that a transition is going to be gapless,
+   * to warm your own caches, or to log where a slow CDN is spending its time.
+   *
+   * @remarks
+   * **Two conditions, both of them honest.**
+   *
+   * 1. **mpv must actually be prefetching**, i.e.
+   *    {@link PlayerOptions.prefetchPlaylist} is on (it is off by default — see
+   *    there for why). Without it the event simply never occurs, because there
+   *    is nothing to report.
+   * 2. **The linked libmpv must carry the prefetch hook.** Stock libmpv runs no
+   *    hooks on its prefetch path and upstream documents that as permanent
+   *    (`options.rst` on `--prefetch-playlist`: URLs resolved by a hook "won't"
+   *    work). The rn-media forks add `on_prefetch_load`: **Android
+   *    `v1.1.9-rnmedia.5`+ and iOS `v0.7.2-rnmedia.4`+**, both mpv 0.41.0
+   *    (ARCHITECTURE §11). On any other build the hook is never raised — mpv
+   *    accepts the registration and never fires it (`client.h`: "if the name is
+   *    unknown, the hook event will simply be never raised") — so, again, the
+   *    event never occurs. There is deliberately no error and no capability
+   *    flag: an event that does not happen is not a failure, and `prefetch` is
+   *    an optimisation whose absence is inaudible except in the handover gap.
+   *
+   * `entryId` is mpv's playlist *entry id* and is present only on binaries that
+   * also expose `prefetch-playlist-entry-id` (the same fork releases). It is not
+   * a playlist index: ids survive `playlist-move` and `playlist-remove`.
+   */
+  prefetchStarted: (event: PrefetchStartedEvent) => void
   /** An mpv log line, at or below the configured `logLevel`. */
   log: (event: LogEvent) => void
 }
@@ -417,6 +451,62 @@ export type PlayerEventName = keyof PlayerEventMap
 /** Unsubscribes a listener. Safe to call more than once. */
 export type Unsubscribe = () => void
 
+/** Options for {@link PlaylistApi.add}. */
+export interface PlaylistAddOptions {
+  /**
+   * Where the entry goes. Omitted, it is appended to the end.
+   *
+   * - `'next'` — directly after the entry that is currently playing (mpv's
+   *   `insert-next`). This is the "play this after the current track" button,
+   *   and it is index-free on purpose: it stays correct even if the queue moves
+   *   between your reading it and mpv acting on it.
+   * - a `number` — an exact 0-based index, where `0` is the head and
+   *   `playlist.count` is the end (mpv's `insert-at`, which takes the index as
+   *   `loadfile`'s third argument).
+   *
+   * @remarks
+   * **A number is validated, not clamped.** mpv itself would silently append —
+   * "the new item will be inserted at the index position in the playlist, or
+   * appended to the end if index is less than 0 or greater than the size of the
+   * playlist" (mpv 0.41.0 `input.rst`) — which turns a caller's off-by-one into
+   * a track at the wrong end of the queue with nothing to notice it by. So a
+   * non-integer, a negative, or an index past the current
+   * `playlist.count` throws an `invalid-state` {@link PlayerError}, exactly like
+   * every other out-of-domain option in this API. The count is read from mpv at
+   * call time (`playlist-count`), not from the last broadcast snapshot.
+   *
+   * **Honest caveat: an inserted entry is not itself prefetched if a prefetch
+   * is already running.** With `prefetchPlaylist` on, mpv opens the next entry
+   * as soon as the current one is fully read — and `prefetch_next()` begins
+   * `if (!mpctx->opts->prefetch_open || mpctx->open_active) return;`
+   * (mpv 0.41.0 `player/loadfile.c:1278`). So once that opener is running, an
+   * entry inserted in front of it gets no prefetch of its own, and at the
+   * boundary `open_demux_reentrant()` compares the running opener's URL against
+   * the one it now needs (`strcmp(mpctx->open_url, url)`, `loadfile.c:1223`),
+   * logs `Dropping finished prefetch of wrong URL.` (or `Aborting ongoing
+   * prefetch…`), calls `cancel_open()` — which joins that thread on the core
+   * thread — and opens cold. The insert is still correct; it just costs the
+   * prefetch that was in flight, which is the same trade mpv's own manual warns
+   * about for any queue edit near a boundary
+   * ({@link PlayerOptions.prefetchPlaylist}). Inserting well before the current
+   * track ends is free.
+   */
+  readonly position?: 'next' | number
+  /**
+   * Start playback **if nothing is currently playing** — mpv's `*-play` action
+   * variants.
+   *
+   * @remarks
+   * This is mpv's wording, not a softening of ours: "Append the file, and if
+   * nothing is currently playing, start playback. (Always starts with the added
+   * file, even if the playlist was not empty before running this command.)"
+   * (mpv 0.41.0 `input.rst`). On a player that is already playing it does
+   * nothing at all — it is not "play this now". For that, add the entry and
+   * then {@link PlaylistApi.jumpTo} it.
+   */
+  readonly play?: boolean
+}
+
 /**
  * Queue manipulation, backed by mpv's own playlist (which is what makes
  * gapless transitions gapless — the next entry is demuxed before the current
@@ -424,17 +514,45 @@ export type Unsubscribe = () => void
  */
 export interface PlaylistApi {
   /**
-   * Append a source to the end of the playlist.
+   * Add a source to the playlist — at the end, next, or at an exact index.
    *
    * @param source - URI or file path.
-   * @param options - `playNow: true` starts playback if nothing is playing
-   * (mpv's `append-play`).
+   * @param options - See {@link PlaylistAddOptions}. Omit it entirely for a
+   * plain append.
+   *
+   * @throws {@link PlayerErrorException} with code `invalid-state` when
+   * `position` is a number that is not an integer in `0 … playlist.count` —
+   * see {@link PlaylistAddOptions.position}.
    *
    * @remarks
+   * **One mpv command, whatever the cell.** The six combinations of `position`
+   * and `play` each map to exactly one `loadfile` action:
+   *
+   * | `position`  | `play: false` (default) | `play: true`       |
+   * | ----------- | ----------------------- | ------------------ |
+   * | *(omitted)* | `append`                | `append-play`      |
+   * | `'next'`    | `insert-next`           | `insert-next-play` |
+   * | `number`    | `insert-at` + index     | `insert-at-play` + index |
+   *
+   * The `insert-*` actions arrived in mpv 0.38, together with `loadfile`'s
+   * third `index` argument (see {@link LOADFILE_NO_INDEX}). This library never
+   * emulates them with an `append` + `playlist-move` pair: that is two commands
+   * with a window in between where the queue is briefly wrong — observable
+   * through `playlist-count`, and readable by mpv's own prefetch, which consults
+   * the queue on its own schedule.
+   *
    * Carries the same `.m3u8`/`.m3u` `demuxer=lavf` guard as {@link Player.load}
    * — it is the identical `loadfile` command and the identical hazard.
+   *
+   * @example
+   * ```ts
+   * await player.playlist.add(uri)                        // to the end
+   * await player.playlist.add(uri, { position: 'next' })  // play after this one
+   * await player.playlist.add(uri, { position: 0 })       // to the head
+   * await player.playlist.add(uri, { play: true })        // …and start if idle
+   * ```
    */
-  add(source: string, options?: { readonly playNow?: boolean }): Promise<void>
+  add(source: string, options?: PlaylistAddOptions): Promise<void>
   /**
    * Remove the entry at `index`.
    *
@@ -791,21 +909,75 @@ function needsHlsDemuxer(source: string): boolean {
 const LOADFILE_NO_INDEX = '-1'
 
 /**
+ * Every `loadfile` action this library emits — mpv 0.41.0 `input.rst`'s second
+ * argument, verbatim.
+ *
+ * The four `insert-*` members are what {@link PlaylistApi.add} compiles a
+ * `position` into; see {@link loadfileFlagFor} for the mapping.
+ */
+type LoadfileFlag =
+  | 'replace'
+  | 'append'
+  | 'append-play'
+  | 'insert-next'
+  | 'insert-next-play'
+  | 'insert-at'
+  | 'insert-at-play'
+
+/**
  * Assemble a `loadfile` argument vector for the pinned engine.
  *
  * Kept as one function so the `index` placeholder above is written down once
- * rather than at each of the three call sites.
+ * rather than at each of the call sites.
+ *
+ * @param index - The insertion index for `insert-at`/`insert-at-play`. mpv
+ * ignores this argument for every other action ("This argument will be ignored
+ * for all other actions", mpv 0.41.0 `input.rst`), so it is only ever passed
+ * with those two flags — and the {@link LOADFILE_NO_INDEX} placeholder covers
+ * everything else that needs to reach the fourth argument.
  */
 function buildLoadfileArgs(
   source: string,
-  flags: string,
-  fileOptions: string | undefined
+  flags: LoadfileFlag,
+  fileOptions: string | undefined,
+  index?: number
 ): string[] {
   const args = ['loadfile', source, flags]
-  // Only append the placeholder when there is a fourth argument to reach —
-  // a bare `loadfile <url> <flags>` is identical in every mpv version.
-  if (fileOptions !== undefined) args.push(LOADFILE_NO_INDEX, fileOptions)
+  if (index !== undefined) {
+    args.push(String(index))
+  } else if (fileOptions !== undefined) {
+    // Only append the placeholder when there is a fourth argument to reach —
+    // a bare `loadfile <url> <flags>` is identical in every mpv version.
+    args.push(LOADFILE_NO_INDEX)
+  }
+  if (fileOptions !== undefined) args.push(fileOptions)
   return args
+}
+
+/**
+ * The whole `position` × `play` table of {@link PlaylistAddOptions}, in one
+ * place, mapped onto mpv 0.41.0's `loadfile` actions.
+ *
+ * | `position`  | `play: false` (default) | `play: true`       |
+ * | ----------- | ----------------------- | ------------------ |
+ * | *(omitted)* | `append`                | `append-play`      |
+ * | `'next'`    | `insert-next`           | `insert-next-play` |
+ * | `number`    | `insert-at`             | `insert-at-play`   |
+ *
+ * Each cell is **one** mpv command. The `insert-*` actions are the reason this
+ * table exists: before mpv 0.38 an "insert" had to be spelled as an `append`
+ * followed by a `playlist-move`, which is two commands, two playlist mutations
+ * and a window in between where the queue is wrong — visible to any observer of
+ * `playlist-count`, and to mpv's own prefetch, which reads the queue whenever it
+ * likes.
+ */
+function loadfileFlagFor(
+  position: 'next' | number | undefined,
+  play: boolean
+): LoadfileFlag {
+  if (position === undefined) return play ? 'append-play' : 'append'
+  if (position === 'next') return play ? 'insert-next-play' : 'insert-next'
+  return play ? 'insert-at-play' : 'insert-at'
 }
 
 /**
@@ -904,6 +1076,7 @@ export class Player {
     error: new Set(),
     trackChanged: new Set(),
     metadataChanged: new Set(),
+    prefetchStarted: new Set(),
     log: new Set(),
   }
 
@@ -961,6 +1134,12 @@ export class Player {
       // produces a request for this listener to receive.
       client.setSourceResolutionListener((request) => {
         player.#resolution?.handleRequest(request)
+      })
+      // Registered unconditionally, and it costs nothing here: the hook that
+      // produces these fires only when mpv is actually prefetching, and the
+      // emission walks an empty listener set when nobody subscribed.
+      client.setPrefetchStartedListener((event) => {
+        player.#emit('prefetchStarted', event)
       })
       // Registered unconditionally, and it costs nothing: no sampler thread
       // exists until something subscribes, so an app that never draws a
@@ -1240,9 +1419,15 @@ export class Player {
    * synchronously. Nothing polls, nothing is streamed, and a URI that is already
    * resolved costs a map lookup.
    *
-   * **Cost when not installed.** Zero, and that is enforced by construction: the
-   * mpv hooks are registered on the first `setSourceResolver`, never before, so
-   * a player that does not use this feature runs a stock load path.
+   * **Cost when not installed.** One immediate `mpv_hook_continue` per load
+   * boundary, and nothing else — no property read, no rewrite, no JavaScript.
+   * The two load hooks are registered when the core starts rather than when a
+   * resolver arrives, because the fork's "behaves exactly like stock mpv"
+   * guarantee holds only while the hook name has *no* client at all: registering
+   * late would not preserve stock behaviour, it would only move the moment
+   * behaviour changes into the middle of a session, where nothing can measure
+   * it. That also makes {@link PlayerEventMap.prefetchStarted} available to
+   * players that never resolve anything.
    *
    * **One caveat worth knowing.** mpv normalises the URI it hands back inside
    * the hook: URLs pass through verbatim, but a *relative* local path is made
@@ -1374,12 +1559,23 @@ export class Player {
   readonly playlist: PlaylistApi = {
     add: async (source, options) => {
       this.#assertAlive('playlist.add')
+      const position = options?.position
+      // Validated before the command, like every other typed option here: an
+      // out-of-range index must not reach mpv, which would quietly append.
+      if (typeof position === 'number') {
+        this.#assertInsertIndex(position)
+      } else if (position !== undefined && position !== 'next') {
+        throw invalidArgument(
+          `\`position\` must be 'next' or a playlist index; got '${String(position)}'.`
+        )
+      }
       const fileOptions = formatFileOptions(undefined, undefined, source)
       await this.command(
         buildLoadfileArgs(
           source,
-          options?.playNow === true ? 'append-play' : 'append',
-          fileOptions
+          loadfileFlagFor(position, options?.play === true),
+          fileOptions,
+          typeof position === 'number' ? position : undefined
         )
       )
     },
@@ -2072,6 +2268,36 @@ export class Player {
       return read()
     } catch {
       return undefined
+    }
+  }
+
+  /**
+   * Reject an insertion index mpv would silently turn into an append.
+   *
+   * The bound is read from mpv (`playlist-count`) rather than taken from
+   * `state.playlist.count`, because the snapshot is only as fresh as the last
+   * event batch and an `add` issued from a command handler can easily run
+   * ahead of one. A core that reports the property unavailable (idle, or
+   * tearing down) falls back to the snapshot — which is `0` on an idle core, so
+   * the only index still accepted there is `0`, i.e. "the head of an empty
+   * queue", which is what an append would do anyway.
+   */
+  #assertInsertIndex(position: number): void {
+    if (!Number.isInteger(position) || position < 0) {
+      throw invalidArgument(
+        `\`position\` must be a non-negative integer playlist index; got ${position}.`
+      )
+    }
+    const count =
+      this.#readInBatch(() =>
+        this.#client.getPropertyNumber(MpvProperty.playlistCount)
+      ) ?? this.#state.playlist.count
+    if (position > count) {
+      throw invalidArgument(
+        `\`position\` ${position} is past the end of a ${count}-entry playlist. ` +
+          'mpv would silently append instead of inserting; pass an index in ' +
+          `0 … ${count}, or omit \`position\` to append on purpose.`
+      )
     }
   }
 

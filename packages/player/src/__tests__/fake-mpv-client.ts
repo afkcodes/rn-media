@@ -6,6 +6,7 @@ import type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  PrefetchStartedEvent,
   SourceResolutionRequest,
   VisualizerCapture,
 } from '../specs/mpv-client.nitro'
@@ -107,6 +108,7 @@ export class FakeMpvClient implements MpvClient {
   #listener: ((events: MpvEvent[]) => boolean) | undefined
   #visualizerListener: ((capture: VisualizerCapture) => boolean) | undefined
   #resolutionListener: ((request: SourceResolutionRequest) => void) | undefined
+  #prefetchListener: ((event: PrefetchStartedEvent) => void) | undefined
 
   /** Whether a batch listener is currently registered. */
   get hasListener(): boolean {
@@ -241,6 +243,28 @@ export class FakeMpvClient implements MpvClient {
   /** Deliver one request, exactly as a load hook would. */
   emitResolutionRequest(request: SourceResolutionRequest): void {
     this.#resolutionListener?.(request)
+  }
+
+  setPrefetchStartedListener(
+    onPrefetchStarted: (event: PrefetchStartedEvent) => void
+  ): void {
+    this.#prefetchListener = onPrefetchStarted
+  }
+
+  /** Whether a prefetch listener is currently registered. */
+  get hasPrefetchListener(): boolean {
+    return this.#prefetchListener !== undefined
+  }
+
+  /**
+   * Deliver one prefetch notification, exactly as the prefetch hook would.
+   *
+   * Note what the fake does *not* model, deliberately: on a stock (non-fork)
+   * libmpv this is never called at all, which is the whole of that binary's
+   * behaviour — the hook is registered and never raised.
+   */
+  emitPrefetchStarted(event: PrefetchStartedEvent): void {
+    this.#prefetchListener?.(event)
   }
 
   /** Every `setResolvedSource` push, as a `logical -> resolved` map. */

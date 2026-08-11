@@ -66,7 +66,10 @@ player.destroy();
 await player.loadPlaylist(sources, { startIndex: 2 }); // gapless, mpv playlist
 await player.loadPlaylist(sources, { shuffle: true }); // shuffled, starts at the top
 
-await player.playlist.add(uri, { playNow: true });
+await player.playlist.add(uri); // append
+await player.playlist.add(uri, { position: 'next' }); // after the current entry
+await player.playlist.add(uri, { position: 2 }); // exact index
+await player.playlist.add(uri, { play: true }); // …and start if nothing is playing
 await player.playlist.remove(3);
 await player.playlist.move(0, 4); // ordinary array semantics
 await player.playlist.jumpTo(2); // plays it; pass { autoPlay: false } to stay paused
@@ -76,6 +79,24 @@ await player.playlist.clear(); // keeps the entry that is playing
 await player.playlist.shuffle(); // mpv `playlist-shuffle`
 await player.playlist.unshuffle(); // undoes the last shuffle — once
 ```
+
+**Insertion is one command, and it is validated.** `position` compiles straight
+onto mpv 0.38+'s `loadfile` insert actions — `insert-next` / `insert-next-play`
+for `'next'`, `insert-at` / `insert-at-play` plus the index argument for a
+number — so the queue is never briefly wrong the way an `append` + `playlist-move`
+pair would leave it. A numeric `position` outside `0 … playlist.count` **throws**
+rather than being clamped: mpv's own behaviour there is to silently append, which
+turns an off-by-one into a track at the wrong end of the queue.
+
+`play: true` is mpv's `*-play` variant, and it means exactly what mpv means: start
+playback *if nothing is currently playing*. It is not "play this now" — for that,
+add the entry and `jumpTo` it.
+
+**Caveat with `prefetchPlaylist`.** An entry inserted while mpv is already
+prefetching the *old* next entry is not prefetched itself (`prefetch_next()`
+returns early while an opener is active), and at the boundary mpv drops the
+now-wrong prefetch and opens cold. The insert is correct; it costs the prefetch
+that was in flight. Insert well before the current track ends and nothing is lost.
 
 **Shuffle.** `playlist.shuffle()` is mpv's `playlist-shuffle`, which permutes
 *every* entry, including the one playing. The track keeps playing (mpv tracks the
@@ -394,9 +415,16 @@ await player.loadPlaylist(['library://a', 'library://b', 'library://c']);
 Install or replace it later with `player.setSourceResolver(fn)`, and remove it
 with `player.setSourceResolver(null)`.
 
-**Nothing about the load path changes until you install one.** The mpv hooks are
-registered on the first `setSourceResolver` and never before, so a player without
-a resolver runs stock mpv.
+**Nothing about the URL changes until you install one.** The two mpv load hooks
+are registered when the core starts, always, but the handler is disarmed until a
+resolver arrives: it reads nothing, rewrites nothing, and continues the hook
+immediately, so what mpv opens is byte-for-byte the URI you queued. Registering
+up front rather than on demand is deliberate — the fork's "identical to stock
+mpv" guarantee holds only while the hook name has *no* client, so a late
+registration would not preserve stock behaviour, it would just move the moment
+behaviour changes into the middle of a session. The cost is one immediate
+`mpv_hook_continue` per load boundary, and it is what makes `prefetchStarted`
+(below) available to players that never resolve anything.
 
 **Resolution happens ahead of time.** The current and next entries are resolved
 as soon as the queue moves — read from mpv's own playlist, so it follows
@@ -434,6 +462,31 @@ the next queue movement.
 > ("This does not work with URLs resolved by the youtube-dl wrapper, and it
 > won't" — mpv's own manual, on `--prefetch-playlist`). On a stock libmpv the
 > play-time half still works; prefetched entries simply open unresolved.
+
+### Knowing when a prefetch starts
+
+```ts
+const player = await Player.create({ prefetchPlaylist: true });
+
+player.on('prefetchStarted', ({ uri, entryId }) =>
+  console.log('opening ahead:', uri, entryId),
+);
+```
+
+Fires once per prefetched entry, at the instant mpv releases its opener thread on
+it — which is seconds *into* the current track (mpv arms the prefetch on the first
+cache poll after the current file is fully read), not near the boundary. It needs
+no resolver.
+
+Two conditions, both of them honest: `prefetchPlaylist` has to be on (it is off by
+default), and the linked libmpv has to carry the `on_prefetch_load` hook — Android
+`v1.1.9-rnmedia.5`+ / iOS `v0.7.2-rnmedia.4`+. On any other build mpv accepts the
+hook registration and never raises it ("if the name is unknown, the hook event
+will simply be never raised" — `mpv/client.h`), so the event simply never occurs.
+There is no error and no capability flag: an event that does not happen is not a
+failure. `entryId` is mpv's playlist *entry id* — stable across `playlist-move`
+and `playlist-remove`, unlike an index — and is absent on binaries that predate
+the `prefetch-playlist-entry-id` property.
 
 ### Cache tuning
 

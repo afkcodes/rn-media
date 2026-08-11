@@ -22,6 +22,7 @@ export type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  PrefetchStartedEvent,
   SourceResolutionRequest,
   VisualizerCapture,
 } from './specs/mpv-client.nitro'
@@ -169,6 +170,7 @@ export type {
   PlayerEventName,
   PlayerLogLevel,
   PlayerOptions,
+  PlaylistAddOptions,
   PlaylistApi,
   ReplayGainMode,
   ReplayGainOptions,
