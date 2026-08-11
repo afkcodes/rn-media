@@ -37,13 +37,16 @@
 # `{code:'mpv', errno:-11}`, and the patch series must be re-applied with
 # `--fuzz=0` — at the 0.41 bump two patches still applied *with fuzz* onto trees
 # that had already absorbed or renamed what they touched (ARCHITECTURE §11).
+# As of rnmedia.6 the WHOLE series is applied at `--fuzz=0
+# --no-backup-if-mismatch`, so a rebase that needs fuzz now fails the build
+# instead of quietly producing a tree nobody inspected.
 
 # GitHub owner/repo of the darwin build scripts. Part of the pin, not a
 # constant: we ship from our own fork so the ffmpeg configure flags and the
 # engine version are under our control (see TAG below).
 LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 
-# v0.7.2-rnmedia.4 = upstream v0.7.2 with our delta on branch `rn-media-hls`.
+# v0.7.2-rnmedia.6 = upstream v0.7.2 with our delta on branch `rn-media-hls`.
 #
 # NOTE ON THE TAG NAME: the `v0.7.2` base no longer describes the contents —
 # upstream v0.7.2 was mpv 0.36.0 / FFmpeg 6.0, and this release is mpv 0.41.0 /
@@ -51,8 +54,9 @@ LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 # repo + tag, and renaming mid-series would break the `-rnmedia.N` lineage for
 # no gain. The fork's release notes say the same thing.
 #
-# Four generations. The first two are ffmpeg configure flags; the third is the
-# fork's first source patch; the fourth is the engine itself.
+# Six generations. The first two are ffmpeg configure flags; the third is the
+# fork's first source patch; the fourth is the engine itself; the fifth is the
+# prefetch hook; the sixth is parity with the Android fork.
 #
 #   rnmedia.1  --enable-demuxer=hls --enable-demuxer=mpegts
 #              Upstream's audio flavour builds ffmpeg with `--disable-all` plus
@@ -159,21 +163,82 @@ LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 # `[rn-media] prefetch hook resolved: `) present on the device slice, pcm-tap
 # markers intact, export list still exactly 54 `mpv_*` names (hooks ride
 # mpv_hook_add/mpv_hook_continue — no new symbol).
-LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.5
+# --- rnmedia.6 — THE PARITY RELEASE, from the iOS side -----------------------
+# No engine bump (still mpv 0.41.0 / FFmpeg 8.1.2 / libplacebo 6.338.2) and no
+# new rn-media patch. Cut in lockstep with Android v1.1.9-rnmedia.7; the two
+# must move together, because the iconv work spans both forks and shipping one
+# alone would reintroduce the divergence this closes. mpv is now configured
+# exhaustively on both platforms — 103 options each, 101 identical, and the
+# only two that differ are the platform's own audio output (`audiounit` here,
+# `audiotrack` there).
+#
+# What this half gained, and what it stopped getting away with:
+#   • COVER ART, 0 → 8 decoders. The audio flavour had none: bmp, gif,
+#     jpeg2000, jpegls, mjpeg, png, tiff, webp are now compiled in. Eight and
+#     not Android's old nine — `--enable-decoder=ljpeg` matches nothing in any
+#     FFmpeg and was deleted there rather than copied here. Measured on the
+#     RELEASED asset by probe strings rather than by flags: `Invalid BMP`
+#     0 → 1, `IHDR` 0 → 6, `LZW` 0 → 4, and `Avcodec` +27.8 %.
+#   • TrueHD DECODER (`--enable-decoder=truehd`) and the dtshd demuxer. This
+#     slice already had the truehd DEMUXER, so a `.thd` demuxed cleanly and
+#     then failed to decode — the worst shape of a gap, because it looks like a
+#     corrupt file rather than a missing feature.
+#   • `--disable-gpl --disable-nonfree` are now ASSERTED, not merely omitted.
+#     Omission has the same licence outcome and none of the same proof.
+#   • the WHOLE patch series applies at `--fuzz=0 --no-backup-if-mismatch`, in
+#     every derivation that patches, not just the prefetch-hook line rnmedia.5
+#     fixed. Verified: all six mpv patches apply at fuzz 0 in derivation order,
+#     leaving zero `.orig` files. That closes the trap the header of this file
+#     has warned about since the 0.41 bump.
+#   • mbedTLS 3.4.1 → 3.6.7, the current 3.6 LTS point release, from the
+#     official RELEASE tarball rather than a GitHub `/archive/` snapshot (from
+#     3.6 on a bare snapshot needs `scripts/make_generated_files.py` run first,
+#     and this fork builds mbedTLS as a CMake subproject with no generation
+#     step). Android is on the same release: one TLS stack, both platforms.
+#   • libxml2 REMOVED from the audio variant — see LIBMPV_LIBXML2_VERSION.
+#   • iconv stays ON here. 0.4.0 of the workshop had disabled it to match
+#     Android; that made the two agree by taking a working feature away, and it
+#     was reversed — Android vendors GNU libiconv 1.19 statically instead. The
+#     ceiling got broken, not lowered.
+#
+# AND THE SIMULATOR AO SHIPS. Until this release the simulator slice had NO
+# audio output compiled in at all: the fork's meson line applied
+# `-Daudiounit=enabled` only when the os was exactly `ios`, so the simulator
+# built `-Daudiounit=disabled -Davfoundation=disabled` and `ao_audiounit.m` was
+# never compiled — which also meant patch 007 (audiounit shared session) was
+# absent from it. Nobody noticed for four generations because CI links fine
+# without an AO; it was found by the FIRST run of the workshop's
+# `verify-artifacts` over the shipped binaries, as the only two FAIL cells in
+# the matrix. Now fixed and measured on the RELEASED asset: the simulator slice
+# carries `audiounit` (and no second AO), carries patch 007's markers, and grew
+# +21 632 B. The device slice moved +384 B — this release is not an engine
+# change.
+#
+# Verified against the RELEASED assets on a Linux host (never the build log):
+# export list still exactly the 54 `mpv_*` names in the fork's `mpv.exp` on
+# BOTH slices with zero non-`mpv_*` entries, pcm-tap and prefetch markers
+# intact, and `workshop verify-artifacts --android-tag v1.1.9-rnmedia.7
+# --darwin-tag v0.7.2-rnmedia.6` green: 12 slices x 10 categories = 120 cells,
+# 0 FAIL.
+#
+# Flags, pins and patches are GENERATED from afkcodes/rn-media-engine and
+# synced into the fork; `workshop sync --check` fails that repo's CI on drift.
+LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.6
 LIBMPV_DARWIN_BUILD_VARIANT=ios-universal-audio-default
 
 # SHA-256 of
 # libmpv-xcframeworks_${TAG}_${VARIANT}.tar.gz
 # (computed from the published release asset; re-verified on every download,
 # and a mismatch is a hard build failure rather than a warning).
-LIBMPV_DARWIN_BUILD_SHA256=81d4bc96ad47e0dab4b812c088bcf4547ef9f78e7d2dfc485bad7a30c2992080
+LIBMPV_DARWIN_BUILD_SHA256=a596a75e8e3c22b9f66f4a50b56d5ef2c28d736f5d72741d8fd21f2c55f5df5b
 
 # --- metadata (informational; verified by inspecting the binaries) -----------
 # mpv                       0.41.0   (MPV_CLIENT_API_VERSION = 2.5)
 # FFmpeg                    8.1.2    (LGPL: no --enable-gpl, --enable-version3)
 # libplacebo                6.338.2  (static, every GPU backend disabled)
-# mbedTLS                   3.4.1
-# libxml2                   2.11.5   (static, inside Avformat)
+# mbedTLS                   3.6.7    (3.6 LTS; Android ships the same release)
+# libiconv                  Apple libc (Android vendors GNU libiconv 1.19)
+# libxml2                   not shipped — removed in rnmedia.6
 # xcframework slices        ios-arm64, ios-arm64_x86_64-simulator
 LIBMPV_MPV_VERSION=0.41.0
 LIBMPV_FFMPEG_VERSION=8.1.2
@@ -183,14 +248,23 @@ LIBMPV_FFMPEG_VERSION=8.1.2
 # version: '>=6.338.2')`); 7.x drops symbols 0.41's csputils.h still references
 # under mobile cross-files, and the Android half pins the same version.
 LIBMPV_LIBPLACEBO_VERSION=6.338.2
-LIBMPV_MBEDTLS_VERSION=3.4.1
-# libxml2 is FFmpeg's (dashdec/hls), built static and folded into Avformat —
-# there is no eleventh framework for it. Machine-readable for
-# scripts/check-upstream.mjs, whose libxml2 row compares this against upstream
-# and against the Android pin; the two forks do NOT currently agree (Android
-# ships 2.10.3, and mbedTLS above diverges the same way: 3.6.1 there, 3.4.1
-# here). Value is the darwin fork's own `packages.lock.nix` at the pinned tag.
-LIBMPV_LIBXML2_VERSION=2.11.5
+LIBMPV_MBEDTLS_VERSION=3.6.7
+# Read by scripts/check-upstream.mjs and printed verbatim next to the row.
+LIBMPV_MBEDTLS_PIN_NOTE="top of the 3.6 LTS line by choice: 4.x is a new major built around the PSA-crypto-only API, and whether FFmpeg 8.1.2 mbedTLS TLS backend builds against it is UNVERIFIED as of 2026-08-12 - evaluate 4.x only with a compile proof, not a version bump."
+# `none` = NOT SHIPPED, and it is a value rather than a deleted line on
+# purpose: absence has to be stated, or a reader cannot tell "we removed it"
+# from "nobody recorded it". libxml2 was FFmpeg's, folded static into Avformat,
+# and FFmpeg reaches it from exactly one place — the DASH demuxer, which
+# neither fork has ever enabled. So both audio artifacts were carrying an XML
+# parser nothing could reach. Removed on both sides in the rnmedia.7/.6
+# lockstep pair; `--enable-libxml2` now lives only in the darwin fork's VIDEO
+# variant options, which this pin does not build. If DASH is ever wanted, both
+# platforms get the demuxer AND libxml2 together and this goes back to a
+# version. scripts/check-upstream.mjs treats `none` as "component not shipped":
+# the row prints Ours=`not shipped` with status `info`, performs no upstream
+# lookup for that platform, and never counts as behind/unknown — while `none`
+# on one side against a version on the other is still printed as divergence.
+LIBMPV_LIBXML2_VERSION=none
 
 # Read by scripts/check-upstream.mjs and printed verbatim next to the libplacebo
 # row, which — exactly like FFmpeg's — is MEANT to read BEHIND: 7.x is newer and

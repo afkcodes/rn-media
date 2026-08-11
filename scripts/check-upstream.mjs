@@ -39,7 +39,10 @@
  *     compiled into the same artifact, so they get rows too, once per platform.
  *     They are per-fork build-script choices, which means the two platforms CAN
  *     disagree — and a disagreement is itself a finding (CLAUDE.md makes parity
- *     a gate), so it is printed loudly rather than resolved silently.
+ *     a gate), so it is printed loudly rather than resolved silently. A pin of
+ *     `none` means the component is not in the artifact at all (libxml2, since
+ *     the rnmedia.7/.6 parity pair): the row stays on the table as 'info' and
+ *     no upstream is contacted for it — see `isNotShipped`.
  *   - The engine's richer source of truth is the workshop repo
  *     (afkcodes/rn-media-engine, manifest/engine.json). This watcher does not
  *     read it, on purpose: it parses the pin files in THIS repo, so it reports
@@ -113,6 +116,32 @@ function compareVersions(a, b) {
 /** Strip an npm range operator: "^0.36.1" → "0.36.1". @param {string} r */
 function bareVersion(r) {
   return String(r).replace(/^[\^~>=<\s]+/, '').trim();
+}
+
+/**
+ * The pin value that means "this component is NOT in the artifact we ship".
+ *
+ * Both pin files state absence with a value rather than by deleting the field,
+ * so that a reader can tell "we removed it" from "nobody recorded it" — see the
+ * `libxml2Version` / `LIBMPV_LIBXML2_VERSION` comments, which is where the
+ * convention is defined. It arrived with the rnmedia.7/.6 parity pair, which
+ * dropped libxml2 from both audio artifacts (FFmpeg reaches it only from the
+ * DASH demuxer, which neither fork enables).
+ *
+ * Consequences here, all three deliberate:
+ *   1. no upstream lookup is performed for a component nobody ships — asking
+ *      GNOME GitLab what the newest libxml2 is, in order to compare it against
+ *      nothing, is a request that can only produce a fake 'unknown' when it
+ *      fails;
+ *   2. the row is 'info', never behind/unknown — "absent on purpose" is not
+ *      drift, and it must not be able to open the tracking issue;
+ *   3. `none` on ONE platform against a version on the other is still
+ *      divergence, and is printed loudly. That is the case parity actually
+ *      cares about.
+ * @param {string|null|undefined} v
+ */
+function isNotShipped(v) {
+  return String(v ?? '').trim().toLowerCase() === 'none';
 }
 
 /** @param {string|null|undefined} iso */
@@ -627,9 +656,24 @@ async function collect() {
 
   // Line hint for the sub-dependency resolvers: the LOWER of the two platform
   // pins, for the same reason collapseNpmPin reports the lowest npm pin as
-  // "ours" — if either fork lags, we lag.
-  const lowerPin = (/** @type {string|undefined} */ a, /** @type {string|undefined} */ b) =>
-    a && b ? (compareVersions(a, b) <= 0 ? a : b) : a || b;
+  // "ours" — if either fork lags, we lag. A platform that does not ship the
+  // component contributes no hint (`none` is not a low version).
+  const lowerPin = (/** @type {string|undefined} */ a, /** @type {string|undefined} */ b) => {
+    const av = isNotShipped(a) ? undefined : a;
+    const bv = isNotShipped(b) ? undefined : b;
+    return av && bv ? (compareVersions(av, bv) <= 0 ? av : bv) : av || bv;
+  };
+
+  /** Sentinel for a component neither platform ships: no lookup was attempted. */
+  const NOT_SHIPPED_UPSTREAM = { notShipped: true };
+  /**
+   * Run an engine sub-dependency's upstream lookup only if at least one
+   * platform actually ships it. Wrapped at the call site rather than inside
+   * each resolver so the resolvers stay dumb about our pin conventions.
+   * @param {string|undefined} a @param {string|undefined} b @param {() => Promise<any>} run
+   */
+  const ifShipped = (a, b, run) =>
+    isNotShipped(a) && isNotShipped(b) ? Promise.resolve(NOT_SHIPPED_UPSTREAM) : run();
 
   const [
     mpv,
@@ -652,12 +696,20 @@ async function collect() {
     fetchNpmLatest('react-native'),
     fetchRepoLatestRelease('media-kit/libmpv-android-audio-build'),
     fetchRepoLatestRelease('media-kit/libmpv-darwin-build'),
-    fetchGithubTagLatest('Mbed-TLS/mbedtls', lowerPin(android.values.mbedtlsVersion, ios.values.LIBMPV_MBEDTLS_VERSION)),
+    ifShipped(android.values.mbedtlsVersion, ios.values.LIBMPV_MBEDTLS_VERSION, () =>
+      fetchGithubTagLatest('Mbed-TLS/mbedtls', lowerPin(android.values.mbedtlsVersion, ios.values.LIBMPV_MBEDTLS_VERSION)),
+    ),
     // haasn is libplacebo's own author and upstream's own mirror; the darwin
     // fork fetches its tarballs from there too, because code.videolan.org
     // refuses connections from some networks.
-    fetchGithubTagLatest('haasn/libplacebo', lowerPin(android.values.libplaceboVersion, ios.values.LIBMPV_LIBPLACEBO_VERSION)),
-    fetchLibxml2Latest(lowerPin(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION)),
+    ifShipped(android.values.libplaceboVersion, ios.values.LIBMPV_LIBPLACEBO_VERSION, () =>
+      fetchGithubTagLatest('haasn/libplacebo', lowerPin(android.values.libplaceboVersion, ios.values.LIBMPV_LIBPLACEBO_VERSION)),
+    ),
+    // Neither fork ships libxml2 as of the rnmedia.7/.6 parity pair, so this
+    // resolves to the sentinel and GNOME GitLab is never contacted.
+    ifShipped(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION, () =>
+      fetchLibxml2Latest(lowerPin(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION)),
+    ),
   ]);
 
   const androidSrc = android.error ? '' : `${rel(android.file)}:${android.lines.mpvVersion ?? android.blockStartLine}`;
@@ -673,9 +725,23 @@ async function collect() {
    * one axis over. Compared with compareVersions rather than by string, because
    * the FFmpeg pins spell the same version two ways (`n8.1.2` vs `8.1.2`) and
    * that is formatting, not drift.
+   * A `none` pin (component not shipped) is handled ahead of the version
+   * compare, because `compareVersions('none', …)` would parse it as 0 and
+   * report the right answer for the wrong reason — and, more importantly,
+   * because "one platform ships this and the other does not" is a sharper
+   * finding than a version skew and deserves to read that way.
    * @param {string|undefined} a Android pin @param {string|undefined} b iOS pin
    */
-  const divergence = (a, b) => (a && b && compareVersions(a, b) !== 0 ? `DIVERGENT across platforms: Android ${a}, iOS ${b}` : '');
+  const divergence = (a, b) => {
+    if (!a || !b) return '';
+    if (isNotShipped(a) && isNotShipped(b)) return ''; // absent on both = parity
+    if (isNotShipped(a) || isNotShipped(b)) {
+      return isNotShipped(a)
+        ? `DIVERGENT across platforms: Android does NOT ship this component, iOS pins ${b}`
+        : `DIVERGENT across platforms: Android pins ${a}, iOS does NOT ship this component`;
+    }
+    return compareVersions(a, b) !== 0 ? `DIVERGENT across platforms: Android ${a}, iOS ${b}` : '';
+  };
 
   /** @type {Row[]} */
   const rows = [];
@@ -826,7 +892,7 @@ async function collect() {
       pinNote: android.values.libxml2PinNote,
       upstream: libxml2,
       diverge: divergence(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION),
-      extra: 'FFmpeg --enable-libxml2 (DASH/HLS manifest parsing); upstream is GNOME GitLab, not GitHub',
+      extra: 'was FFmpeg --enable-libxml2, reachable only from the DASH demuxer neither fork enables — dropped in v1.1.9-rnmedia.7; upstream is GNOME GitLab, not GitHub',
     },
     {
       component: 'libxml2 (iOS engine)',
@@ -836,9 +902,37 @@ async function collect() {
       pinNote: ios.values.LIBMPV_LIBXML2_PIN_NOTE,
       upstream: libxml2,
       diverge: divergence(android.values.libxml2Version, ios.values.LIBMPV_LIBXML2_VERSION),
-      extra: 'static inside Avformat',
+      extra: 'was static inside Avformat — dropped from the audio variant in v0.7.2-rnmedia.6; the darwin fork still pins it for the VIDEO variant this repo does not build',
     },
   ])) {
+    // A component this platform does not ship gets a ROW, not a skip. The
+    // file's row model is "every tracked component is on the table, always" —
+    // a component that silently disappears from the output reads as a watcher
+    // bug, and the whole point of `none` being a value is that absence is
+    // stated rather than inferred. 'info' is the status the context rows
+    // already use and is excluded from the behind/unknown tallies by
+    // construction, so this can never open or hold open the tracking issue.
+    // The divergence note is still emitted: if the OTHER platform ships it,
+    // that is precisely the parity finding this table exists to surface.
+    if (isNotShipped(sub.ours)) {
+      rows.push({
+        component: sub.component,
+        ours: 'not shipped',
+        latest: '—',
+        released: '—',
+        status: 'info',
+        notes: [
+          sub.src && `pin: ${sub.src}`,
+          'NOT SHIPPED: the pin records this component as absent from the artifact, so there is nothing to compare and no upstream lookup is made',
+          sub.diverge,
+          sub.extra,
+        ]
+          .filter(Boolean)
+          .join('; '),
+        unknownReason: null,
+      });
+      continue;
+    }
     const up = sub.upstream;
     const line = 'error' in up ? null : up.line;
     rows.push(
