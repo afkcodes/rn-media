@@ -145,6 +145,34 @@ export interface VisualizerCapture {
 }
 
 /**
+ * mpv is about to open a source and does not know its concrete URL yet.
+ *
+ * @remarks
+ * Delivered on a channel of its own rather than inside the event batch. A batch
+ * is handed to JavaScript one at a time behind a completion promise, and a
+ * play-time request is holding mpv's core open while it waits — so making it
+ * queue behind unrelated JavaScript would charge that work to a stall.
+ */
+export interface SourceResolutionRequest {
+  /**
+   * The logical URL mpv is about to open — the string that is in the playlist,
+   * read back from `stream-open-filename`.
+   */
+  readonly uri: string
+  /**
+   * mpv's playlist entry id for the entry being prefetched.
+   *
+   * Present **only on the prefetch path**, because that is the only place it
+   * exists: at prefetch time mpv has not sent `MPV_EVENT_START_FILE` for the
+   * entry and `playlist-current-pos` still points at the track that is playing,
+   * so the fork exposes the id as a property readable while the prefetch hook
+   * is open and nowhere else. A play-time request carries no id, and its
+   * absence is therefore also the signal for "this one is blocking mpv".
+   */
+  readonly entryId?: number
+}
+
+/**
  * A thin, complete binding over one `mpv_handle` (one `mpv_create()` core).
  *
  * One instance == one player core; create as many as you need via
@@ -275,6 +303,78 @@ export interface MpvClient
    */
   setVisualizerListener(
     onCapture: (capture: VisualizerCapture) => boolean
+  ): void
+
+  /**
+   * Register the (single) source-resolution listener. Pass before
+   * {@link installSourceResolver}.
+   *
+   * Unlike the other two listeners this one returns nothing: there is no
+   * back-pressure to apply, because the answer comes back through
+   * {@link completeResolution} rather than through a completion promise.
+   *
+   * Calling this again replaces the previous listener.
+   */
+  setSourceResolutionListener(
+    onRequest: (request: SourceResolutionRequest) => void
+  ): void
+
+  /**
+   * Arm mpv's load hooks (`on_load`, and `on_prefetch_load` on rn-media
+   * binaries), registering them with mpv on the first call.
+   *
+   * Registration is **lazy** so that a core which never installs a resolver is
+   * byte-for-byte stock, and **permanent** because mpv has no unregister call
+   * ("Currently, hooks can't be removed explicitly", `mpv/client.h`) — so
+   * {@link uninstallSourceResolver} can only disarm the handler, after which it
+   * continues every hook immediately and unrewritten.
+   *
+   * @param timeoutMs - How long a play-time `on_load` miss may hold mpv's core
+   * while JavaScript resolves. `0` disables holding entirely, i.e. only the
+   * pre-warmed cache is ever consulted.
+   */
+  installSourceResolver(timeoutMs: number): void
+
+  /**
+   * Disarm the handler and drop every cached resolution. Idempotent, and safe
+   * to call while a hook is parked: the hold is released immediately.
+   */
+  uninstallSourceResolver(): void
+
+  /**
+   * Pre-seed the resolution cache, so a load hook never has to ask.
+   *
+   * This is the whole point of the design: a cache hit inside a hook is a map
+   * lookup plus one property write, with no JavaScript anywhere near mpv's
+   * core.
+   *
+   * @param logical - The URL as it appears in mpv's playlist.
+   * @param resolved - What mpv should open instead.
+   * @param ttlMs - How long the answer stays valid. `<= 0` stores nothing.
+   */
+  setResolvedSource(logical: string, resolved: string, ttlMs: number): void
+
+  /** Forget every resolution. The next hook asks JavaScript again. */
+  clearResolvedSources(): void
+
+  /**
+   * Answer a {@link SourceResolutionRequest}.
+   *
+   * A successful answer is cached (so the play-time `on_load` pass for the same
+   * entry replays it verbatim — mpv compares the pre- and post-hook URLs
+   * byte-for-byte to decide whether the prefetched stream can be reused) and
+   * releases a matching play-time hold. `undefined` means "could not resolve":
+   * nothing is cached and the hook continues unrewritten, letting mpv fail the
+   * load on its own terms.
+   *
+   * @param logical - The `uri` of the request being answered.
+   * @param resolved - The concrete URL, or `undefined`.
+   * @param ttlMs - How long a successful answer stays cached.
+   */
+  completeResolution(
+    logical: string,
+    resolved: string | undefined,
+    ttlMs: number
   ): void
 
   /**

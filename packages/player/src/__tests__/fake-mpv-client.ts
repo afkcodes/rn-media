@@ -6,6 +6,7 @@ import type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  SourceResolutionRequest,
   VisualizerCapture,
 } from '../specs/mpv-client.nitro'
 
@@ -77,8 +78,35 @@ export class FakeMpvClient implements MpvClient {
     | { readonly kind: 'stop' }
   )[] = []
 
+  /**
+   * Every source-resolution call, in order — the whole native contract as a
+   * transcript, so a test can assert that a URL was pushed into the cache
+   * *before* mpv would have asked for it.
+   */
+  readonly resolverCalls: (
+    | { readonly kind: 'install'; readonly timeoutMs: number }
+    | { readonly kind: 'uninstall' }
+    | { readonly kind: 'clear' }
+    | {
+        readonly kind: 'set'
+        readonly logical: string
+        readonly resolved: string
+        readonly ttlMs: number
+      }
+    | {
+        readonly kind: 'complete'
+        readonly logical: string
+        readonly resolved: string | undefined
+        readonly ttlMs: number
+      }
+  )[] = []
+
+  /** Set to make `installSourceResolver()` throw with this message. */
+  installResolverRejection: string | undefined
+
   #listener: ((events: MpvEvent[]) => boolean) | undefined
   #visualizerListener: ((capture: VisualizerCapture) => boolean) | undefined
+  #resolutionListener: ((request: SourceResolutionRequest) => void) | undefined
 
   /** Whether a batch listener is currently registered. */
   get hasListener(): boolean {
@@ -187,6 +215,69 @@ export class FakeMpvClient implements MpvClient {
   emitCapture(capture: VisualizerCapture): boolean {
     if (this.#visualizerListener === undefined) return false
     return this.#visualizerListener(capture)
+  }
+
+  setSourceResolutionListener(
+    onRequest: (request: SourceResolutionRequest) => void
+  ): void {
+    this.#resolutionListener = onRequest
+  }
+
+  /** Whether a resolution listener is currently registered. */
+  get hasResolutionListener(): boolean {
+    return this.#resolutionListener !== undefined
+  }
+
+  /** Whether the native hooks are armed, by the fake's own bookkeeping. */
+  get resolverInstalled(): boolean {
+    for (let i = this.resolverCalls.length - 1; i >= 0; i -= 1) {
+      const call = this.resolverCalls[i]
+      if (call?.kind === 'install') return true
+      if (call?.kind === 'uninstall') return false
+    }
+    return false
+  }
+
+  /** Deliver one request, exactly as a load hook would. */
+  emitResolutionRequest(request: SourceResolutionRequest): void {
+    this.#resolutionListener?.(request)
+  }
+
+  /** Every `setResolvedSource` push, as a `logical -> resolved` map. */
+  get resolvedSources(): Map<string, string> {
+    const map = new Map<string, string>()
+    for (const call of this.resolverCalls) {
+      if (call.kind === 'set') map.set(call.logical, call.resolved)
+      if (call.kind === 'clear' || call.kind === 'uninstall') map.clear()
+    }
+    return map
+  }
+
+  installSourceResolver(timeoutMs: number): void {
+    if (this.installResolverRejection !== undefined) {
+      throw new Error(this.installResolverRejection)
+    }
+    this.resolverCalls.push({ kind: 'install', timeoutMs })
+  }
+
+  uninstallSourceResolver(): void {
+    this.resolverCalls.push({ kind: 'uninstall' })
+  }
+
+  setResolvedSource(logical: string, resolved: string, ttlMs: number): void {
+    this.resolverCalls.push({ kind: 'set', logical, resolved, ttlMs })
+  }
+
+  clearResolvedSources(): void {
+    this.resolverCalls.push({ kind: 'clear' })
+  }
+
+  completeResolution(
+    logical: string,
+    resolved: string | undefined,
+    ttlMs: number
+  ): void {
+    this.resolverCalls.push({ kind: 'complete', logical, resolved, ttlMs })
   }
 
   attachVideoOutput(_handle: UInt64): void {

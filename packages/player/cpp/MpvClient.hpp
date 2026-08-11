@@ -62,6 +62,21 @@
 /// Steps 2–3 are bounded and short; the JS thread is not blocked on mpv
 /// teardown, only on the event thread noticing the wakeup.
 ///
+/// --------------------------- SOURCE RESOLUTION ----------------------------
+///
+/// One more thing happens on the event thread, and it is the only place in this
+/// class that ever *waits*: `MPV_EVENT_HOOK`. See `handleHook()` in the .cpp and
+/// `SourceResolution.hpp` for the full reasoning. In one paragraph:
+/// `on_prefetch_load` (our fork) fires mid-track over live audio, so a miss is
+/// continued immediately and JavaScript is asked afterwards; stock `on_load`
+/// fires between entries with nothing playing, so a miss holds the hook for at
+/// most `resolverTimeoutMs` while JavaScript answers. The wait lives on the
+/// event thread because a hook already blocks mpv's core by construction —
+/// nothing else can proceed for this core while it is open, so moving the wait
+/// to another thread would buy nothing and cost a hop. `destroy()` calls
+/// `ResolutionGate::abort()` *before* joining, so teardown never waits out a
+/// resolver timeout.
+///
 /// ==========================================================================
 ///
 
@@ -80,6 +95,7 @@
 
 #include "ClientState.hpp"
 #include "EventBatch.hpp"
+#include "SourceResolution.hpp"
 
 struct mpv_handle;
 
@@ -135,11 +151,19 @@ public:
   /// Invoked on the **event thread** for every `MPV_EVENT_COMMAND_REPLY`.
   /// `error` is 0 on success or a negative `mpv_error`.
   using CommandReplyFn = std::function<void(std::uint64_t replyId, int error)>;
+  /// Invoked on the **event thread** when a load hook asked for a URL the cache
+  /// could not answer. `entryId` is mpv's playlist entry id, available *only*
+  /// on the prefetch path (see `installSourceResolver`).
+  ///
+  /// Must be cheap and must not block: on the prefetch path the hook has
+  /// already been continued and the core is running live audio; on the play
+  /// path this thread is holding mpv's core open.
+  using ResolutionRequestFn = std::function<void(const std::string& url, std::optional<std::int64_t> entryId)>;
 
   /// Calls `mpv_create()`. Throws `MpvError` if mpv could not allocate a core.
-  /// Both callbacks are captured once and never replaced, which is what lets
-  /// the event thread invoke them without synchronisation.
-  MpvClient(BatchReadyFn onBatchReady, CommandReplyFn onCommandReply);
+  /// All three callbacks are captured once and never replaced, which is what
+  /// lets the event thread invoke them without synchronisation.
+  MpvClient(BatchReadyFn onBatchReady, CommandReplyFn onCommandReply, ResolutionRequestFn onResolutionRequest);
   ~MpvClient();
 
   MpvClient(const MpvClient&) = delete;
@@ -193,6 +217,49 @@ public:
   /// the tap is disarmed or no audio has reached the device yet.
   bool readPcmTapWindow(std::vector<float>& out, int& channels, int& rate, std::int64_t& seq);
 
+  // ------------------------- Dynamic source resolution ---------------------
+
+  /// Arm the load hooks, registering them with mpv on the first call.
+  ///
+  /// Registration is lazy and permanent, and both halves of that matter:
+  ///
+  ///  - **Lazy**, because a core that never installs a resolver must be
+  ///    byte-for-byte stock. Our fork's `on_prefetch_load` costs nothing when
+  ///    no client has registered for that name, and stock `on_load` costs
+  ///    nothing either — but only while we stay out of them.
+  ///  - **Permanent**, because mpv has no unregister call (`client.h`:
+  ///    "Currently, hooks can't be removed explicitly. But they will be
+  ///    implicitly removed if the mpv_handle it was registered with is
+  ///    destroyed"). So `uninstallSourceResolver()` can only *disarm* the
+  ///    handler, which then continues every hook immediately — an unrewritten
+  ///    pass-through, which is what stock mpv does anyway.
+  ///
+  /// `mpv_hook_add` takes the core lock (`player/client.c`, `lock_core`), so it
+  /// waits for the core to reach a dispatch point. Call it at setup time, never
+  /// from a latency-sensitive path.
+  ///
+  /// @param timeoutMs How long a play-time `on_load` miss may hold mpv's core
+  /// while JavaScript resolves. `0` disables holding entirely.
+  void installSourceResolver(std::int64_t timeoutMs);
+
+  /// Disarm the handler and drop every cached resolution. Idempotent, and safe
+  /// while a hook is parked: an open hold is released at once.
+  void uninstallSourceResolver() noexcept;
+
+  /// Pre-seed the cache, so the hook never has to ask. This is the whole point
+  /// of the design — see `SourceResolution.hpp`.
+  void setResolvedSource(const std::string& logical, const std::string& resolved, std::int64_t ttlMs);
+
+  /// Forget every resolution. The next hook for any URL asks JavaScript again.
+  void clearResolvedSources();
+
+  /// Answer a `ResolutionRequestFn`. Caches a successful answer (so the second,
+  /// play-time `on_load` pass for the same entry replays it verbatim) and
+  /// releases a matching play-time hold. An answer without a value means "could
+  /// not resolve": nothing is cached and the hook continues unrewritten.
+  void completeResolution(const std::string& logical, const std::optional<std::string>& resolved,
+                          std::int64_t ttlMs);
+
   /// Re-observing a name replaces the previous observation.
   void observeProperty(const std::string& name, PropertyFormat format);
   /// No-op if `name` was not observed.
@@ -218,8 +285,16 @@ public:
 private:
   void eventLoop(mpv_handle* handle) noexcept;
   /// Translates one mpv event and pushes it. Returns true if a flush must be
-  /// scheduled. Command replies are dispatched here and never enter the batch.
-  bool handleEvent(void* event);
+  /// scheduled. Command replies and hooks are dispatched here and never enter
+  /// the batch — a hook must not wait behind unrelated JS work, and a reply
+  /// resolves one specific Promise.
+  bool handleEvent(mpv_handle* handle, void* event);
+  /// Event thread. Resolves (or declines to resolve) one load hook and always
+  /// continues it. `handle` is the event thread's own copy: `destroy()` joins
+  /// this thread before `mpv_terminate_destroy()` can run, so the pointer stays
+  /// valid here without `_handleMutex` — which must NOT be held across the
+  /// bounded wait, or teardown would block on it.
+  void handleHook(mpv_handle* handle, const std::string& name, std::uint64_t id) noexcept;
   void setOptionOrThrow(mpv_handle* handle, const std::string& name, const std::string& value);
 
   ClientState _state;
@@ -237,6 +312,23 @@ private:
   EventBatch _batch;
   const BatchReadyFn _onBatchReady;
   const CommandReplyFn _onCommandReply;
+  const ResolutionRequestFn _onResolutionRequest;
+
+  /// Resolved URLs, and the single play-time hold. Both are pure logic and both
+  /// are unit-tested on the host; see `SourceResolution.hpp`.
+  ResolvedSourceCache _resolutionCache;
+  ResolutionGate _resolutionGate;
+  /// Read on the event thread inside a hook, written from the JS thread by
+  /// install/uninstall. Atomic rather than mutexed because the hook path must
+  /// not contend with anything.
+  std::atomic<bool> _resolverActive{false};
+  std::atomic<std::int64_t> _resolverTimeoutMs{0};
+  /// Guards the two registration flags. JS-thread only in practice, but
+  /// `installSourceResolver` is a public method and "JS thread" is not a
+  /// guarantee we can enforce.
+  std::mutex _hookMutex;
+  bool _prefetchHookRegistered = false;
+  bool _loadHookRegistered = false;
 
   std::atomic<std::uint64_t> _nextReplyId{1};
 

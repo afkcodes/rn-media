@@ -234,6 +234,24 @@ respectively), FFmpeg's `dash-base-url-escape` and `hls-mp4-seek` deleted
 rebased, and darwin's two VideoToolbox patches rebased *and* gated on the video
 variant this repo does not ship.
 
+Added 2026-08-11, both forks, byte-identical:
+`006.rn_media_prefetch_hook.patch` fires an `on_prefetch_load` client hook from
+mpv's `prefetch-playlist` path and exposes read-only
+`prefetch-playlist-entry-id` (valid only while that hook is open). Upstream
+never runs hooks on prefetch and says it never will (`options.rst` on
+`--prefetch-playlist`: resolved URLs "won't" work) — without the patch, a
+URL-rewriting resolver makes prefetch *worse* than off, because
+`open_demux_reentrant()` discards the mismatched prefetch by strcmp at the
+boundary while blocking the core. Adds no exports (rides
+`mpv_hook_add`/`mpv_hook_continue`); marker strings for step 3:
+`[rn-media] prefetch hook resolved: `, `on_prefetch_load`,
+`prefetch-playlist-entry-id` (all three in `rn-media-release.sh`'s required
+list). A device-free regression harness lives in the Android fork
+(`buildscripts/tests/`, 21 assertions, runs in its CI); the canonical copy and
+its tree-equivalence proof live in `afkcodes/rn-media-engine`
+(`patches/004-prefetch-hook`), which is the edit target — fork copies are
+synced from it, never edited in place.
+
 **Cost, honestly.** Android `arm64-v8a` grew 6.39 → 8.19 MB stripped (+27 %).
 iOS grew the same way and for the same reasons: across all ten frameworks the
 device slice went 6 811 280 → 8 048 768 bytes (+18.2 %), and `Mpv.framework`

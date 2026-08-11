@@ -364,8 +364,76 @@ native→JS hop; treat them as ±1 batch, not microseconds):
 
 Off it goes to the network only once the current entry has ended — 568 ms of that
 644 ms was waiting for the CDN's response headers, more than the device had
-buffered. On it, the next entry was open ~18 s before it was needed. If you play
-network queues and do not rewrite the queue mid-track, turn it on.
+buffered. On, mpv opens the next entry as soon as the current one is fully read
+into cache, which for a normal audio file is seconds after it *starts* (in the
+measured runs the next entry had been open for ~18 s by the boundary, and that
+was a short track — there is no fixed lead time; the trigger is demuxer EOF, not
+proximity to the end). If you play network queues and do not rewrite the queue
+mid-track, turn it on.
+
+### Dynamic source resolution (signed URLs, transcode sessions)
+
+Queues whose entries cannot be written down ahead of time — a signed CDN link
+that expires in minutes, a transcode session that has to be created per track —
+do not have to be resolved when the queue is built. Give the player a resolver
+and it asks, per entry, moments before mpv opens it:
+
+```ts
+const player = await Player.create({
+  prefetchPlaylist: true,
+  sourceResolver: async ({ uri }) => {
+    if (!uri.startsWith('library://')) return uri; // nothing to do
+    const { url } = await api.signPlaybackUrl(uri.slice('library://'.length));
+    return url;
+  },
+});
+
+await player.loadPlaylist(['library://a', 'library://b', 'library://c']);
+```
+
+Install or replace it later with `player.setSourceResolver(fn)`, and remove it
+with `player.setSourceResolver(null)`.
+
+**Nothing about the load path changes until you install one.** The mpv hooks are
+registered on the first `setSourceResolver` and never before, so a player without
+a resolver runs stock mpv.
+
+**Resolution happens ahead of time.** The current and next entries are resolved
+as soon as the queue moves — read from mpv's own playlist, so it follows
+`playlist.next()`, repeat and shuffle rather than guessing — and the answers are
+pushed into a native cache. When mpv reaches an entry that is already resolved,
+the whole thing costs a map lookup and one property write, with no JavaScript
+anywhere near mpv's core. If it reaches one that is not, mpv is held for up to
+`resolverTimeoutMs` (default 10 s) while the resolver answers; on timeout the
+original URI is used and mpv fails the load on its own terms, which arrives as an
+ordinary typed `error` event.
+
+**Your resolver must be deterministic while an entry is queued.** mpv opens each
+entry twice — once speculatively on the prefetch path, once for real — and reuses
+the prefetched stream only if the two URLs are byte-identical
+(`open_demux_reentrant`, mpv 0.41.0 `player/loadfile.c:1223`). A resolver that
+mints a fresh nonce per call therefore *defeats* prefetching: mpv drops the
+prefetched stream, joins the opener thread on its core thread at the boundary,
+and opens cold. The library removes most of that hazard for you by caching the
+first answer per URI and replaying it, so in practice: mint once per track, not
+once per call, and size `resolverTtlMs` (default 10 min) so it covers a track but
+stays inside your signature's lifetime.
+
+| option | default | meaning |
+|---|---|---|
+| `sourceResolver` | none | the resolver; also settable via `setSourceResolver` |
+| `resolverTimeoutMs` | `10_000` | how long a *play-time* miss may hold mpv. `0` = never hold |
+| `resolverTtlMs` | `600_000` | how long one resolution is replayed before being recomputed |
+
+A resolver that throws (or rejects, or returns a non-string) emits a typed
+`load-failed` error on `player.on('error', …)`, caches nothing, and is retried on
+the next queue movement.
+
+> Requires a libmpv built from the rn-media forks for the *prefetch* half: our
+> patch fires an `on_prefetch_load` hook that upstream mpv deliberately does not
+> ("This does not work with URLs resolved by the youtube-dl wrapper, and it
+> won't" — mpv's own manual, on `--prefetch-playlist`). On a stock libmpv the
+> play-time half still works; prefetched entries simply open unresolved.
 
 ### Cache tuning
 

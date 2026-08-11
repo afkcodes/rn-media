@@ -16,6 +16,10 @@
 ///    `Promise` from there is safe: the resolver Nitro installed is an
 ///    `AsyncJSCallback` that hops to the JS thread via the Dispatcher
 ///    (react-native-nitro-modules `JSIConverter+Promise.hpp` / `JSCallback.hpp`).
+///  - `SourceResolutionDelivery::deliver` runs on the mpv event thread, and on
+///    the play-time path that thread is holding an mpv hook open while it waits
+///    for `completeResolution`. It must therefore only ever *schedule* — which
+///    is all a Nitro `=> void` callback does.
 ///
 
 #include <cstdint>
@@ -144,6 +148,32 @@ private:
   Listener _listener;
 };
 
+///
+/// Carries "mpv needs this URL resolved" from the event thread to JavaScript.
+///
+/// The thinnest of the three delivery classes, and deliberately so: there is no
+/// back-pressure clock here because the answer does not come back through a
+/// completion promise — it comes back as a separate `completeResolution()` call
+/// on the JS thread, which settles the native gate the event thread is waiting
+/// on. One in-flight request per core is guaranteed by mpv itself: hook events
+/// are delivered one at a time.
+///
+class SourceResolutionDelivery final {
+public:
+  using Listener = std::function<void(const SourceResolutionRequest&)>;
+
+  void setListener(const Listener& listener);
+  void clearListener();
+
+  /// Event thread. Throws nothing it can help; the caller treats a throw as
+  /// "the JS runtime is gone" and stops waiting.
+  void deliver(const std::string& url, std::optional<std::int64_t> entryId);
+
+private:
+  std::mutex _mutex;
+  Listener _listener;
+};
+
 class HybridMpvClient final : public HybridMpvClientSpec {
 public:
   HybridMpvClient();
@@ -173,6 +203,14 @@ public:
   void setVisualizerListener(
       const std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture&)>& onCapture) override;
 
+  void setSourceResolutionListener(const std::function<void(const SourceResolutionRequest&)>& onRequest) override;
+  void installSourceResolver(double timeoutMs) override;
+  void uninstallSourceResolver() override;
+  void setResolvedSource(const std::string& logical, const std::string& resolved, double ttlMs) override;
+  void clearResolvedSources() override;
+  void completeResolution(const std::string& logical, const std::optional<std::string>& resolved,
+                          double ttlMs) override;
+
   void attachVideoOutput(uint64_t handle) override;
   void detachVideoOutput() override;
   uint64_t getRawHandle() override;
@@ -187,6 +225,7 @@ private:
   std::shared_ptr<MpvFlushCoordinator> _flusher;
   std::shared_ptr<PendingCommands> _pending;
   std::shared_ptr<VisualizerDelivery> _visualizer;
+  std::shared_ptr<SourceResolutionDelivery> _resolution;
   std::unique_ptr<rnmedia::MpvClient> _client;
   /// Created on the first `startVisualizer`, so a player nobody visualises
   /// never allocates a sampler thread, an FFT table or a window.
