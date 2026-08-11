@@ -94,10 +94,11 @@ Pod::Spec.new do |s|
     # `cpp/third_party/mpv/include` rather than the ones inside
     # `Mpv.framework/Headers` on purpose:
     #   1. `cpp/` is shared with Android, so both platforms must compile against
-    #      one header set; the vendored copy is the lowest common denominator
-    #      (mpv 0.35.1, MPV_CLIENT_API_VERSION 2.0 — the Android binaries).
-    #      The iOS binary is mpv 0.36.0 / API 2.1, a strict superset (it only
-    #      adds `mpv_del_property`), so linking is safe.
+    #      one header set. As of the 0.41 engine bump that is no longer a
+    #      lowest-common-denominator compromise: BOTH platforms ship mpv 0.41.0
+    #      (MPV_CLIENT_API_VERSION 2.5) from our two forks, so the vendored copy
+    #      is simply *the* header of *the* binary. (It used to be the older of
+    #      two: Android 0.35.1/API 2.0 against iOS 0.36.0/API 2.1.)
     #   2. `Mpv.framework/Headers` is flat (`client.h`, not `mpv/client.h`) and
     #      also ships `render.h`/`render_gl.h`; the core must never see those
     #      (CLAUDE.md "Modular"). The vendored dir excludes them by design.

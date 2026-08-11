@@ -455,7 +455,10 @@ development build. [Plugin reference](packages/media-session/README.md#expo-conf
 - [`react-native-nitro-modules`](https://nitro.margelo.com)
 - Android: minSdk **24**, compileSdk **36**. iOS: **15.1+**
 - Prebuilt libmpv downloads at build time (Gradle task / podspec script), pinned
-  by tag + SHA-256: ~3 MB per Android ABI, ~2.5 MB compressed on iOS.
+  by tag + SHA-256: ~8 MB per Android ABI, ~7.7 MB for the iOS device slice
+  across all ten frameworks (9.4 MB compressed). Those numbers roughly doubled
+  at the mpv 0.41 / FFmpeg 8 engine bump; ARCHITECTURE §11 records why and says
+  so plainly.
 
 ## Limitations
 
@@ -487,11 +490,16 @@ pattern that satisfies the relink obligation. Ship your app's licenses screen
 with the mpv/FFmpeg notices.
 
 Both binaries come from our public forks of media-kit's build scripts —
-[`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.2)
-and [`libmpv-darwin-build`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.2)
-— where the only delta is additive ffmpeg configure flags: the `hls`/`mpegts`
-demuxers (stock audio flavours omit both) plus 16 audio filters. Every GPL-gated
-ffmpeg filter is a *video* filter, so the LGPL line is untouched.
+[`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.5)
+and [`libmpv-darwin-build`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.4)
+— both mpv 0.41.0 / FFmpeg 8.1.2, so the two platforms run one engine. The delta
+versus upstream is additive ffmpeg configure flags (the `hls`/`mpegts` demuxers,
+which stock audio flavours omit, plus 16 audio filters) and one source patch (the
+PCM tap behind the visualizer). Every GPL-gated ffmpeg filter is a *video*
+filter, so the LGPL line is untouched. libmpv also links **libplacebo**
+(LGPL v2.1+, mandatory for mpv >= 0.37) — statically, inside the LGPL libmpv that
+is itself dynamically linked, so the relink obligation still holds at that
+boundary.
 
 ## Development
 

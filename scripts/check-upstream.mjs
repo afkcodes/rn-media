@@ -546,26 +546,34 @@ async function collect() {
     }),
   );
 
-  // ── engine: ffmpeg. Android's ext.libmpv has no ffmpeg field today (the
-  //    version lives only in a prose comment), so that row reports 'unknown'
-  //    with the reason instead of guessing. Add `ffmpegVersion:` to the pin
-  //    block and this row starts comparing with no change here.
+  // ── engine: ffmpeg.
+  //
+  //    This row is EXPECTED to read 'behind' and that is not a bug to be muted.
+  //    Our FFmpeg is chosen by what the pinned mpv actually requires, and a
+  //    fresh FFmpeg major routinely postdates the mpv release that has to build
+  //    against it. Rather than special-case a version here — which would rot the
+  //    day the pin moves — each pin file may carry a free-text rationale
+  //    (`ffmpegPinNote` in ext.libmpv, `LIBMPV_FFMPEG_PIN_NOTE` in libmpv.pin)
+  //    and it is surfaced verbatim in the notes column. The row still says
+  //    BEHIND; it just also says why, in the pin's own words.
   const ffLatest = 'error' in ffmpeg ? null : ffmpeg.latest;
   const ffPrev = 'error' in ffmpeg ? null : ffmpeg.previous;
   const ffErr = 'error' in ffmpeg ? ffmpeg.error : ffLatest ? null : 'no release line resolved';
   const ffPrevNote = ffPrev ? `previous line: n${ffPrev.version}${ffPrev.date ? ` (${ffPrev.date})` : ''}` : '';
-  for (const [component, version, err, src] of /** @type {[string, string|undefined, string|null, string][]} */ ([
+  for (const [component, version, err, src, pinNote] of /** @type {[string, string|undefined, string|null, string, string|undefined][]} */ ([
     [
       'FFmpeg (Android engine)',
       android.values.ffmpegVersion,
       android.error ?? (android.values.ffmpegVersion ? null : 'no `ffmpegVersion` field in ext.libmpv — only a prose comment'),
       androidSrc,
+      android.values.ffmpegPinNote,
     ],
     [
       'FFmpeg (iOS engine)',
       ios.values.LIBMPV_FFMPEG_VERSION,
       ios.error ?? (ios.values.LIBMPV_FFMPEG_VERSION ? null : 'no LIBMPV_FFMPEG_VERSION'),
       ios.error ? '' : `${rel(ios.file)}:${ios.lines.LIBMPV_FFMPEG_VERSION ?? 1}`,
+      ios.values.LIBMPV_FFMPEG_PIN_NOTE,
     ],
   ])) {
     rows.push(
@@ -576,7 +584,12 @@ async function collect() {
         latest: ffLatest ? `n${ffLatest.version}` : null,
         latestError: ffErr,
         released: ffLatest?.date ?? '',
-        notes: [src && `pin: ${src}`, ffPrevNote, 'a fresh FFmpeg major can be days old — read the line ages before treating this as urgent'],
+        notes: [
+          src && `pin: ${src}`,
+          pinNote && `PINNED DELIBERATELY: ${pinNote}`,
+          ffPrevNote,
+          'a fresh FFmpeg major can be days old — read the line ages before treating this as urgent',
+        ],
       }),
     );
   }

@@ -36,7 +36,9 @@ this file changes in the same commit. Deeper detail lives in
 ### 1. Engine: libmpv, not ExoPlayer/AVPlayer
 Every format ffmpeg decodes, identical behavior on both platforms, native
 gapless, and zero ExoPlayer class-conflicts with other libraries. The costs are
-accepted consciously: ~3 MB/ABI binaries, no DRM ever (this library targets
+accepted consciously: ~8 MB/ABI binaries (it was ~3 MB before the mpv 0.41 /
+FFmpeg 8 engine bump — see §11, where the number and the regret are recorded),
+no DRM ever (this library targets
 non-DRM audio), and we own focus/session/notification ourselves — which is the
 product anyway.
 
@@ -118,62 +120,132 @@ timelines unseekable and dropped the scrubber).
 
 ### 11. Binaries: pinned, forked, LGPL, dynamically linked
 Prebuilt libmpv comes from our forks of media-kit's build repos, and as of
-2026-08-09 **both platforms ship rn-media builds** rather than upstream's:
-`afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.4` and
-`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.3`. Each is pinned by exact tag +
-SHA-256 (hard build failure on mismatch) and cached for offline builds; the
-repo owner is itself a pin field on both platforms, so re-pointing at upstream
-is a one-line change. Forking is deliberate: upstream's audio flavor omits the
-HLS/mpegts demuxers **by scoping, not oversight** (their video flavor has
-them), so we own the configure flags. The delta versus upstream is additive
-configure flags only, and **the two platforms now carry the identical delta**:
-hls+mpegts demuxers, plus the same 16 LGPL audio filters incl. aresample (§18)
-— same source tree, same patches, and no change to the libmpv ABI we link
-(Android's `libmpv.so` and iOS's `Mpv.framework` both export exactly what
-upstream did). On iOS, where ffmpeg ships as separate dylibs, exactly two of
-the ten grow and the export tries of all ten are byte-identical to upstream's:
-`libavformat` gains the mpegts demuxer's three `avpriv_mpegts_parse_*` entry
-points and imports the `hls_demuxer_select` chain, and `libavfilter` gains
-+103 KB (device slice) of filter objects plus imports of already-exported
-libavutil surface (`av_tx_*`, `av_fifo_*`, `av_expr_parse_and_eval`). LGPL v3 (ffmpeg
-`--enable-version3`, never `--enable-gpl`), dynamically linked on both
-platforms (`.so` in APK, embedded dynamic xcframeworks on iOS) — the
-App-Store-accepted pattern that satisfies the relink obligation. Wrapper code
-is MIT.
+2026-08-11 **both platforms ship the same engine, from the same sources, for the
+first time**: `afkcodes/libmpv-android-audio-build@v1.1.9-rnmedia.5` and
+`afkcodes/libmpv-darwin-build@v0.7.2-rnmedia.4`, both mpv **0.41.0**
+(`MPV_CLIENT_API_VERSION` 2.5), FFmpeg **8.1.2**, libplacebo **6.338.2**. Each is
+pinned by exact tag + SHA-256 (hard build failure on mismatch) and cached for
+offline builds; the repo owner is itself a pin field on both platforms, so
+re-pointing at upstream is a one-line change. Forking is deliberate: upstream's
+audio flavor omits the HLS/mpegts demuxers **by scoping, not oversight** (their
+video flavor has them), so we own the configure flags — hls+mpegts demuxers plus
+the same 16 LGPL audio filters incl. `aresample` (§18), identical on both
+platforms. LGPL v3 (ffmpeg `--enable-version3`, never `--enable-gpl`),
+dynamically linked on both platforms (`.so` in APK, embedded dynamic
+xcframeworks on iOS) — the App-Store-accepted pattern that satisfies the relink
+obligation. Wrapper code is MIT.
 
-**As of 2026-08-11 the forks carry a source patch, not just flags, and that is
-a real escalation of the fork commitment.** `004.rn_media_pcm_tap.patch` adds a
-PCM tap to mpv's client API (§21) — four source files, no build-system files,
-which is precisely why the *same file* applies to the Android fork's mpv 0.35.1
-and the darwin fork's 0.36.0 with only hunk offsets differing. A configure flag
-survives a rebase by itself; a patch does not, so the procedure is now written
-down rather than assumed:
+That the two platforms are on one mpv is not cosmetic. The vendored
+`cpp/third_party/mpv/include/mpv/client.h` used to be the *older* of two headers
+(Android 0.35.1/API 2.0 vs iOS 0.36.0/API 2.1) — a lowest-common-denominator
+compromise written into the podspec. It is now simply the header of the binary.
 
-1. Rebase `rn-media-hls` onto the new upstream tag. The flags either survive or
-   the build fails loudly; the patch may fail *quietly* by applying with fuzz.
-2. Re-check the four anchors named in the patch header (`ao_post_process_data`'s
-   body, `ao_print_devices`'s declaration, `struct mpv_global`, and
-   `mp_property_audio_params` + the `{"audio-out-params", …}` table entry). They
-   have been stable across 0.35 → 0.41.
-3. Rebuild with `./build.sh --clean -n mpv` and prove the feature is in the
-   **shipped** artifact by a string only the patched code emits — automated as
-   `buildscripts/rn-media-release.sh`, which refuses to package a `.so` that
-   lacks any required marker and prints the SHA-256 block for the pin.
-4. Bump both pins together, and read the export diff: the tap adds **no new
-   exported symbol**, so an export set that changed means something else did.
+**The 0.41 bump is three changes wearing one version number**, and each one is a
+trap if taken for a routine bump:
 
-The Android fork carries one patch the darwin fork does not, and the asymmetry
-is a version fact rather than a platform one:
-`005.mpv_dup_node_byte_array.patch` backports upstream's own `dup_node`
-byte-array arm, which mpv gained in **0.36.0** — so 0.35.1 needs it and 0.36.0
-already has it. It is marked for deletion the moment the Android fork's mpv
-reaches 0.36. Without it the tap looks broken in the most misleading way
-possible (see Platform truths).
+1. **waf is gone.** mpv 0.37 removed it ("waf: remove waf as a build system"),
+   so both forks migrated their mpv step to meson. Every flag had to be
+   re-spelled, and two of them are not one-to-one: `--enable-lgpl` becomes
+   `-Dgpl=false` (opposite polarity, same licence outcome), and
+   `--enable-libmpv-shared` needs BOTH `-Dlibmpv=true` and
+   `--default-library shared`, because `-Dlibmpv=true` alone controls only
+   install/build-by-default and will happily produce a `libmpv.a`.
+2. **libplacebo is mandatory and cannot be stripped.** 0.37 replaced the
+   `libplacebo` build option with a bare `dependency()`, and mpv reaches it from
+   core, non-video translation units (`demux/demux_mkv.c`, `filters/f_lavfi.c`,
+   `player/main.c`, `video/mp_image.c`, `video/sws_utils.c`). libass CAN be
+   patched out; this cannot. Both forks build it with every GPU backend disabled
+   (no Vulkan, OpenGL, D3D11, shader compilers), static, folded into libmpv, so
+   the linker keeps only the colour-space objects mpv actually reaches. Version
+   **6.338.2** exactly — mpv 0.41's declared minimum, and 7.x drops symbols
+   0.41's `csputils.h` still references under mobile cross-files.
+   The expensive part of adding it was not the build flags but its **git
+   submodules**: a GitHub release tarball carries them empty, and four of the
+   five are load-bearing in ways a Linux host hides, because a Linux host has
+   the system copy of each installed. Two CI runs were spent finding them one at
+   a time, so they are enumerated in the pin (`packages.lock.nix`) with the run
+   that proved each: `fast_float` (`src/convert.cc` falls back to
+   `std::from_chars` for `double`, which libc++ in Xcode 16.x does not
+   implement, and the file `static_assert`s rather than link-failing),
+   `jinja` + `markupsafe` (the GLSL preprocessor runs on **every** build, GPU
+   backends or not), and `Vulkan-Headers` (`src/vulkan/stubs.c` is compiled
+   *because* Vulkan is disabled — it keeps the public Vulkan ABI present as
+   no-ops — and it includes `<vulkan/vulkan.h>`). Only `glad` is genuinely
+   unused. The general lesson is the same one the `--enable-protocol=hls` trap
+   teaches, one layer down: a dependency that builds on the dev box proves
+   nothing about the sandbox that ships.
+3. **The export list stopped being free.** mpv's waf build generated a linker
+   version script from `libmpv/mpv.def`; 0.37 deleted that file and 0.41 relies
+   solely on `gnu_symbol_visibility: 'hidden'` plus `MPV_EXPORT` in the public
+   headers. That governs mpv's OWN objects and does nothing for anything linked
+   into it. On Android, where FFmpeg/mbedTLS/libxml2/zlib are all static, the
+   first 0.41 build exported **4020** symbols instead of 55 — every `av_*`, the
+   lot. On darwin, where FFmpeg and mbedTLS ship as separate dylibs, nothing
+   static had ever entered the link, so 0.36 shipped a clean 53 by accident;
+   static libplacebo changes that (its public API is `visibility("default")`
+   regardless of `PL_STATIC`). Measured rather than estimated, by building the
+   same patched tree on Linux with no export control: **453 `pl_*` symbols**
+   land in the library alongside the 54 `mpv_*` ones. Both forks now pin the
+   list explicitly — Android with `--version-script` + `--exclude-libs=ALL`,
+   darwin with ld64's `-Wl,-exported_symbols_list` **on the `library('mpv', …)`
+   target only**, never on the cross file (Platform truths) — and both are
+   asserted against the SHIPPED artifact. The counts differ by exactly one and the
+   difference is named: **55 on Android, 54 on iOS, the extra being Android's
+   own `mpv_lavc_set_java_vm`**. Against v0.7.2/rnmedia.3's 53 the only additions
+   are mpv 0.41's own `mpv_del_property` and `mpv_get_time_ns`.
+   This is why "the export set is byte-identical" — true across every previous
+   fork generation — is now stated as "the export set is exactly this list": an
+   invariant that cannot survive an engine bump that adds API has to be replaced
+   by one that can.
 
-The two forks are **not equally verified**: the Android build is confirmed
-playing HLS on a device, and its PCM tap is confirmed feeding a visualizer on
-one; the iOS build is link-verified via CI only, and runtime playback on an iOS
-device remains unverified. README → Limitations carries the exact standing.
+**FFmpeg 8.1.2 is a deliberate pin, not a lag.** mpv 0.41's own floor is
+`libavcodec >= 60.31.102` (FFmpeg 6.1); n9.0 was cut six months *after* mpv
+0.41.0 shipped and has no point release. `scripts/check-upstream.mjs` therefore
+reports both FFmpeg rows as BEHIND on purpose, and each pin file carries a
+machine-read rationale field (`ffmpegPinNote`, `LIBMPV_FFMPEG_PIN_NOTE`) that the
+watcher prints verbatim next to the drift, so the row is honest in both
+directions.
+
+**The forks carry source patches, not just flags, and that stays priced.**
+`004.rn_media_pcm_tap.patch` adds a PCM tap to mpv's client API (§21) — four
+source files, no build-system files, which is why the *same file* is
+byte-identical between the two forks. A configure flag survives a rebase by
+itself; a patch does not, so the procedure is written down:
+
+1. Rebase onto the new upstream tag. Flags either survive or the build fails
+   loudly; a patch may fail *quietly* by applying with fuzz. Apply with
+   `--fuzz=0` and rebase for real when it rejects — at this bump, FFmpeg's
+   `hls-mp4-seek` patch still applied with fuzz onto a tree that already had the
+   fix, and the VideoToolbox VP9 patch applied with fuzz and then failed to
+   compile (FFmpeg 8 renamed `FF_CODEC_CAP_ALLOCATE_PROGRESS`).
+2. Re-check the four anchors named in the tap's header
+   (`ao_post_process_data`'s body, `ao_print_devices`'s declaration,
+   `struct mpv_global`, `mp_property_audio_params` + the `{"audio-out-params", …}`
+   table entry). They have been stable across 0.35 → 0.41.
+3. Prove the feature is in the **shipped** artifact by a string only the patched
+   code emits — automated as `buildscripts/rn-media-release.sh` on Android, which
+   refuses to package a `.so` that lacks any required marker.
+4. Bump both pins together and read the export diff against the pinned list.
+
+Patch dispositions at this bump, both forks: `001.audiotrack_threadsafe` and
+`005.mpv_dup_node_byte_array` deleted (upstream absorbed both — 0.41 and 0.36
+respectively), FFmpeg's `dash-base-url-escape` and `hls-mp4-seek` deleted
+(upstream in 8.1.2), `002`/`003`/`004` and darwin's objc/audiounit patches
+rebased, and darwin's two VideoToolbox patches rebased *and* gated on the video
+variant this repo does not ship.
+
+**Cost, honestly.** Android `arm64-v8a` grew 6.39 → 8.19 MB stripped (+27 %).
+iOS grew the same way and for the same reasons: across all ten frameworks the
+device slice went 6 811 280 → 8 048 768 bytes (+18.2 %), and `Mpv.framework`
+alone 1 856 352 → 2 675 912 (+44 %) because libplacebo now lives inside it. That
+is a real regression against §1's "~3 MB/ABI" framing, accepted deliberately as
+the price of currency, and it is the number to attack next.
+
+**The two forks are still not equally verified**: the Android build is confirmed
+playing HLS on a device and its PCM tap is confirmed feeding a visualizer on one;
+the iOS build is link-verified via CI plus shipped-artifact inspection only, and
+runtime playback on an iOS device remains unverified. README → Limitations
+carries the exact standing.
 
 ### 12. Defaults chosen by measurement (each overridable)
 - **User-Agent `rn-media (libmpv)`** — real Shoutcast hosts return 401 for the
@@ -507,9 +579,9 @@ and which together are not:
    `mpv_initialize()` — an always-on cost and an Android-shaped seam through the
    core.
 
-`af-metadata/<label>` (lavfi frame metadata, real and present in 0.35.1) remains
-the third option and is still not taken: it yields *levels*, not bins, and the
-filters that export them (`astats`, `ebur128`) are not compiled into our
+`af-metadata/<label>` (lavfi frame metadata, real and present in mpv 0.41)
+remains the third option and is still not taken: it yields *levels*, not bins,
+and the filters that export them (`astats`, `ebur128`) are not compiled into our
 binaries.
 
 **So the fork carries a source patch now, and that is the real decision.**
@@ -517,8 +589,11 @@ binaries.
 `pcm-tap` (int, rw — samples per channel to retain, `0` = off) and
 `pcm-tap-frame` (node, ro — `sample_rate`/`channels`/`frames`/`pts_us`/`seq`
 plus `samples`, a byte array of interleaved float32). Four source files, no
-build-system files, which is why **the same file applies to the Android fork's
-mpv 0.35.1 and the darwin fork's 0.36.0** with only hunk offsets differing. The
+build-system files, which is why **one patch file has now survived three
+different mpv versions across two forks** — it applied to 0.35.1 and 0.36.0 with
+only hunk offsets differing, and was re-derived once for 0.41 (where
+`ao_post_process_data`'s neighbourhood moved) and is byte-identical between the
+two forks again. The
 tap sits at the end of `ao_post_process_data()` — the funnel every AO's data
 passes through in `buffer.c`'s `read_buffer()` — so it is after the filter chain
 and after mpv's software gain, and reports what is *audible*. It hangs off
@@ -526,27 +601,28 @@ and after mpv's software gain, and reports what is *audible*. It hangs off
 cores in one process and each must tap its own audio. The write path runs on the
 device thread and never blocks: it `trylock`s and drops the chunk on contention.
 **No new exported symbol** — the whole feature is reachable through
-`mpv_get_property`/`mpv_set_property`, so the export set of every shipped
-artifact is byte-identical to the previous release (53 symbols on both
-platforms) and the ABI is untouched. Cost: +2.6 KB/ABI on Android, +224 B on the
-iOS device slice.
+`mpv_get_property`/`mpv_set_property`, so it adds nothing to either platform's
+export list and the ABI is untouched. (The export *lists* did change at the 0.41
+bump, but for reasons that have nothing to do with the tap; §11.) Cost when it
+was introduced: +2.6 KB/ABI on Android, +224 B on the iOS device slice.
 
 **The escalation was priced before it was accepted.** A patch is a rebase
 liability a configure flag is not; §11 now carries the procedure, and
 `rn-media-release.sh` refuses to package a binary that does not contain a string
 only the patched code emits.
 
-**One version-specific companion patch, and the bug that earned it.**
-`005.mpv_dup_node_byte_array.patch` (Android only) backports upstream mpv's own
-`dup_node` byte-array arm. Every `MPV_FORMAT_NODE` property is copied out of its
-handler through `copy_node()` → `dup_node()`, and mpv 0.35.1's switch has no
-`MPV_FORMAT_BYTE_ARRAY` case, so the node is stamped `(mpv_format)-1` — invalid.
-On device the map's scalars arrived intact (`channels: 2, frames: 2048,
+**One version-specific companion patch, and the bug that earned it — now
+deleted.** `005.mpv_dup_node_byte_array.patch` (Android only) backported upstream
+mpv's own `dup_node` byte-array arm. Every `MPV_FORMAT_NODE` property is copied
+out of its handler through `copy_node()` → `dup_node()`, and mpv 0.35.1's switch
+has no `MPV_FORMAT_BYTE_ARRAY` case, so the node was stamped `(mpv_format)-1` —
+invalid. On device the map's scalars arrived intact (`channels: 2, frames: 2048,
 seq: 1082`) while `samples` came through empty, which reads exactly like a tap
 with no audio rather than a copy that dropped a field. mpv gained the arm in
-**0.36.0**, so the darwin fork needs nothing; the asymmetry between the two forks
-is a version fact, not a platform one, and the patch is marked for deletion when
-Android's mpv reaches 0.36.
+**0.36.0**, which is why the darwin fork never needed it, and the Android fork's
+move to 0.41 (§11) retired it exactly as predicted. It is recorded here because
+the *failure mode* outlives the patch: a NODE property whose scalars survive and
+whose payload does not is a copy bug, not an empty source.
 
 **The FFT is native; every opinion above it is TypeScript.** The PCM never
 crosses into JavaScript. A native sampler thread (`PcmTap`) reads the tap on its
@@ -666,13 +742,22 @@ build is how you conclude the wrong thing about where the ceiling is.
   pads disagree, so the literal is in the binary whether or not the filter was
   compiled. Proof of registration has to come from something only the filter's
   own object file emits (here `af_aresample.c:164`'s log format).
-- **mpv 0.35.1's manual documents `replaygain-clip` inverted** vs its own
-  code; our API maps to behavior (verified in `player/audio.c`).
-- **mpv's waf does not relink `libmpv.so` when ffmpeg's static libs change** —
-  a rebuilt `libavfilter.a` next to a stale `.so` looks like a successful build
-  and silently ships the old binary (`./build.sh --clean -n mpv` forces it).
-  Same false-evidence shape as the `--enable-protocol=hls` trap: always verify
-  flags/symbols in the *shipped* artifact, never trust the build log.
+- **~~mpv's manual documents `replaygain-clip` inverted~~ — RETIRED at the 0.41
+  engine bump.** It was true of 0.35.1 ("prevent clipping"), and our API was
+  mapped to the *behaviour* verified in `player/audio.c` rather than to the
+  prose. mpv 0.41's `options.rst` now reads "Allow the volume gain to clip
+  (default: no)", which is what the code always did, so the two agree and our
+  mapping is unchanged. Kept as a retired entry because the API shape it
+  produced is still in the public surface, and a reader who finds the current
+  manual correct should not conclude the API is backwards.
+- **mpv's waf did not relink `libmpv.so` when ffmpeg's static libs changed** —
+  a rebuilt `libavfilter.a` next to a stale `.so` looked like a successful build
+  and silently shipped the old binary (`./build.sh --clean -n mpv` forced it).
+  **Re-tested after the meson migration (mpv 0.41): it does NOT reproduce** —
+  ninja tracks the archives as link inputs and relinks. The trap is gone; the
+  *lesson* is not, and it is the same one the `--enable-protocol=hls` flag
+  teaches: always verify flags/symbols in the **shipped** artifact, never in the
+  build log.
 - **Native callbacks do not freeze in the background — only JS timers do.**
   The visualizer's frames come from a native sampler, so backgrounding stops
   nothing by itself: measured on device (release, 20 bands @ 60 fps), the JS
@@ -683,17 +768,30 @@ build is how you conclude the wrong thing about where the ceiling is.
   explicit AppState gate — `useVisualizer`'s `pauseWhenInactive` (default on)
   drops the subscription, so the lazy rule disarms the tap for free (fixed:
   JS thread 0% with screen off, audio pipeline untouched).
+- **meson feeds the built-in `*_link_args` to compiler *checks*, not just to
+  targets.** Putting `-Wl,-exported_symbols_list` on the darwin cross file — the
+  obvious place, since `-Dc_link_args=` would *replace* the cross file's
+  `-arch/-isysroot/-version-min` triple rather than append to it — applied a list
+  naming only `_mpv_*` to every two-line probe meson links, and
+  `dependency('appleframeworks', modules: ['Foundation','AudioToolbox'])` is a
+  link probe. Result: `Run-time dependency appleframeworks found: NO` and the
+  AudioUnit AO gone. It failed loudly only because our option is
+  `-Daudiounit=enabled`; at meson's default `auto` the probe would have failed
+  identically and the build would have SUCCEEDED with no audio output in it. Link
+  flags meant for one artifact belong on that artifact's target.
 - **generator scaffolds contain load-bearing "dead code"**: the ReactPackage
   class is the only trigger of `System.loadLibrary` — deleting it fails only
   at runtime.
-- **mpv 0.35.1 silently destroys a byte array inside a NODE property.** Every
+- **mpv 0.35.1 silently destroys a byte array inside a NODE property** (no
+  longer reachable — both forks ship 0.41 — but the failure shape is the point).
+  Every
   `MPV_FORMAT_NODE` property is copied out of its handler through
   `copy_node()` -> `dup_node()`, whose switch had no `MPV_FORMAT_BYTE_ARRAY` arm
   until mpv **0.36.0** — the node falls into `default:` and is stamped
   `(mpv_format)-1`. The failure is maximally misleading: the map's scalars
   arrive intact and only the payload is gone, so it reads as "no data yet"
-  rather than "the copy dropped it". Upstream's own fix is backported as
-  `005.mpv_dup_node_byte_array.patch` (§21).
+  rather than "the copy dropped it". Upstream's own fix was backported as
+  `005.mpv_dup_node_byte_array.patch` and deleted at the 0.41 bump (§21).
 - **The audio device consumes chunks at ~20-45 Hz, so that is the rate new
   spectral content actually appears at** — `ao_audiotrack` writes one
   `AudioTrack.getMinBufferSize() * 2` chunk per iteration under

@@ -433,6 +433,49 @@ describe('Player — loading', () => {
     expect(client.commands).toEqual([['loadfile', URI, 'replace']])
   })
 
+  // mpv 0.38 inserted an `index` argument into `loadfile`, moving the per-file
+  // option list from the third slot to the fourth:
+  //   0.35  loadfile <url> [<flags> [<options>]]
+  //   0.41  loadfile <url> [<flags> [<index> [<options>]]]
+  // mpv's manual: "the third argument now needs to be set to -1 if the fourth
+  // argument needs to be used". Get this wrong and nothing throws at build time
+  // and nothing obvious throws at runtime — the option string is parsed as an
+  // integer, the command fails, and HLS (which ALWAYS carries `demuxer=lavf`)
+  // silently stops loading. So the argv shape is pinned here rather than only
+  // implied by the assertions scattered through the HLS-guard tests.
+  describe('loadfile argv shape (mpv >= 0.38 index argument)', () => {
+    it('omits the index entirely when there are no per-file options', async () => {
+      const player = await createPlayer()
+      await player.load(URI)
+      // A bare 3-argument loadfile means the same thing in every mpv version.
+      expect(client.commands[0]).toEqual(['loadfile', URI, 'replace'])
+    })
+
+    it('puts -1 in the index slot whenever options follow', async () => {
+      const player = await createPlayer()
+      await player.load(URI, { startPosition: 12 })
+      const [command, , , index, options] = client.commands[0] as string[]
+      expect(command).toBe('loadfile')
+      expect(index).toBe('-1')
+      expect(options).toBe('start=12')
+    })
+
+    it('never lets an option string land in the index slot', async () => {
+      const player = await createPlayer()
+      await player.load('https://cdn.example.com/master.m3u8')
+      await player.loadPlaylist(['x.m3u8'])
+      await player.playlist.add('y.m3u8')
+      const loadfiles = client.commands.filter((c) => c[0] === 'loadfile')
+      expect(loadfiles).not.toHaveLength(0)
+      for (const argv of loadfiles) {
+        // Either 3 arguments (no options) or 5 (index + options); a 4-argument
+        // loadfile is exactly the pre-0.38 shape this test exists to forbid.
+        expect([3, 5]).toContain(argv.length)
+        if (argv.length === 5) expect(argv[3]).toBe('-1')
+      }
+    })
+  })
+
   it('load with autoPlay: false pauses first', async () => {
     const player = await createPlayer()
     await player.load(URI, { autoPlay: false })
@@ -449,6 +492,7 @@ describe('Player — loading', () => {
       'loadfile',
       URI,
       'replace',
+      '-1',
       'start=30,cache-pause=no',
     ])
   })
@@ -501,7 +545,7 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
     const player = await createPlayer()
     await player.load(source)
     expect(client.commands).toEqual([
-      ['loadfile', source, 'replace', 'demuxer=lavf'],
+      ['loadfile', source, 'replace', '-1', 'demuxer=lavf'],
     ])
   })
 
@@ -527,6 +571,7 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
       'loadfile',
       HLS,
       'replace',
+      '-1',
       'start=30,demuxer=lavf,cache-pause=no',
     ])
   })
@@ -538,6 +583,7 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
       'loadfile',
       HLS,
       'replace',
+      '-1',
       'demuxer=hls',
     ])
   })
@@ -548,8 +594,8 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
     expect(client.commands).toEqual([
       ['stop'],
       ['loadfile', 'a.mp3', 'append'],
-      ['loadfile', HLS, 'append', 'demuxer=lavf'],
-      ['loadfile', 'c.m3u', 'append', 'demuxer=lavf'],
+      ['loadfile', HLS, 'append', '-1', 'demuxer=lavf'],
+      ['loadfile', 'c.m3u', 'append', '-1', 'demuxer=lavf'],
       ['loadfile', 'd.flac', 'append'],
       ['playlist-play-index', '0'],
     ])
@@ -561,8 +607,8 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
       mpvOptions: { demuxer: 'lavf', 'cache-pause': 'no' },
     })
     expect(client.commands.slice(1, 3)).toEqual([
-      ['loadfile', 'a.mp3', 'append', 'demuxer=lavf,cache-pause=no'],
-      ['loadfile', HLS, 'append', 'demuxer=lavf,cache-pause=no'],
+      ['loadfile', 'a.mp3', 'append', '-1', 'demuxer=lavf,cache-pause=no'],
+      ['loadfile', HLS, 'append', '-1', 'demuxer=lavf,cache-pause=no'],
     ])
   })
 
@@ -571,7 +617,7 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
     await player.playlist.add(HLS)
     await player.playlist.add('b.mp3', { playNow: true })
     expect(client.commands).toEqual([
-      ['loadfile', HLS, 'append', 'demuxer=lavf'],
+      ['loadfile', HLS, 'append', '-1', 'demuxer=lavf'],
       ['loadfile', 'b.mp3', 'append-play'],
     ])
   })
