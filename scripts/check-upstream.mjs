@@ -605,14 +605,15 @@ async function fetchLibxml2Latest(/** @type {string|null|undefined} */ ours) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * @typedef {'behind'|'current'|'ahead'|'unknown'|'info'} Status
+ * @typedef {'behind'|'pinned'|'current'|'ahead'|'unknown'|'info'} Status
  * @typedef {{ component: string, ours: string, latest: string, released: string, status: Status,
  *             notes: string, unknownReason?: 'pin'|'upstream'|null }} Row
  */
 
 /**
  * @param {{ component: string, ours: string|null|undefined, latest: string|null|undefined,
- *           released?: string, notes?: string[], oursError?: string|null, latestError?: string|null }} spec
+ *           released?: string, notes?: string[], oursError?: string|null, latestError?: string|null,
+ *           deliberatelyPinned?: boolean }} spec
  * @returns {Row}
  */
 function compareRow(spec) {
@@ -632,6 +633,12 @@ function compareRow(spec) {
   } else {
     const c = compareVersions(spec.ours, spec.latest);
     status = c < 0 ? 'behind' : c > 0 ? 'ahead' : 'current';
+    // A lag with a machine-read rationale is not the drift the currency rule
+    // forbids — the rule forbids SILENT lag. A deliberately-pinned row renders
+    // as 'pinned' (🟡), keeps its full note, and does not count toward the
+    // behind tally that opens/holds the tracking issue; the moment the pin
+    // note is deleted from the pin file the row goes straight back to 🔴.
+    if (status === 'behind' && spec.deliberatelyPinned) status = 'pinned';
   }
   return {
     component: spec.component,
@@ -813,6 +820,7 @@ async function collect() {
         latest: ffLatest ? `n${ffLatest.version}` : null,
         latestError: ffErr,
         released: ffLatest?.date ?? '',
+        deliberatelyPinned: Boolean(pinNote),
         notes: [
           src && `pin: ${src}`,
           pinNote && `PINNED DELIBERATELY: ${pinNote}`,
@@ -943,6 +951,7 @@ async function collect() {
         latest: 'error' in up ? null : up.version,
         latestError: 'error' in up ? up.error : null,
         released: 'error' in up ? '' : up.date,
+        deliberatelyPinned: Boolean(sub.pinNote),
         notes: [
           sub.src && `pin: ${sub.src}`,
           sub.pinNote && `PINNED DELIBERATELY: ${sub.pinNote}`,
@@ -1036,6 +1045,7 @@ async function collect() {
     rows,
     context,
     behind: rows.filter((r) => r.status === 'behind').length,
+    pinned: rows.filter((r) => r.status === 'pinned').length,
     unknown: rows.filter((r) => r.status === 'unknown').length,
     // A pin we cannot READ is a repo problem that deserves the tracking issue.
     // A source we cannot REACH is (usually) an outage: it must never be allowed
@@ -1053,6 +1063,7 @@ async function collect() {
 
 const STATUS_TEXT = {
   behind: 'BEHIND',
+  pinned: 'PINNED',
   current: 'current',
   ahead: 'ahead',
   unknown: 'unknown',
@@ -1060,6 +1071,7 @@ const STATUS_TEXT = {
 };
 const STATUS_MD = {
   behind: '🔴 behind',
+  pinned: '🟡 pinned',
   current: '🟢 current',
   ahead: '🔵 ahead',
   unknown: '⚪ unknown',
@@ -1076,10 +1088,14 @@ function summaryLine(result) {
     result.unreadablePins ? `${result.unreadablePins} pin${result.unreadablePins === 1 ? '' : 's'} unreadable` : '',
     result.upstreamFailures ? `${result.upstreamFailures} upstream lookup${result.upstreamFailures === 1 ? '' : 's'} failed` : '',
   ].filter(Boolean);
+  if (result.pinned > 0) {
+    tail.push(`${result.pinned} deliberately pinned with rationale — not counted as drift`);
+  }
   if (result.behind > 0) {
     return `${result.behind} pin${result.behind === 1 ? '' : 's'} behind upstream${tail.length ? ` (${tail.join(', ')})` : ''}.`;
   }
-  if (tail.length) return `No drift found, but currency is UNVERIFIED: ${tail.join(', ')}.`;
+  if (result.unreadablePins || result.upstreamFailures) return `No drift found, but currency is UNVERIFIED: ${tail.join(', ')}.`;
+  if (result.pinned > 0) return `No actionable drift. ${result.pinned} pin${result.pinned === 1 ? ' is' : 's are'} deliberately held with a printed rationale.`;
   return 'All tracked pins are current.';
 }
 
