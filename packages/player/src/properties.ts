@@ -108,6 +108,16 @@ export const MpvProperty = {
    */
   prefetchPlaylist: 'prefetch-playlist',
   /**
+   * `gapless-audio` — choice `no` | `yes` | `weak`, "Try to play consecutive
+   * audio files with no silence or disruption at the point of file change.
+   * Default: `weak`" (mpv 0.41.0 `options.rst`).
+   *
+   * This is an audio-*output* policy, not a demuxer one: it decides whether the
+   * AO is kept open across a file change. See `GaplessAudioMode` in `player.ts`
+   * for what each value costs.
+   */
+  gaplessAudio: 'gapless-audio',
+  /**
    * `af` — the audio filter chain (mpv `options.rst` "Audio Filters").
    *
    * Runtime-settable: mpv lists `af` explicitly among the options it allows to

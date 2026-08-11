@@ -237,6 +237,178 @@ describe('Player — state and events', () => {
   })
 })
 
+/**
+ * Regression cover for the gapless transition that used to lose `duration`,
+ * `seekable` and `title` forever (observed on device 2026-08-11).
+ *
+ * mpv re-emits an observed property only when the value compares unequal, and
+ * it walks a client's observers in registration order — `duration` before
+ * `playlist-pos`. So on a gapless transition the new entry's duration is
+ * delivered *before* the cursor change that used to drop it, and no second
+ * event ever comes. The Player therefore reads the three file-scoped values
+ * once, synchronously, whenever a batch moves the cursor.
+ */
+describe('Player — gapless track transitions', () => {
+  /** Land on entry 0 of a two-entry playlist with every field known. */
+  async function onFirstTrack(): Promise<Player> {
+    const player = await createPlayer()
+    await player.load(URI)
+    client.readable.set(MpvProperty.timePos, 0)
+    client.emit([
+      propertyEvent(MpvProperty.idleActive, false),
+      startFileEvent(),
+      propertyEvent(MpvProperty.playlistPos, 0),
+      propertyEvent(MpvProperty.playlistCount, 2),
+      propertyEvent(MpvProperty.duration, 200),
+      propertyEvent(MpvProperty.seekable, true),
+      propertyEvent(MpvProperty.mediaTitle, 'First'),
+      playbackRestartEvent(),
+      propertyEvent(MpvProperty.pause, false),
+      propertyEvent(MpvProperty.coreIdle, false),
+    ])
+    return player
+  }
+
+  /** What the core answers for the entry that just became current. */
+  function nextEntry(values: {
+    duration?: number
+    seekable?: boolean
+    title?: string
+  }): void {
+    for (const [name, value] of [
+      [MpvProperty.duration, values.duration],
+      [MpvProperty.seekable, values.seekable],
+      [MpvProperty.mediaTitle, values.title],
+    ] as const) {
+      if (value === undefined) client.readable.delete(name)
+      else client.readable.set(name, value)
+    }
+  }
+
+  it('keeps a duration mpv delivered before the cursor moved', async () => {
+    const player = await onFirstTrack()
+    nextEntry({ duration: 137, seekable: true, title: 'Second' })
+
+    // The exact order mpv produces on a gapless boundary: the new entry's
+    // `duration` first (registered earlier), then `playlist-pos`.
+    client.emit([
+      propertyEvent(MpvProperty.duration, 137),
+      propertyEvent(MpvProperty.playlistPos, 1),
+    ])
+
+    expect(player.state.playlist.index).toBe(1)
+    expect(player.state.duration).toBe(137)
+    expect(player.state.seekable).toBe(true)
+    expect(player.state.title).toBe('Second')
+    expect(player.state.isLive).toBe(false)
+  })
+
+  it('keeps the duration when the next track is exactly as long', async () => {
+    const player = await onFirstTrack()
+    // Equal values never produce a property-change event at all, so the batch
+    // carries the cursor move and nothing else.
+    nextEntry({ duration: 200, seekable: true, title: 'Second' })
+    client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+
+    expect(player.state.duration).toBe(200)
+    expect(player.state.seekable).toBe(true)
+    expect(player.state.title).toBe('Second')
+  })
+
+  it('reports unknown rather than stale when the reads come back empty', async () => {
+    const player = await onFirstTrack()
+    // A network entry mpv has not demuxed yet: the properties are unavailable.
+    nextEntry({})
+    client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+
+    expect(player.state.duration).toBeUndefined()
+    expect(player.state.seekable).toBeUndefined()
+    expect(player.state.title).toBeUndefined()
+
+    // none → value compares unequal, so mpv does emit these once it knows.
+    client.emit([
+      propertyEvent(MpvProperty.duration, 95),
+      propertyEvent(MpvProperty.seekable, true),
+      propertyEvent(MpvProperty.mediaTitle, 'Second'),
+    ])
+    expect(player.state.duration).toBe(95)
+    expect(player.state.seekable).toBe(true)
+    expect(player.state.title).toBe('Second')
+  })
+
+  it('leaves live behind when a stream is followed by a finite track', async () => {
+    const player = await onFirstTrack()
+    client.emit([propertyEvent(MpvProperty.seekable, false)])
+    expect(player.state.isLive).toBe(true)
+    expect(player.state.duration).toBeUndefined()
+
+    nextEntry({ duration: 137, seekable: true, title: 'Second' })
+    client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+
+    expect(player.state.isLive).toBe(false)
+    expect(player.state.seekable).toBe(true)
+    expect(player.state.duration).toBe(137)
+  })
+
+  it('becomes live when a finite track is followed by a stream', async () => {
+    const player = await onFirstTrack()
+    expect(player.state.isLive).toBe(false)
+
+    // mpv's `duration` on an unseekable stream is the cache length; adopting
+    // it would be a lie, so liveness has to win over the one-shot read.
+    nextEntry({ duration: 2.14, seekable: false, title: 'Radio' })
+    client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+
+    expect(player.state.isLive).toBe(true)
+    expect(player.state.seekable).toBe(false)
+    expect(player.state.duration).toBeUndefined()
+    expect(player.state.title).toBe('Radio')
+  })
+
+  it('reads each property once per cursor change, and never otherwise', async () => {
+    const player = await onFirstTrack()
+    nextEntry({ duration: 137, seekable: true, title: 'Second' })
+    const numbers = vi.spyOn(client, 'getPropertyNumber')
+    const bools = vi.spyOn(client, 'getPropertyBool')
+    const strings = vi.spyOn(client, 'getPropertyString')
+
+    client.emit([
+      propertyEvent(MpvProperty.demuxerCacheTime, 12),
+      propertyEvent(MpvProperty.coreIdle, true),
+    ])
+    expect(numbers).not.toHaveBeenCalled()
+    expect(bools).not.toHaveBeenCalled()
+    expect(strings).not.toHaveBeenCalled()
+
+    client.emit([
+      propertyEvent(MpvProperty.duration, 137),
+      propertyEvent(MpvProperty.playlistPos, 1),
+      propertyEvent(MpvProperty.playlistPos, 1),
+    ])
+    expect(numbers.mock.calls).toEqual([[MpvProperty.duration]])
+    expect(bools.mock.calls).toEqual([[MpvProperty.seekable]])
+    expect(strings.mock.calls).toEqual([[MpvProperty.mediaTitle]])
+    expect(player.state.duration).toBe(137)
+  })
+
+  it('survives a core that throws mid-batch', async () => {
+    const player = await onFirstTrack()
+    for (const name of [
+      MpvProperty.duration,
+      MpvProperty.seekable,
+      MpvProperty.mediaTitle,
+    ]) {
+      client.readErrors.set(name, '[mpv:-10] core is shutting down')
+    }
+
+    expect(() =>
+      client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+    ).not.toThrow()
+    expect(player.state.playlist.index).toBe(1)
+    expect(player.state.duration).toBeUndefined()
+  })
+})
+
 describe('Player — position projection', () => {
   async function playing(): Promise<Player> {
     const player = await createPlayer()
@@ -856,6 +1028,35 @@ describe('Player — prefetch and cache options', () => {
       mpvOptions: { 'prefetch-playlist': 'no' },
     })
     expect(client.initOptions?.['prefetch-playlist']).toBe('no')
+  })
+
+  it.each<['no' | 'yes' | 'weak']>([['no'], ['yes'], ['weak']])(
+    'passes gaplessAudio %s through as mpv’s choice value',
+    async (mode) => {
+      await createPlayer({ gaplessAudio: mode })
+      expect(client.initOptions?.['gapless-audio']).toBe(mode)
+    }
+  )
+
+  it('omits gapless-audio entirely when the option is unset, leaving mpv’s `weak` default', async () => {
+    await createPlayer()
+    expect(client.initOptions).not.toHaveProperty('gapless-audio')
+  })
+
+  it('lets raw mpvOptions win over gaplessAudio', async () => {
+    await createPlayer({
+      gaplessAudio: 'yes',
+      mpvOptions: { 'gapless-audio': 'no' },
+    })
+    expect(client.initOptions?.['gapless-audio']).toBe('no')
+  })
+
+  it('rejects an unknown gaplessAudio mode before a core exists', async () => {
+    await expect(
+      createPlayer({ gaplessAudio: 'always' as never })
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    expect(client.initialized).toBe(false)
+    expect(client.destroyCount).toBe(0)
   })
 
   it('overrides the 30 s cache default with cacheSecs', async () => {

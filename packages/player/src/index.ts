@@ -122,6 +122,7 @@ export type {
   PlayerStatus,
   PositionAnchor,
   ReducerContext,
+  TrackChangeReads,
 } from './state'
 
 export {
@@ -147,6 +148,7 @@ export type {
 
 export { Player } from './player'
 export type {
+  GaplessAudioMode,
   LoadOptions,
   LoadPlaylistOptions,
   Metadata,

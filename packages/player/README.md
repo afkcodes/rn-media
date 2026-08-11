@@ -295,6 +295,43 @@ being silently clamped.
 Files with no ReplayGain tags get `fallback` and nothing else — mpv applies it
 *instead of* the tag logic, not on top of it.
 
+### Gapless transitions
+
+A queue is one mpv playlist, and mpv keeps the audio device open across an entry
+change, so consecutive tracks join with no device teardown in between. Measured
+on a Poco F4 (Android 16, release build) with a 60 s tone cut in half and encoded
+twice with identical AAC parameters: **one** `AO: [audiotrack] 44100Hz stereo 2ch
+float` line for the whole session covering both files, the handover from one
+entry's last decoded audio to the next entry's first taking 26 ms while the audio
+device still held 739 ms of the previous track — no reopen, no underrun.
+
+```ts
+await Player.create({ gaplessAudio: 'weak' }); // mpv `gapless-audio`, the default
+```
+
+The option exists for the case where consecutive entries decode to *different*
+output formats:
+
+| | behaviour |
+|---|---|
+| `'weak'` (default) | Device kept open while the format matches; closed and reopened when it changes — gapless for an album, a short gap across a format change. |
+| `'yes'` | Device kept open always, using the **first** entry's format; later entries are resampled into it. |
+| `'no'` | Device torn down and reopened between entries. |
+
+This library does not force `'yes'`, because it buys the gap back with silent
+resampling: one 22.05 kHz interlude at the head of a queue would degrade
+everything after it, with nothing in the state to see it by. If you want `'yes'`,
+pin the shared output format too — mpv's own advice is to set
+`--audio-samplerate` / `--audio-format` (via `mpvOptions`) so you choose the
+format rather than inherit whichever file happened to play first.
+
+Gapless is an *output* guarantee, not a network one. mpv is explicit that it
+"relies on audio output device buffering to continue playback while moving from
+one file to another. If playback of the new file starts slowly, for example
+because it is played from a remote network location […] then the buffered audio
+may run out before playback of the new file can start" — which is what the next
+section is for.
+
 ### Prefetching the next track
 
 ```ts
@@ -314,6 +351,21 @@ mpv is explicit about the assumptions you are buying into:
 So if your app mutates the queue (`move`, `remove`, `shuffle`) or steps backwards
 while a track is ending, mpv may already have opened the wrong entry. It also
 does **not** prefill the cache — only the current entry's data is cached.
+
+**On a network queue this is the difference between gapless and not.** Same
+device and build as above, HTTPS AAC/MP4 from a commercial CDN, two runs each,
+timestamps taken from mpv's own verbose log in `logcat` (so they include the
+native→JS hop; treat them as ±1 batch, not microseconds):
+
+| | handover, decoder EOF → next entry's audio queued | device buffer left | outcome |
+|---|---|---|---|
+| `prefetchPlaylist: false` (default) | 644 ms / 641 ms | 202 ms / 204 ms | mpv logged `Audio device underrun detected` at the boundary — an audible gap |
+| `prefetchPlaylist: true` | 25 ms / 26 ms | 816 ms / 826 ms | no underrun; mpv took its `previous audio still playing; continuing` path |
+
+Off it goes to the network only once the current entry has ended — 568 ms of that
+644 ms was waiting for the CDN's response headers, more than the device had
+buffered. On it, the next entry was open ~18 s before it was needed. If you play
+network queues and do not rewrite the queue mid-track, turn it on.
 
 ### Cache tuning
 
