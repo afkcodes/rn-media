@@ -30,6 +30,7 @@ namespace margelo::nitro::rnmediaplayer {
       prototype.registerHybridMethod("stopVisualizer", &HybridMpvClientSpec::stopVisualizer);
       prototype.registerHybridMethod("setVisualizerListener", &HybridMpvClientSpec::setVisualizerListener);
       prototype.registerHybridMethod("setSourceResolutionListener", &HybridMpvClientSpec::setSourceResolutionListener);
+      prototype.registerHybridMethod("setPrefetchStartedListener", &HybridMpvClientSpec::setPrefetchStartedListener);
       prototype.registerHybridMethod("installSourceResolver", &HybridMpvClientSpec::installSourceResolver);
       prototype.registerHybridMethod("uninstallSourceResolver", &HybridMpvClientSpec::uninstallSourceResolver);
       prototype.registerHybridMethod("setResolvedSource", &HybridMpvClientSpec::setResolvedSource);

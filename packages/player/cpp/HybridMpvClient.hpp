@@ -20,6 +20,8 @@
 ///    the play-time path that thread is holding an mpv hook open while it waits
 ///    for `completeResolution`. It must therefore only ever *schedule* — which
 ///    is all a Nitro `=> void` callback does.
+///  - `PrefetchDelivery::deliver` runs on the mpv event thread too, but always
+///    *after* the hook it describes was continued, so nothing is blocked on it.
 ///
 
 #include <cstdint>
@@ -174,6 +176,31 @@ private:
   Listener _listener;
 };
 
+///
+/// Carries "mpv started prefetching this entry" from the event thread to
+/// JavaScript.
+///
+/// Thinner still than `SourceResolutionDelivery`, and for one reason: the hook
+/// has already been continued when this runs, so nothing in mpv is waiting.
+/// That is also why a missing listener is silence rather than a throw — an
+/// unobserved prefetch is simply unobserved, whereas an unanswerable resolution
+/// request has to stop the caller from holding mpv's core open.
+///
+class PrefetchDelivery final {
+public:
+  using Listener = std::function<void(const PrefetchStartedEvent&)>;
+
+  void setListener(const Listener& listener);
+  void clearListener();
+
+  /// Event thread. Schedules onto JS and returns; never blocks, never throws.
+  void deliver(const std::string& url, std::optional<std::int64_t> entryId);
+
+private:
+  std::mutex _mutex;
+  Listener _listener;
+};
+
 class HybridMpvClient final : public HybridMpvClientSpec {
 public:
   HybridMpvClient();
@@ -204,6 +231,7 @@ public:
       const std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture&)>& onCapture) override;
 
   void setSourceResolutionListener(const std::function<void(const SourceResolutionRequest&)>& onRequest) override;
+  void setPrefetchStartedListener(const std::function<void(const PrefetchStartedEvent&)>& onPrefetchStarted) override;
   void installSourceResolver(double timeoutMs) override;
   void uninstallSourceResolver() override;
   void setResolvedSource(const std::string& logical, const std::string& resolved, double ttlMs) override;
@@ -226,6 +254,7 @@ private:
   std::shared_ptr<PendingCommands> _pending;
   std::shared_ptr<VisualizerDelivery> _visualizer;
   std::shared_ptr<SourceResolutionDelivery> _resolution;
+  std::shared_ptr<PrefetchDelivery> _prefetch;
   std::unique_ptr<rnmedia::MpvClient> _client;
   /// Created on the first `startVisualizer`, so a player nobody visualises
   /// never allocates a sampler thread, an FFT table or a window.

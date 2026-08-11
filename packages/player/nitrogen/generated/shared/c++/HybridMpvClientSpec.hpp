@@ -21,6 +21,8 @@ namespace margelo::nitro::rnmediaplayer { struct MpvEvent; }
 namespace margelo::nitro::rnmediaplayer { struct VisualizerCapture; }
 // Forward declaration of `SourceResolutionRequest` to properly resolve imports.
 namespace margelo::nitro::rnmediaplayer { struct SourceResolutionRequest; }
+// Forward declaration of `PrefetchStartedEvent` to properly resolve imports.
+namespace margelo::nitro::rnmediaplayer { struct PrefetchStartedEvent; }
 
 #include <string>
 #include <unordered_map>
@@ -32,6 +34,7 @@ namespace margelo::nitro::rnmediaplayer { struct SourceResolutionRequest; }
 #include <functional>
 #include "VisualizerCapture.hpp"
 #include "SourceResolutionRequest.hpp"
+#include "PrefetchStartedEvent.hpp"
 
 namespace margelo::nitro::rnmediaplayer {
 
@@ -80,6 +83,7 @@ namespace margelo::nitro::rnmediaplayer {
       virtual void stopVisualizer() = 0;
       virtual void setVisualizerListener(const std::function<std::shared_ptr<Promise<bool>>(const VisualizerCapture& /* capture */)>& onCapture) = 0;
       virtual void setSourceResolutionListener(const std::function<void(const SourceResolutionRequest& /* request */)>& onRequest) = 0;
+      virtual void setPrefetchStartedListener(const std::function<void(const PrefetchStartedEvent& /* event */)>& onPrefetchStarted) = 0;
       virtual void installSourceResolver(double timeoutMs) = 0;
       virtual void uninstallSourceResolver() = 0;
       virtual void setResolvedSource(const std::string& logical, const std::string& resolved, double ttlMs) = 0;

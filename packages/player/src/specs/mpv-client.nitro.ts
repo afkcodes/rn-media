@@ -173,6 +173,42 @@ export interface SourceResolutionRequest {
 }
 
 /**
+ * mpv has just started opening the *next* playlist entry ahead of time.
+ *
+ * @remarks
+ * Fired from the same fork hook (`on_prefetch_load`) the resolver uses, right
+ * after the hook is continued — i.e. at the exact moment mpv's opener thread is
+ * released on the next entry, which is seconds into the *current* track rather
+ * than near its end.
+ *
+ * Delivered on its own channel, for the same reason
+ * {@link SourceResolutionRequest} is: it is produced inside a hook handler, and
+ * hook-derived messages never enter the event batch (a batch is handed to
+ * JavaScript one at a time behind a completion promise, so riding one would make
+ * a timing signal arbitrarily late exactly when the system is busy).
+ */
+export interface PrefetchStartedEvent {
+  /**
+   * The logical URL mpv is prefetching — the string in the playlist, read back
+   * from `stream-open-filename` before the hook was continued.
+   *
+   * This is the *pre*-rewrite value even when a resolver rewrote it, because
+   * the logical URI is what identifies the queue entry to the app.
+   */
+  readonly uri: string
+  /**
+   * mpv's playlist entry id for the entry being prefetched, when the linked
+   * libmpv exposes it (`prefetch-playlist-entry-id`, added by the rn-media
+   * forks alongside the hook).
+   *
+   * Absent on any binary that predates the property. It is an *entry id*, not a
+   * playlist index: ids survive `playlist-move`/`playlist-remove`, indices do
+   * not.
+   */
+  readonly entryId?: number
+}
+
+/**
  * A thin, complete binding over one `mpv_handle` (one `mpv_create()` core).
  *
  * One instance == one player core; create as many as you need via
@@ -195,6 +231,15 @@ export interface MpvClient
    *
    * The reserved key `log-level` is not passed to mpv as an option; it is the
    * argument to `mpv_request_log_messages` (default `warn`).
+   *
+   * Also registers the two load hooks (`on_load` and the forks'
+   * `on_prefetch_load`) — **always**, not on demand. The fork's guarantee that a
+   * prefetch behaves exactly like stock mpv holds only while the hook name has
+   * *no* client at all, so "register it later, when a resolver arrives" would
+   * change the timing of the very boundary it is meant to observe. Registered
+   * up front the handler is a pass-through until something arms it, costing one
+   * immediate `mpv_hook_continue` per load boundary. See
+   * {@link setPrefetchStartedListener} and {@link installSourceResolver}.
    *
    * Throws if already initialized, already destroyed, or if mpv rejects an
    * option / fails to initialize.
@@ -320,14 +365,26 @@ export interface MpvClient
   ): void
 
   /**
-   * Arm mpv's load hooks (`on_load`, and `on_prefetch_load` on rn-media
-   * binaries), registering them with mpv on the first call.
+   * Register the (single) prefetch listener. Pass before {@link initialize}.
    *
-   * Registration is **lazy** so that a core which never installs a resolver is
-   * byte-for-byte stock, and **permanent** because mpv has no unregister call
-   * ("Currently, hooks can't be removed explicitly", `mpv/client.h`) — so
-   * {@link uninstallSourceResolver} can only disarm the handler, after which it
-   * continues every hook immediately and unrewritten.
+   * Like {@link setSourceResolutionListener} this returns nothing and applies no
+   * back-pressure: nothing in mpv waits on it (the hook has already been
+   * continued by the time it is called), so there is no completion clock to
+   * keep.
+   *
+   * Calling this again replaces the previous listener.
+   */
+  setPrefetchStartedListener(
+    onPrefetchStarted: (event: PrefetchStartedEvent) => void
+  ): void
+
+  /**
+   * Arm the load-hook handler.
+   *
+   * The hooks themselves (`on_load`, and `on_prefetch_load` on rn-media
+   * binaries) are registered by {@link initialize}, always — see the note there.
+   * This call only stores the hold budget and switches the handler from
+   * pass-through to resolving; {@link uninstallSourceResolver} switches it back.
    *
    * @param timeoutMs - How long a play-time `on_load` miss may hold mpv's core
    * while JavaScript resolves. `0` disables holding entirely, i.e. only the
@@ -338,6 +395,11 @@ export interface MpvClient
   /**
    * Disarm the handler and drop every cached resolution. Idempotent, and safe
    * to call while a hook is parked: the hold is released immediately.
+   *
+   * The hooks stay registered (mpv has no unregister call — "Currently, hooks
+   * can't be removed explicitly", `mpv/client.h`), so what is left is an
+   * unrewritten immediate continue. {@link PrefetchStartedEvent} keeps being
+   * delivered, because observing a prefetch does not depend on resolving one.
    */
   uninstallSourceResolver(): void
 

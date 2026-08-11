@@ -38,11 +38,13 @@ import type {
  * timeout the logical URI is used unchanged and mpv fails the load on its own
  * terms, which arrives as an ordinary typed `error` event.
  *
- * **URIs pass through untouched when no resolver is installed.** No resolver
- * means no mpv hook is registered at all, so playback is byte-for-byte what it
- * would be without this feature. That includes local files and live streams,
- * which usually need no resolution: a resolver that has nothing to do for a URI
- * should return it unchanged, and the identity answer costs one map lookup.
+ * **URIs pass through untouched when no resolver is installed.** The hooks are
+ * registered for the life of the core (see `Player.setSourceResolver` for why),
+ * but a disarmed handler reads nothing and rewrites nothing — it continues the
+ * hook immediately, so what mpv opens is byte-for-byte the logical URI. That
+ * includes local files and live streams, which usually need no resolution: a
+ * resolver that has nothing to do for a URI should return it unchanged, and the
+ * identity answer costs one map lookup.
  *
  * @example
  * ```ts

@@ -130,9 +130,9 @@ MpvError::MpvError(int code, const std::string& message) : std::runtime_error(ta
 // ---------------------------------------------------------------------------
 
 MpvClient::MpvClient(BatchReadyFn onBatchReady, CommandReplyFn onCommandReply,
-                     ResolutionRequestFn onResolutionRequest)
+                     ResolutionRequestFn onResolutionRequest, PrefetchStartedFn onPrefetchStarted)
     : _onBatchReady(std::move(onBatchReady)), _onCommandReply(std::move(onCommandReply)),
-      _onResolutionRequest(std::move(onResolutionRequest)) {
+      _onResolutionRequest(std::move(onResolutionRequest)), _onPrefetchStarted(std::move(onPrefetchStarted)) {
   mpv_handle* handle = mpv_create();
   if (handle == nullptr) {
     throw MpvError(MPV_ERROR_NOMEM, "mpv_create() failed");
@@ -183,10 +183,59 @@ void MpvClient::initialize(const std::unordered_map<std::string, std::string>& o
     throw MpvError(status, "mpv_initialize()");
   }
 
+  // Both load hooks, always, before the event thread exists — see
+  // `registerLoadHooks`. Anything mpv raises before the thread starts simply
+  // waits in mpv's own queue, and nothing can be loaded yet anyway.
+  registerLoadHooks(handle);
+
   // Only flip the state once mpv is actually running, so a failed initialize
   // leaves the client in `Created` (still destroyable, not usable).
   _state.markInitialized();
   _eventThread = std::thread([this, handle]() { eventLoop(handle); });
+}
+
+///
+/// Register `on_prefetch_load` and `on_load`, unconditionally.
+///
+/// This used to be lazy — registered on the first `installSourceResolver()` —
+/// so that a core with no resolver ran a byte-for-byte stock load path. Two
+/// things bought the change:
+///
+///  1. **The prefetch hook is now an observation, not just a rewrite point.**
+///     `PrefetchStartedFn` reports the exact instant mpv releases its opener
+///     thread on the next entry, and a hook that is registered only once an app
+///     happens to install a resolver cannot report anything about the app that
+///     does not.
+///  2. **"Stock" is a property of the hook name having no client at all**, and
+///     it is the *only* thing the fork guarantees. Quoting the patch's own
+///     header (`006.rn_media_prefetch_hook.patch`, "THREADING AND COST"): "With
+///     no client registered the added cost is one `mp_hook_exists()` call — a
+///     walk of the (usually empty) hook array — and nothing else. […] that path
+///     allocates nothing, swaps nothing, and hands `start_open()` exactly the
+///     arguments upstream hands it." The moment *any* client holds the name,
+///     `prefetch_next()` takes the hook branch and `process_hooks()` becomes a
+///     blocking pump on mpv's core thread. Registering late therefore does not
+///     buy stock behaviour; it only moves the instant at which behaviour
+///     changes into the middle of a session, where it is unobservable.
+///
+/// The price, paid deliberately: one immediate `mpv_hook_continue` per load
+/// boundary — mpv's core thread parks in `process_hooks()`'s `mp_idle()` loop
+/// for as long as it takes this client's event thread to see the hook event and
+/// continue it, with nothing read and nothing rewritten while the resolver is
+/// disarmed. Registration is permanent either way; mpv has no unregister call.
+///
+void MpvClient::registerLoadHooks(mpv_handle* handle) {
+  // `on_prefetch_load` is unknown to a stock libmpv, and `client.h` guarantees
+  // that is harmless: "if the name is unknown, the hook event will simply be
+  // never raised". So this is one registration, not a per-binary branch.
+  const int prefetchStatus = mpv_hook_add(handle, 0, kPrefetchLoadHook, kHookPriority);
+  if (prefetchStatus < 0) {
+    throw MpvError(prefetchStatus, std::string("mpv_hook_add(\"") + kPrefetchLoadHook + "\")");
+  }
+  const int loadStatus = mpv_hook_add(handle, 0, kLoadHook, kHookPriority);
+  if (loadStatus < 0) {
+    throw MpvError(loadStatus, std::string("mpv_hook_add(\"") + kLoadHook + "\")");
+  }
 }
 
 void MpvClient::destroy() noexcept {
@@ -468,30 +517,10 @@ void MpvClient::installSourceResolver(std::int64_t timeoutMs) {
     throw DisposedError("installSourceResolver");
   }
 
+  // Two flag writes over a handler mpv already calls: `initialize()` registered
+  // both hooks (see `registerLoadHooks`). Nothing here can fail on mpv's side,
+  // which is also why re-installing is free.
   _resolverTimeoutMs.store(timeoutMs > 0 ? timeoutMs : 0, std::memory_order_release);
-
-  {
-    std::lock_guard<std::mutex> hookLock(_hookMutex);
-    // Tracked per hook rather than with one flag, so a partial failure (the
-    // first `mpv_hook_add` succeeded, the second did not) cannot register the
-    // first one twice on the retry — mpv would then invoke our handler twice
-    // per load, each with its own id to continue.
-    if (!_prefetchHookRegistered) {
-      const int status = mpv_hook_add(_handle, 0, kPrefetchLoadHook, kHookPriority);
-      if (status < 0) {
-        throw MpvError(status, std::string("mpv_hook_add(\"") + kPrefetchLoadHook + "\")");
-      }
-      _prefetchHookRegistered = true;
-    }
-    if (!_loadHookRegistered) {
-      const int status = mpv_hook_add(_handle, 0, kLoadHook, kHookPriority);
-      if (status < 0) {
-        throw MpvError(status, std::string("mpv_hook_add(\"") + kLoadHook + "\")");
-      }
-      _loadHookRegistered = true;
-    }
-  }
-
   _resolverActive.store(true, std::memory_order_release);
 }
 
@@ -578,13 +607,28 @@ std::uint64_t MpvClient::rawHandle() {
 // Event thread
 // ---------------------------------------------------------------------------
 
+void MpvClient::notifyPrefetchStarted(const std::string& logical, std::optional<std::int64_t> entryId) noexcept {
+  if (!_onPrefetchStarted) {
+    return;
+  }
+  try {
+    _onPrefetchStarted(logical, entryId);
+  } catch (...) {
+    // The JS runtime (or its Dispatcher) is gone. This is a notification with
+    // nothing waiting on it, so there is nothing to fall back to and nothing
+    // to report — the hook was continued before we got here.
+  }
+}
+
 void MpvClient::handleHook(mpv_handle* handle, const std::string& name, std::uint64_t id) noexcept {
   const bool prefetch = name == kPrefetchLoadHook;
+  const bool active = _resolverActive.load(std::memory_order_acquire);
 
-  if (!_resolverActive.load(std::memory_order_acquire)) {
-    // Registered but disarmed — mpv cannot unregister a hook, so this is the
-    // only "off". Continue at once: a pass-through must be indistinguishable
-    // from stock mpv, which is exactly what an unrewritten continue is.
+  if (!active && !prefetch) {
+    // Registered but disarmed, and this is the play-time hook — nobody is
+    // waiting to hear about it. Continue at once: a pass-through must be
+    // indistinguishable from stock mpv, which is exactly what an unrewritten
+    // continue is, and reading a property nobody asked for would not be.
     mpv_hook_continue(handle, id);
     return;
   }
@@ -608,6 +652,14 @@ void MpvClient::handleHook(mpv_handle* handle, const std::string& name, std::uin
     }
   }
 
+  if (!active) {
+    // Prefetch, with no resolver. The hook exists purely as an observation
+    // point now, so continue unrewritten and report the boundary.
+    mpv_hook_continue(handle, id);
+    notifyPrefetchStarted(logical, entryId);
+    return;
+  }
+
   if (std::optional<std::string> hit = _resolutionCache.lookup(logical); hit.has_value()) {
     // The whole design in three lines: a cache hit is a synchronous map lookup
     // plus one property write, with no JavaScript anywhere near mpv's core.
@@ -615,6 +667,9 @@ void MpvClient::handleHook(mpv_handle* handle, const std::string& name, std::uin
       mpv_set_property_string(handle, kStreamOpenFilename, hit->c_str());
     }
     mpv_hook_continue(handle, id);
+    if (prefetch) {
+      notifyPrefetchStarted(logical, entryId);
+    }
     return;
   }
 
@@ -628,6 +683,10 @@ void MpvClient::handleHook(mpv_handle* handle, const std::string& name, std::uin
     // boundary. mpv arms this hook seconds into the current track, not near its
     // end, so "long before" is usually a whole track's worth of wall time.
     mpv_hook_continue(handle, id);
+    // Before the resolution request, because it is the earlier fact and both
+    // are scheduled onto the same JS thread in call order: a listener sees "a
+    // prefetch of X started" and only then "…and X needs resolving".
+    notifyPrefetchStarted(logical, entryId);
     if (_onResolutionRequest) {
       try {
         _onResolutionRequest(logical, entryId);

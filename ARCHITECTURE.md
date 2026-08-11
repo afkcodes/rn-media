@@ -250,7 +250,12 @@ list). A device-free regression harness lives in the Android fork
 (`buildscripts/tests/`, 21 assertions, runs in its CI); the canonical copy and
 its tree-equivalence proof live in `afkcodes/rn-media-engine`
 (`patches/004-prefetch-hook`), which is the edit target — fork copies are
-synced from it, never edited in place.
+synced from it, never edited in place. The client registers the hook at core
+start, not on demand (2026-08-12, with `prefetchStarted`): the fork guarantees
+stock behaviour only while the hook *name has no client*, so late registration
+only moves the behaviour change into mid-session; cost is one immediate
+continue per load boundary, measured at parity (333 vs 348 ms boundary,
+armed vs disarmed — noise).
 
 **Cost, honestly.** Android `arm64-v8a` grew 6.39 → 8.19 MB stripped (+27 %).
 iOS grew the same way and for the same reasons: across all ten frameworks the

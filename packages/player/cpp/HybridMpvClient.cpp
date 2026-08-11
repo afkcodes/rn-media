@@ -456,23 +456,63 @@ void SourceResolutionDelivery::deliver(const std::string& url, std::optional<std
 }
 
 // ---------------------------------------------------------------------------
+// PrefetchDelivery
+// ---------------------------------------------------------------------------
+
+void PrefetchDelivery::setListener(const Listener& listener) {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _listener = listener;
+}
+
+void PrefetchDelivery::clearListener() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  _listener = nullptr;
+}
+
+void PrefetchDelivery::deliver(const std::string& url, std::optional<std::int64_t> entryId) {
+  Listener listener;
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    listener = _listener;
+  }
+  if (!listener) {
+    // Unlike a resolution request, no listener is not an error: nothing in mpv
+    // is waiting to be told, so an unobserved prefetch is simply unobserved.
+    return;
+  }
+
+  PrefetchStartedEvent event;
+  event.uri = url;
+  if (entryId.has_value()) {
+    // int64 -> double, exact for any playlist a human could build; same
+    // conversion and same reasoning as `SourceResolutionDelivery`.
+    event.entryId = static_cast<double>(*entryId);
+  }
+  listener(event);
+}
+
+// ---------------------------------------------------------------------------
 // HybridMpvClient
 // ---------------------------------------------------------------------------
 
 HybridMpvClient::HybridMpvClient()
     : HybridObject(TAG), _flusher(std::make_shared<MpvFlushCoordinator>()),
       _pending(std::make_shared<PendingCommands>()), _visualizer(std::make_shared<VisualizerDelivery>()),
-      _resolution(std::make_shared<SourceResolutionDelivery>()) {
-  // Captured by value: all three are shared_ptrs, so the event thread can call
+      _resolution(std::make_shared<SourceResolutionDelivery>()), _prefetch(std::make_shared<PrefetchDelivery>()) {
+  // Captured by value: all four are shared_ptrs, so the event thread can call
   // them even while HybridMpvClient is being torn down.
   auto flusher = _flusher;
   auto pending = _pending;
   auto resolution = _resolution;
+  auto prefetch = _prefetch;
   _client = std::make_unique<rnmedia::MpvClient>(
       [flusher]() { flusher->onBatchReady(); },
       [pending](std::uint64_t replyId, int error) { pending->settle(replyId, error); },
       [resolution](const std::string& url, std::optional<std::int64_t> entryId) {
         resolution->deliver(url, entryId);
+      },
+      [prefetch](const std::string& url, std::optional<std::int64_t> entryId) {
+        prefetch->deliver(url, entryId);
       });
   _flusher->attach(_client.get());
 }
@@ -496,6 +536,7 @@ void HybridMpvClient::destroy() {
     _client->destroy(); // joins the event thread; mpv teardown goes background
   }
   _resolution->clearListener();
+  _prefetch->clearListener();
   _pending->rejectAll(std::make_exception_ptr(rnmedia::DisposedError("command")));
   _flusher->detach();
 }
@@ -595,6 +636,11 @@ void HybridMpvClient::setVisualizerListener(
 void HybridMpvClient::setSourceResolutionListener(
     const std::function<void(const SourceResolutionRequest&)>& onRequest) {
   _resolution->setListener(onRequest);
+}
+
+void HybridMpvClient::setPrefetchStartedListener(
+    const std::function<void(const PrefetchStartedEvent&)>& onPrefetchStarted) {
+  _prefetch->setListener(onPrefetchStarted);
 }
 
 void HybridMpvClient::installSourceResolver(double timeoutMs) {

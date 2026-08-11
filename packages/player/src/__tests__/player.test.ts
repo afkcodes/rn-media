@@ -787,7 +787,7 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
   it('guards playlist.add too — same command, same hazard', async () => {
     const player = await createPlayer()
     await player.playlist.add(HLS)
-    await player.playlist.add('b.mp3', { playNow: true })
+    await player.playlist.add('b.mp3', { play: true })
     expect(client.commands).toEqual([
       ['loadfile', HLS, 'append', '-1', 'demuxer=lavf'],
       ['loadfile', 'b.mp3', 'append-play'],
@@ -799,7 +799,7 @@ describe('Player — playlist API', () => {
   it('add appends, and append-play when asked', async () => {
     const player = await createPlayer()
     await player.playlist.add('a.mp3')
-    await player.playlist.add('b.mp3', { playNow: true })
+    await player.playlist.add('b.mp3', { play: true })
     expect(client.commands).toEqual([
       ['loadfile', 'a.mp3', 'append'],
       ['loadfile', 'b.mp3', 'append-play'],
@@ -855,6 +855,206 @@ describe('Player — playlist API', () => {
       ['playlist-prev', 'weak'],
       ['playlist-clear'],
     ])
+  })
+})
+
+describe('Player — playlist.add positions', () => {
+  const HLS = 'https://stream.example.com/fip/fip.m3u8'
+
+  /** mpv's answer to `playlist-count`, i.e. the bound `position` is checked against. */
+  function queueOf(count: number): void {
+    client.readable.set(MpvProperty.playlistCount, count)
+  }
+
+  it('maps every position × play cell to one mpv action', async () => {
+    const player = await createPlayer()
+    queueOf(4)
+
+    await player.playlist.add('a.mp3')
+    await player.playlist.add('b.mp3', { play: true })
+    await player.playlist.add('c.mp3', { position: 'next' })
+    await player.playlist.add('d.mp3', { position: 'next', play: true })
+    await player.playlist.add('e.mp3', { position: 2 })
+    await player.playlist.add('f.mp3', { position: 2, play: true })
+
+    expect(client.commands).toEqual([
+      ['loadfile', 'a.mp3', 'append'],
+      ['loadfile', 'b.mp3', 'append-play'],
+      ['loadfile', 'c.mp3', 'insert-next'],
+      ['loadfile', 'd.mp3', 'insert-next-play'],
+      // The index is `loadfile`'s THIRD argument (mpv 0.38+), not a separate
+      // command and not a `playlist-move`.
+      ['loadfile', 'e.mp3', 'insert-at', '2'],
+      ['loadfile', 'f.mp3', 'insert-at-play', '2'],
+    ])
+  })
+
+  it('is one command per add — never the old append + playlist-move pair', async () => {
+    const player = await createPlayer()
+    queueOf(3)
+    await player.playlist.add('a.mp3', { position: 0 })
+    expect(client.commands).toHaveLength(1)
+    expect(client.commands[0]?.[0]).toBe('loadfile')
+  })
+
+  it('carries per-file options after a real index, with no -1 placeholder', async () => {
+    const player = await createPlayer()
+    queueOf(3)
+    await player.playlist.add(HLS, { position: 1 })
+    // `insert-at` uses the index slot for real, so the placeholder that exists
+    // only to skip it must NOT appear.
+    expect(client.commands).toEqual([
+      ['loadfile', HLS, 'insert-at', '1', 'demuxer=lavf'],
+    ])
+  })
+
+  it('still writes the -1 placeholder for insert-next with options', async () => {
+    const player = await createPlayer()
+    await player.playlist.add(HLS, { position: 'next' })
+    expect(client.commands).toEqual([
+      ['loadfile', HLS, 'insert-next', '-1', 'demuxer=lavf'],
+    ])
+  })
+
+  it('accepts 0 and the end of the queue as insertion points', async () => {
+    const player = await createPlayer()
+    queueOf(3)
+    await player.playlist.add('head.mp3', { position: 0 })
+    await player.playlist.add('tail.mp3', { position: 3 })
+    expect(client.commands).toEqual([
+      ['loadfile', 'head.mp3', 'insert-at', '0'],
+      ['loadfile', 'tail.mp3', 'insert-at', '3'],
+    ])
+  })
+
+  it('rejects an index past the end instead of letting mpv append', async () => {
+    const player = await createPlayer()
+    queueOf(3)
+    await expect(player.playlist.add('x.mp3', { position: 4 })).rejects.toThrow(
+      /past the end of a 3-entry playlist/u
+    )
+    // Nothing reached mpv: a rejected argument costs no playlist mutation.
+    expect(client.commands).toEqual([])
+  })
+
+  it('rejects non-integer, negative and non-finite indices', async () => {
+    const player = await createPlayer()
+    queueOf(5)
+    for (const position of [1.5, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(
+        player.playlist.add('x.mp3', { position })
+      ).rejects.toThrow(/non-negative integer playlist index/u)
+    }
+    expect(client.commands).toEqual([])
+  })
+
+  it('rejects a position that is neither a number nor `next`', async () => {
+    const player = await createPlayer()
+    await expect(
+      // A JavaScript caller (or a value out of JSON) can still get here.
+      player.playlist.add('x.mp3', {
+        position: 'later' as unknown as 'next',
+      })
+    ).rejects.toThrow(/must be 'next' or a playlist index/u)
+    expect(client.commands).toEqual([])
+  })
+
+  it('bounds the index against mpv, not against the last broadcast snapshot', async () => {
+    const player = await createPlayer()
+    // The snapshot still says "empty" — no batch has arrived — while mpv
+    // already has five entries. An `add` issued from a command handler runs
+    // exactly there, and must not be rejected for it.
+    expect(player.state.playlist.count).toBe(0)
+    queueOf(5)
+    await player.playlist.add('x.mp3', { position: 5 })
+    expect(client.commands).toEqual([['loadfile', 'x.mp3', 'insert-at', '5']])
+  })
+
+  it('falls back to the snapshot when mpv cannot answer playlist-count', async () => {
+    const player = await createPlayer()
+    client.readErrors.set(MpvProperty.playlistCount, '[mpv:-10] boom')
+    // Snapshot count is 0, so only the head of an empty queue is left — which
+    // is what an append would do anyway.
+    await player.playlist.add('x.mp3', { position: 0 })
+    await expect(player.playlist.add('y.mp3', { position: 1 })).rejects.toThrow(
+      /past the end of a 0-entry playlist/u
+    )
+  })
+
+  it('throws a typed invalid-state error, not a bare TypeError', async () => {
+    const player = await createPlayer()
+    const error = await player.playlist
+      .add('x.mp3', { position: -1 })
+      .catch((thrown: unknown) => thrown)
+    expect(error).toBeInstanceOf(PlayerErrorException)
+    expect((error as PlayerErrorException).playerError.code).toBe(
+      'invalid-state'
+    )
+  })
+})
+
+describe('Player — prefetchStarted', () => {
+  it('registers the native listener at create, before anything can load', async () => {
+    await createPlayer()
+    expect(client.hasPrefetchListener).toBe(true)
+  })
+
+  it('delivers uri and entryId to subscribers', async () => {
+    const player = await createPlayer()
+    const seen: unknown[] = []
+    player.on('prefetchStarted', (event) => seen.push(event))
+    client.emitPrefetchStarted({ uri: 'https://cdn/next.mp3', entryId: 7 })
+    expect(seen).toEqual([{ uri: 'https://cdn/next.mp3', entryId: 7 }])
+  })
+
+  it('delivers without an entryId on a binary that has no entry-id property', async () => {
+    const player = await createPlayer()
+    const seen: unknown[] = []
+    player.on('prefetchStarted', (event) => seen.push(event))
+    client.emitPrefetchStarted({ uri: 'https://cdn/next.mp3' })
+    expect(seen).toEqual([{ uri: 'https://cdn/next.mp3' }])
+  })
+
+  it('fans out to every listener and stops on unsubscribe', async () => {
+    const player = await createPlayer()
+    const first: string[] = []
+    const second: string[] = []
+    const stop = player.on('prefetchStarted', (e) => first.push(e.uri))
+    player.on('prefetchStarted', (e) => second.push(e.uri))
+
+    client.emitPrefetchStarted({ uri: 'a' })
+    stop()
+    client.emitPrefetchStarted({ uri: 'b' })
+
+    expect(first).toEqual(['a'])
+    expect(second).toEqual(['a', 'b'])
+  })
+
+  it('is harmless with nobody listening — the common case', async () => {
+    await createPlayer()
+    expect(() => {
+      client.emitPrefetchStarted({ uri: 'a', entryId: 1 })
+    }).not.toThrow()
+  })
+
+  it('delivers nothing after destroy', async () => {
+    const player = await createPlayer()
+    const seen: string[] = []
+    player.on('prefetchStarted', (e) => seen.push(e.uri))
+    player.destroy()
+    client.emitPrefetchStarted({ uri: 'a' })
+    expect(seen).toEqual([])
+  })
+
+  it('needs no resolver — a plain player still hears the boundary', async () => {
+    const player = await createPlayer({ prefetchPlaylist: true })
+    const seen: string[] = []
+    player.on('prefetchStarted', (e) => seen.push(e.uri))
+    // No `setSourceResolver` anywhere: the hooks are registered by the core,
+    // not by the resolver, so this arrives regardless.
+    expect(client.resolverInstalled).toBe(false)
+    client.emitPrefetchStarted({ uri: 'https://cdn/next.mp3', entryId: 3 })
+    expect(seen).toEqual(['https://cdn/next.mp3'])
   })
 })
 

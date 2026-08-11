@@ -113,9 +113,59 @@ one-in-flight back-pressure clock, and the enum stays clear of the JNI/macro
 traps above. Hook handling (mpv `on_load` + our fork's `on_prefetch_load`)
 lives on the existing event thread; cache hits are synchronous native lookups;
 the bounded play-time hold is `ResolutionGate` in `cpp/SourceResolution.hpp`
-(unit-tested host-side). Hooks are registered lazily on first install and can
-never be unregistered (mpv has no API for it) — an uninstalled resolver leaves
-a pass-through handler that continues immediately.
+(unit-tested host-side). Hooks can never be unregistered (mpv has no API for it)
+— an uninstalled resolver leaves a pass-through handler that continues
+immediately. **Registration was lazy at first and is not any more; see the
+2026-08-12 addendum.**
+
+AS-BUILT ADDENDUM (2026-08-12): queue insertion + `prefetchStarted`.
+
+**`playlist.add(source, { position, play })`.** `position` is `'next'` or a
+0-based index; `play` is mpv's `*-play` variant ("start playback if nothing is
+currently playing" — not "play now"). The 2×3 table compiles to exactly one
+`loadfile` per add: `append` / `append-play` / `insert-next` /
+`insert-next-play` / `insert-at` / `insert-at-play`, with the index in
+`loadfile`'s third argument (mpv 0.38+; `buildLoadfileArgs` writes the `-1`
+placeholder only when the fourth argument is needed and the third is not). No
+`append` + `playlist-move` pair anywhere — that is two mutations with a window
+where the queue is wrong, readable by observers and by mpv's own prefetch. A
+numeric `position` is **rejected**, not clamped, when it is not an integer in
+`0 … playlist-count` (read from mpv at call time, snapshot as fallback): mpv
+silently appends an out-of-range index, which hides an off-by-one. Documented
+caveat, from the #25 research and re-verified against 0.41.0 source: an entry
+inserted while an opener is already running is not prefetched
+(`prefetch_next()` returns early on `mpctx->open_active`, `loadfile.c:1278`) and
+the in-flight prefetch is dropped by URL comparison at the boundary
+(`open_demux_reentrant`, `loadfile.c:1223`).
+
+**`player.on('prefetchStarted', cb)`** with payload `{ uri, entryId? }`.
+Transport: a **third dedicated Nitro channel**
+(`setPrefetchStartedListener` + the `PrefetchStartedEvent` struct), NOT a new
+`MpvEventKind`. Reasons, in order of weight: (a) it is produced inside
+`handleHook`, and hook-derived messages deliberately never enter the event batch
+— the batch is delivered one at a time behind a completion promise, so a timing
+signal riding one becomes arbitrarily late exactly when the system is busy;
+(b) the batch's `MpvEvent` has no field for a URL or an entry id, so the batch
+route means overloading `name` (already property-name-or-log-prefix) with a URL
+and `value` with an id; (c) `MpvEventKind` feeds the `PlayerEvent` union that
+`reducePlayerState` switches on exhaustively, and this event reduces to nothing
+— a state union should not grow a non-state member; (d) it keeps the enum clear
+of the macro/JNI traps recorded above. The channel returns `void` and carries no
+back-pressure, because the hook has already been continued when it fires and
+nothing in mpv is waiting.
+
+**Hook registration moved from `installSourceResolver` to `initialize`, always.**
+The fork patch guarantees stock behaviour only while the hook *name* has no
+client at all ("With no client registered the added cost is one
+`mp_hook_exists()` call […] and nothing else", `006.rn_media_prefetch_hook.patch`
+§THREADING AND COST), so registering late does not buy stock behaviour — it only
+moves the instant behaviour changes into the middle of a session. Accepted cost:
+one immediate `mpv_hook_continue` per load boundary on every player, resolver or
+not. This supersedes the "registered lazily on first install" line above, and the
+"Cost when not installed. Zero, and that is enforced by construction" wording in
+`Player.setSourceResolver`'s TSDoc and in the package README (both rewritten).
+ARCHITECTURE.md carries no lazy-registration claim, so nothing there is stale;
+ARCHITECTURE §11's prefetch-patch paragraph is unaffected.
 
 ```ts
 const player = await Player.create({ /* typed options + raw mpv overrides */ });
