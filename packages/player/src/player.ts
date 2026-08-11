@@ -15,7 +15,12 @@ import {
   metadataKeyProperty,
   metadataValueProperty,
 } from './properties'
-import type { LoopMode, PlayerState, ReducerContext } from './state'
+import type {
+  LoopMode,
+  PlayerState,
+  ReducerContext,
+  TrackChangeReads,
+} from './state'
 import {
   createInitialState,
   isPositionDiscontinuity,
@@ -117,6 +122,50 @@ export interface ReplayGainOptions {
  */
 export type Metadata = Readonly<Record<string, string>>
 
+/**
+ * How hard mpv should try to keep the audio device open across a playlist
+ * entry change — mpv's `--gapless-audio=<no|yes|weak>`.
+ *
+ * This is the *output* side of gapless playback (the demuxer side is
+ * {@link PlayerOptions.prefetchPlaylist}). Quoting mpv 0.41.0 `options.rst`:
+ *
+ * - `'no'` — "Disable gapless audio." The AO is torn down and reopened between
+ *   entries, so every transition costs whatever the platform charges for a new
+ *   audio device.
+ * - `'yes'` — "The audio device is opened using parameters chosen for the first
+ *   file played and is then kept open for gapless playback. This means that if
+ *   the first file for example has a low sample rate, then the following files
+ *   may get resampled to the same low sample rate, resulting in reduced sound
+ *   quality."
+ * - `'weak'` — mpv's default, and this library's. "Normally, the audio device is
+ *   kept open (using the format it was first initialized with). If the audio
+ *   format the decoder output changes, the audio device is closed and reopened.
+ *   This means that you will normally get gapless audio with files that were
+ *   encoded using the same settings, but might not be gapless in other cases.
+ *   The exact conditions under which the audio device is kept open is an
+ *   implementation detail, and can change from version to version."
+ *
+ * @remarks
+ * **Why this library does not force `'yes'`.** `'yes'` buys gapless across a
+ * format change by resampling every later entry into the *first* entry's output
+ * format — so one 22.05 kHz interlude at the head of a queue silently degrades
+ * the whole rest of it, with no error and nothing in the state to see it by. An
+ * album (one encoder, one format) is gapless under `'weak'` anyway; a mixed
+ * queue is the case where `'yes'` trades audible quality for an inaudible gap.
+ * If you want `'yes'`, pin the shared output format too — mpv's own advice:
+ * "consider using options such as `--audio-samplerate` and `--audio-format` to
+ * explicitly select what the shared output format will be" (pass them through
+ * {@link PlayerOptions.mpvOptions}).
+ *
+ * Note also mpv's caveat, which is why {@link PlayerOptions.prefetchPlaylist}
+ * exists alongside this: gapless "relies on audio output device buffering to
+ * continue playback while moving from one file to another. If playback of the
+ * new file starts slowly, for example because it is played from a remote
+ * network location […] then the buffered audio may run out before playback of
+ * the new file can start."
+ */
+export type GaplessAudioMode = 'no' | 'yes' | 'weak'
+
 /** Options for {@link Player.create}. */
 export interface PlayerOptions {
   /**
@@ -182,6 +231,24 @@ export interface PlayerOptions {
    * A raw `mpvOptions['prefetch-playlist']` still wins over this.
    */
   readonly prefetchPlaylist?: boolean
+  /**
+   * Whether the audio device is kept open across a playlist entry change, which
+   * is what makes a transition *gapless* (mpv's `gapless-audio`).
+   *
+   * Left unset, mpv's own default `'weak'` applies: gapless whenever
+   * consecutive entries decode to the same output format, and a device
+   * reopen — a short gap — when they do not. See {@link GaplessAudioMode} for
+   * each value's cost, and why this library deliberately does not force
+   * `'yes'`.
+   *
+   * Orthogonal to {@link prefetchPlaylist}: this one keeps the *output* alive,
+   * that one opens the next *input* early. On a network queue you generally
+   * want both, because a device that never closed still runs dry if the next
+   * entry's first packets have not arrived.
+   *
+   * A raw `mpvOptions['gapless-audio']` still wins over this.
+   */
+  readonly gaplessAudio?: GaplessAudioMode
   /**
    * Loudness normalisation from the file's ReplayGain tags. See
    * {@link ReplayGainOptions}; change it later with
@@ -488,6 +555,9 @@ const REPLAY_GAIN_FALLBACK_MAX = 60
 /** Every accepted {@link ReplayGainMode}, for runtime validation. */
 const REPLAY_GAIN_MODES: readonly ReplayGainMode[] = ['no', 'track', 'album']
 
+/** Every accepted {@link GaplessAudioMode}, for runtime validation. */
+const GAPLESS_AUDIO_MODES: readonly GaplessAudioMode[] = ['no', 'yes', 'weak']
+
 /**
  * An argument this library rejects before it can reach mpv.
  *
@@ -590,6 +660,17 @@ function assertPlayerOptions(options: PlayerOptions): void {
   ) {
     throw invalidArgument(
       `\`cacheSecs\` must be a finite number >= 0 (mpv's own range for \`cache-secs\`); got ${cacheSecs}.`
+    )
+  }
+  // A string union is only a compile-time guarantee; a JavaScript caller (or a
+  // value read from JSON) can still get here. Caught before `mpv_create()` for
+  // the same reason as everything else in this function.
+  if (
+    options.gaplessAudio !== undefined &&
+    !GAPLESS_AUDIO_MODES.includes(options.gaplessAudio)
+  ) {
+    throw invalidArgument(
+      `\`gaplessAudio\` must be one of ${GAPLESS_AUDIO_MODES.map((mode) => `'${mode}'`).join(', ')} (mpv's own domain for \`gapless-audio\`); got '${String(options.gaplessAudio)}'.`
     )
   }
   if (options.replayGain !== undefined) assertReplayGain(options.replayGain)
@@ -703,6 +784,17 @@ function formatFileOptions(
 }
 
 /**
+ * Whether an event moves the playlist cursor, i.e. changes the current entry.
+ *
+ * The mirror of `isPositionDiscontinuity`: it marks the batches that must pay
+ * for the one-shot `duration`/`seekable`/`media-title` reads, because mpv will
+ * not republish those for the new entry. See `ReducerContext.trackChange`.
+ */
+function isTrackChange(event: PlayerEvent): boolean {
+  return event.kind === 'property' && event.name === MpvProperty.playlistPos
+}
+
+/**
  * The typed audio player.
  *
  * One `Player` owns one mpv core. There is no singleton: create as many as you
@@ -800,6 +892,9 @@ export class Player {
           : {
               [MpvProperty.prefetchPlaylist]: yesNo(options.prefetchPlaylist),
             }),
+        ...(options.gaplessAudio === undefined
+          ? {}
+          : { [MpvProperty.gaplessAudio]: options.gaplessAudio }),
         ...replayGainOptions(options.replayGain),
         ...(options.mpvOptions ?? {}),
         'log-level': MPV_LOG_LEVEL_NAMES[options.logLevel ?? DEFAULT_LOG_LEVEL],
@@ -1528,6 +1623,9 @@ export class Player {
       ...(mapped.some(isPositionDiscontinuity)
         ? { timePos: this.#readTimePos() }
         : {}),
+      ...(mapped.some(isTrackChange)
+        ? { trackChange: this.#readTrackChange() }
+        : {}),
       ...(this.#currentUri !== undefined ? { uri: this.#currentUri } : {}),
     }
 
@@ -1702,11 +1800,59 @@ export class Player {
    * batch contained a `playbackRestart`.
    */
   #readTimePos(): number | undefined {
+    // The core may already be tearing down; an absent anchor just means the
+    // reducer keeps extrapolating from the previous one.
+    return this.#readInBatch(() =>
+      this.#client.getPropertyNumber(MpvProperty.timePos)
+    )
+  }
+
+  /**
+   * The new entry's `duration`, `seekable` and `media-title`, read once when a
+   * batch moves the playlist cursor.
+   *
+   * mpv does not republish these after the cursor moves — it re-emits an
+   * observed property only on an unequal value, and it walks observers in
+   * registration order, so on a gapless transition the new entry's `duration`
+   * has already been delivered *before* the cursor change (the two facts are
+   * documented in full on `ReducerContext.trackChange`). Dropping the fields
+   * and waiting therefore loses them for the rest of the entry.
+   *
+   * Like {@link #readTimePos} this is not polling: at most one read of each per
+   * batch, and only when the cursor actually moved. A property mpv reports as
+   * unavailable yields no key at all, which the reducer reads as "unknown"
+   * rather than "unchanged".
+   */
+  #readTrackChange(): TrackChangeReads {
+    const duration = this.#readInBatch(() =>
+      this.#client.getPropertyNumber(MpvProperty.duration)
+    )
+    const seekable = this.#readInBatch(() =>
+      this.#client.getPropertyBool(MpvProperty.seekable)
+    )
+    const title = this.#readInBatch(() =>
+      this.#client.getPropertyString(MpvProperty.mediaTitle)
+    )
+    return {
+      ...(duration !== undefined ? { duration } : {}),
+      ...(seekable !== undefined ? { seekable } : {}),
+      ...(title !== undefined ? { title } : {}),
+    }
+  }
+
+  /**
+   * A property read performed from inside the batch handler.
+   *
+   * Unlike {@link #readOptional} this swallows *every* failure: there is no
+   * caller to hand an error to on the event path, and letting one escape would
+   * abort the whole batch — including the state notification the surviving
+   * events earned. A failed read is reported as "unavailable", which every
+   * consumer of these reads already handles.
+   */
+  #readInBatch<T>(read: () => T | undefined): T | undefined {
     try {
-      return this.#client.getPropertyNumber(MpvProperty.timePos)
+      return read()
     } catch {
-      // The core may already be tearing down; an absent anchor just means the
-      // reducer keeps extrapolating from the previous one.
       return undefined
     }
   }

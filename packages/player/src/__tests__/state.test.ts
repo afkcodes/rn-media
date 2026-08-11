@@ -443,6 +443,52 @@ describe('reducer — track changes and playlists', () => {
     })
   })
 
+  it('adopts the injected track-change reads on a cursor move', () => {
+    // The reducer never reads mpv itself: a cursor change takes the entry's
+    // duration/seekable/title from the context, because mpv does not republish
+    // them after the change (see ReducerContext.trackChange).
+    let state = loadedAndPlaying()
+    state = run(state, [propertyEvent(MpvProperty.mediaTitle, 'First')])
+
+    state = run(state, [propertyEvent(MpvProperty.playlistPos, 1)], {
+      now: T0 + 30_000,
+      trackChange: { duration: 137, seekable: true, title: 'Second' },
+    })
+    expect(state.duration).toBe(137)
+    expect(state.seekable).toBe(true)
+    expect(state.title).toBe('Second')
+    // The cache position is the one field that repairs itself — mpv publishes
+    // `demuxer-cache-time` continuously — so it is still simply dropped.
+    expect(state.bufferedPosition).toBeUndefined()
+  })
+
+  it('drops a field the reads could not answer for', () => {
+    let state = loadedAndPlaying()
+    state = run(state, [propertyEvent(MpvProperty.mediaTitle, 'First')])
+
+    state = run(state, [propertyEvent(MpvProperty.playlistPos, 1)], {
+      now: T0 + 30_000,
+      trackChange: { duration: 137 },
+    })
+    expect(state.duration).toBe(137)
+    expect(state.seekable).toBeUndefined()
+    expect(state.title).toBeUndefined()
+  })
+
+  it('lets injected seekability suppress an injected live duration', () => {
+    let state = loadedAndPlaying()
+    state = run(state, [propertyEvent(MpvProperty.seekable, true)])
+
+    state = run(state, [propertyEvent(MpvProperty.playlistPos, 1)], {
+      now: T0 + 30_000,
+      // On an unseekable stream mpv's duration is the cache length.
+      trackChange: { duration: 2.14, seekable: false, title: 'Radio' },
+    })
+    expect(state.isLive).toBe(true)
+    expect(state.duration).toBeUndefined()
+    expect(state.title).toBe('Radio')
+  })
+
   it('maps mpv’s -1 sentinel to index -1', () => {
     let state = loadedAndPlaying()
     state = run(state, [propertyEvent(MpvProperty.playlistPos, -1)])

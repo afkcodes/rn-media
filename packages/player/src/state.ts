@@ -183,13 +183,29 @@ export interface PlayerState {
 }
 
 /**
+ * The file-scoped values the Player reads once when the playlist cursor moves.
+ *
+ * A key is *absent* when mpv reported that property unavailable — which the
+ * reducer treats as honestly unknown (drop the field), never as unchanged.
+ * See {@link ReducerContext.trackChange} for why these are read at all.
+ */
+export interface TrackChangeReads {
+  /** `duration` of the entry that just became current, in seconds. */
+  readonly duration?: number
+  /** `seekable` for the entry that just became current. */
+  readonly seekable?: boolean
+  /** `media-title` of the entry that just became current. */
+  readonly title?: string
+}
+
+/**
  * Everything the reducer needs that is not carried by the event itself.
  *
  * @remarks
  * A reducer over a real-time stream cannot be pure *and* call `Date.now()`.
- * Time, the one-shot `time-pos` resync and the current URI are therefore
- * injected — which is exactly what makes the state machine reproducible from
- * recorded fixtures.
+ * Time, the one-shot `time-pos` resync, the one-shot track-change reads and
+ * the current URI are therefore injected — which is exactly what makes the
+ * state machine reproducible from recorded fixtures.
  */
 export interface ReducerContext {
   /** `Date.now()` at the moment the batch was received, in milliseconds. */
@@ -199,6 +215,41 @@ export interface ReducerContext {
    * position discontinuity. `undefined` when mpv reported it unavailable.
    */
   readonly timePos?: number
+  /**
+   * `duration` / `seekable` / `media-title`, read once per batch and only when
+   * the batch carries a `playlist-pos` change.
+   *
+   * @remarks
+   * This exists because **mpv will not tell us these a second time**. Two facts
+   * of mpv's property-observation contract (`player/client.c`, confirmed
+   * on-device 2026-08-11) combine against a "drop it and wait for the
+   * re-publication" strategy on a gapless transition:
+   *
+   * 1. An observed property is delivered again only when its new value
+   *    compares *unequal* to the one last sent (`send_client_property_changes`).
+   *    Two consecutive tracks of the same length therefore never produce a
+   *    second `duration` event at all.
+   * 2. `gen_property_change_event` walks a client's observers in *registration*
+   *    order, and `OBSERVED_PROPERTIES` registers `duration` before
+   *    `playlist-pos`. On a gapless transition the new entry's `duration` thus
+   *    arrives in the *same* batch, *before* the cursor change that would drop
+   *    it.
+   *
+   * So the re-publication the cursor change waits for has either already gone
+   * past or will never come, and `duration`/`seekable`/`title` stay `undefined`
+   * for the rest of the entry. Reordering the observation table fixes neither
+   * (fact 1 is independent of order). The Player instead reads the three values
+   * synchronously when it sees the cursor move and injects them here, exactly
+   * as it does for {@link timePos}.
+   *
+   * They are "now" values — read when the batch reached JavaScript, not at the
+   * instant mpv generated the event — the same accepted approximation as
+   * {@link timePos}. When a value is genuinely not known yet (a network entry
+   * that is not demuxed), the key is absent and the field is dropped; mpv *will*
+   * send a change event once it becomes known, because `none → value` compares
+   * unequal.
+   */
+  readonly trackChange?: TrackChangeReads
   /** The source URI currently loaded, used to classify failures. */
   readonly uri?: string
 }
@@ -438,10 +489,18 @@ function reduceProperty(
       const index = asNumber(value)
       const next = index === undefined ? -1 : Math.trunc(index)
       if (next === state.playlist.index) return state
-      // Track change: position restarts, and duration/cache/title/seekability
-      // belong to the previous entry until mpv re-publishes them. Dropping
-      // `seekable` is what resets `isLive` (via `withLiveness`) when a live
-      // stream is followed by a finite track.
+      // Track change: position restarts and every file-scoped field still
+      // describes the previous entry.
+      //
+      // `bufferedPosition` is simply dropped — `demuxer-cache-time` republishes
+      // several times a second, so it repairs itself immediately. The other
+      // three cannot be waited for (see {@link ReducerContext.trackChange}), so
+      // they take the one-shot reads the Player injected: present means adopt,
+      // absent means honestly unknown. Setting/dropping `seekable` here is what
+      // re-derives `isLive` through `withLiveness` — a finite track after a live
+      // stream reads back `seekable = true` and stops being live, and one that
+      // reads back nothing falls to the same `undefined` (not live) the old
+      // unconditional drop produced.
       const changed: PlayerState = {
         ...state,
         playlist: { index: next, count: state.playlist.count },
@@ -451,10 +510,22 @@ function reduceProperty(
           rate: state.rate,
         },
       }
-      delete (changed as { duration?: number }).duration
-      delete (changed as { bufferedPosition?: number }).bufferedPosition
-      delete (changed as { title?: string }).title
-      delete (changed as { seekable?: boolean }).seekable
+      // One cast for the four optional fields; `changed` is a fresh copy that
+      // has not escaped, so writing it in place is still pure.
+      const fileScoped = changed as {
+        duration?: number
+        bufferedPosition?: number
+        title?: string
+        seekable?: boolean
+      }
+      const reads = context.trackChange
+      delete fileScoped.bufferedPosition
+      if (reads?.duration !== undefined) fileScoped.duration = reads.duration
+      else delete fileScoped.duration
+      if (reads?.title !== undefined) fileScoped.title = reads.title
+      else delete fileScoped.title
+      if (reads?.seekable !== undefined) fileScoped.seekable = reads.seekable
+      else delete fileScoped.seekable
       return withStatus(changed)
     }
 

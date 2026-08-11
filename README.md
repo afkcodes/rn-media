@@ -162,9 +162,15 @@ Worth knowing:
   `getMetadataValue('icy-title')` walk mpv's typed tag list (no string parsing),
   and `metadataChanged` fires at most once per native event batch — which is how
   ICY now-playing arrives on a radio stream.
-- `prefetchPlaylist: true` opens the next entry early; `cacheSecs` bounds mpv's
-  readahead (30 s by default, against mpv's ~1000 hours); `userAgent` defaults
-  to `rn-media (libmpv)` because real Shoutcast hosts 401 the literal `libmpv`.
+- **Gapless is the audio device staying open**, not a crossfade: a queue is one
+  mpv playlist, and consecutive entries hand over in ~25 ms with the device
+  never reopened (measured on-device, release build). `gaplessAudio` picks how
+  hard to try when consecutive tracks decode to *different* formats.
+- `prefetchPlaylist: true` opens the next entry early — on a network queue that
+  is what keeps the handover gapless (measured: 644 ms and an audible underrun
+  without it, 25 ms and none with it). `cacheSecs` bounds mpv's readahead (30 s
+  by default, against mpv's ~1000 hours); `userAgent` defaults to
+  `rn-media (libmpv)` because real Shoutcast hosts 401 the literal `libmpv`.
 
 Queue semantics, shuffle's one-level undo, ReplayGain, prefetch caveats, the
 typed error taxonomy: [`@rn-media/player` README](packages/player/README.md).

@@ -258,6 +258,23 @@ carries the exact standing.
   "started, paused".
 - **Audio-only core defaults**: `vid=no`, `force-window=no`, `idle=yes`,
   `audio-display=no`.
+- **`gapless-audio` left at mpv's `weak`** (exposed as the typed `gaplessAudio`,
+  never written unless the caller asks). `weak` keeps the audio device open while
+  consecutive entries decode to the same format and reopens it when they do not;
+  `yes` keeps it open unconditionally by resampling every later entry into the
+  *first* entry's format, which silently degrades a mixed queue with nothing in
+  the state to see it by. Verified on-device (Poco F4, Android 16, release): one
+  continuous tone split into two identically-encoded AAC files produced exactly
+  one `AO: [audiotrack] 44100Hz stereo 2ch float` for the session, a 26 ms
+  handover, and 739 ms of device buffer still queued at the switch.
+- **`prefetch-playlist` left off, and documented as required for network
+  queues.** mpv's gapless is an output-buffer guarantee only. Measured across a
+  CDN track boundary (two runs each): off → 644/641 ms handover against 202/204 ms
+  of buffered audio and an `Audio device underrun detected` at every boundary;
+  on → 25/26 ms handover, 816/826 ms of buffer, no underrun. It stays off by
+  default because mpv's own manual disclaims correctness when the queue is
+  edited or stepped backwards while a track is ending — that is the app's call,
+  not ours to make silently.
 
 ### 13. Honest state for live streams
 mpv reports a perpetually-growing *cache length* as the duration of unseekable
@@ -815,6 +832,29 @@ build is how you conclude the wrong thing about where the ceiling is.
   — so a lavfi metadata observation is a 20 Hz feed, not a per-frame one, and
   `match_property`'s compare-to-the-first-slash means observing
   `af-metadata/<label>/<key>` inherits that mask.
+- **An observed mpv property is re-emitted only on an *unequal* value, and
+  observers are walked in *registration* order — so a property is not
+  guaranteed to be republished after a track change.**
+  `player/client.c`: `send_client_property_changes()` compares the new value
+  against the last one delivered to that observer and skips the event when they
+  are equal, and `gen_property_change_event()` walks a client's observer list in
+  the order the observations were made. Both bite at a gapless boundary:
+  `OBSERVED_PROPERTIES` registers `duration` before `playlist-pos`, so the *new*
+  entry's `duration` is delivered in the same batch **before** the cursor change
+  — and two consecutive tracks of equal length produce no `duration` event at
+  all. Diagnosed on-device 2026-08-11: the state layer used to drop
+  `duration`/`seekable`/`title` on a `playlist-pos` change and wait for mpv to
+  republish them, and after a gapless transition they stayed `undefined` for the
+  rest of the entry (no duration, no seek bar, no title). Reordering the
+  observation table fixes nothing — the equal-value rule is independent of
+  order. **The state layer therefore never relies on post-transition
+  republication: the Player one-shot-reads `duration`, `seekable` and
+  `media-title` when a batch moves the cursor** and injects them into the
+  reducer through `ReducerContext.trackChange`, exactly as it already did for
+  `time-pos` on a position discontinuity (at most one read of each, per batch,
+  only when the cursor moved). A read that comes back unavailable means
+  *honestly unknown* — the field is dropped and mpv will emit it once it knows,
+  because `none → value` compares unequal.
 
 ## Update policy
 
