@@ -673,6 +673,16 @@ build is how you conclude the wrong thing about where the ceiling is.
   and silently ships the old binary (`./build.sh --clean -n mpv` forces it).
   Same false-evidence shape as the `--enable-protocol=hls` trap: always verify
   flags/symbols in the *shipped* artifact, never trust the build log.
+- **Native callbacks do not freeze in the background — only JS timers do.**
+  The visualizer's frames come from a native sampler, so backgrounding stops
+  nothing by itself: measured on device (release, 20 bands @ 60 fps), the JS
+  thread burned **39% of a core with the display asleep**, rendering commits
+  nobody could see — and unlock delivered the backlog as a freeze. The mirror
+  image of the sleep-timer trap (§19): there JS was frozen when it needed to
+  run; here it ran when it needed to stop. Native-callback→JS feeds need an
+  explicit AppState gate — `useVisualizer`'s `pauseWhenInactive` (default on)
+  drops the subscription, so the lazy rule disarms the tap for free (fixed:
+  JS thread 0% with screen off, audio pipeline untouched).
 - **generator scaffolds contain load-bearing "dead code"**: the ReactPackage
   class is the only trigger of `System.loadLibrary` — deleting it fails only
   at runtime.

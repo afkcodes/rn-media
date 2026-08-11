@@ -1,5 +1,51 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+/**
+ * A controllable stand-in for React Native's `AppState`, used by
+ * `useVisualizer`'s foreground gating.
+ *
+ * It is mocked rather than aliased because `react-native`'s entry point is Flow
+ * source that needs a Metro transform, and `useVisualizer` is the only module in
+ * this package that reaches it. `vi.hoisted` is what lets the factory below —
+ * which vitest hoists above every import — close over this object.
+ */
+const appState = vi.hoisted(() => {
+  const listeners = new Set<(status: string) => void>()
+  return {
+    currentState: 'active' as string | null,
+    listeners,
+    /** Drive a lifecycle transition the way the platform would. */
+    change(next: string): void {
+      appState.currentState = next
+      for (const listener of [...listeners]) listener(next)
+    },
+    reset(): void {
+      listeners.clear()
+      appState.currentState = 'active'
+    },
+  }
+})
+
+vi.mock('react-native', () => ({
+  AppState: {
+    get currentState(): string | null {
+      return appState.currentState
+    },
+    addEventListener(
+      _type: string,
+      listener: (status: string) => void
+    ): { remove(): void } {
+      appState.listeners.add(listener)
+      return {
+        remove(): void {
+          appState.listeners.delete(listener)
+        },
+      }
+    },
+  },
+}))
+
 import { usePlayer } from '../hooks/usePlayer'
 import { usePlayerState } from '../hooks/usePlayerState'
 import { useProgress } from '../hooks/useProgress'
@@ -317,6 +363,10 @@ describe('useProgress', () => {
 })
 
 describe('useVisualizer', () => {
+  beforeEach(() => {
+    appState.reset()
+  })
+
   async function makeVisualizerPlayer(): Promise<Player> {
     return PlayerClass.create({ createClient: () => client, now: clock })
   }
@@ -415,5 +465,121 @@ describe('useVisualizer', () => {
     const { result } = renderHook(() => useVisualizer(player))
     expect(result.current.error?.code).toBe('unsupported')
     expect(result.current.active).toBe(false)
+  })
+
+  it('drops the subscription when the app leaves the foreground', async () => {
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() => useVisualizer(player, { bands: 8 }))
+    expect(running()).toBe(true)
+
+    // The frames are native callbacks, so nothing about backgrounding stops
+    // them on its own — unsubscribing is the only thing that does.
+    act(() => appState.change('background'))
+    expect(running()).toBe(false)
+    expect(stops()).toBe(1)
+    expect(result.current.active).toBe(false)
+  })
+
+  it('resubscribes with the same options when the app comes back', async () => {
+    const player = await makeVisualizerPlayer()
+    const options = { bands: 8, fps: 15, fftSize: 1024, waveform: true }
+    const { result } = renderHook(() => useVisualizer(player, options))
+    const first = client.visualizerCalls[0]
+
+    act(() => appState.change('background'))
+    expect(running()).toBe(false)
+
+    act(() => appState.change('active'))
+    expect(running()).toBe(true)
+    expect(starts()).toBe(2)
+    // Resuming must not quietly fall back to the defaults.
+    expect(client.visualizerCalls.filter((c) => c.kind === 'start')[1]).toEqual(
+      first
+    )
+
+    act(() => {
+      client.emitCapture(toneCapture(4, 0.5, { bins: 513 }))
+    })
+    expect(result.current.frame?.bands).toHaveLength(8)
+    expect(result.current.active).toBe(true)
+  })
+
+  it("treats iOS's transient 'inactive' as leaving the foreground", async () => {
+    const player = await makeVisualizerPlayer()
+    renderHook(() => useVisualizer(player))
+    act(() => appState.change('inactive'))
+    expect(running()).toBe(false)
+    act(() => appState.change('active'))
+    expect(running()).toBe(true)
+  })
+
+  it('does not subscribe at all when it mounts in the background', async () => {
+    appState.currentState = 'background'
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() => useVisualizer(player))
+    expect(starts()).toBe(0)
+    expect(result.current.active).toBe(false)
+
+    act(() => appState.change('active'))
+    expect(starts()).toBe(1)
+  })
+
+  it('starts anyway when the platform has no state yet', async () => {
+    // Android's AppState.currentState is null until the first lifecycle
+    // callback; a mounting hook must not be stranded by that.
+    appState.currentState = null
+    const player = await makeVisualizerPlayer()
+    renderHook(() => useVisualizer(player))
+    expect(running()).toBe(true)
+  })
+
+  it('keeps running through a background with pauseWhenInactive off', async () => {
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() =>
+      useVisualizer(player, { bands: 8 }, true, false)
+    )
+    expect(running()).toBe(true)
+
+    act(() => appState.change('background'))
+    expect(running()).toBe(true)
+    expect(stops()).toBe(0)
+    expect(result.current.active).toBe(true)
+    // Opting out also means not listening: nothing was registered to leak.
+    expect(appState.listeners.size).toBe(0)
+  })
+
+  it('honours `enabled: false` regardless of the app state', async () => {
+    const player = await makeVisualizerPlayer()
+    const { rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useVisualizer(player, undefined, enabled),
+      { initialProps: { enabled: true } }
+    )
+    rerender({ enabled: false })
+    expect(running()).toBe(false)
+
+    // Coming back to the foreground must not resurrect a disabled visualizer.
+    act(() => appState.change('background'))
+    act(() => appState.change('active'))
+    expect(running()).toBe(false)
+    expect(starts()).toBe(1)
+  })
+
+  it('leaks neither a tap nor a listener when unmounted in the background', async () => {
+    const player = await makeVisualizerPlayer()
+    const { unmount } = renderHook(() => useVisualizer(player))
+    act(() => appState.change('background'))
+    expect(stops()).toBe(1)
+
+    unmount()
+    expect(running()).toBe(false)
+    // Unmounting an already-paused hook must not stop a tap twice, and must
+    // still release the AppState subscription.
+    expect(stops()).toBe(1)
+    expect(appState.listeners.size).toBe(0)
+
+    // A later transition has nobody left to notify.
+    act(() => appState.change('active'))
+    expect(starts()).toBe(1)
   })
 })

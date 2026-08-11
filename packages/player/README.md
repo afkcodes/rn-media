@@ -222,25 +222,46 @@ an oscilloscope or VU meter.
   and the smoothing are per subscriber, so two components can paint the same
   audio with different ballistics.
 
-Two defaults exist because a spectrum that is technically correct still looks
-broken, and both are switchable:
-
-- **`tiltDbPerOctave: 3`.** Music's power falls at roughly 3 dB per octave.
+Two display aids exist — `tiltDbPerOctave` and `autoGain` — and both default to off (faithful-by-default; see ARCHITECTURE).** Music's power falls at roughly 3 dB per octave.
   Drawn literally, the top half of the display barely moves whatever is playing.
   Set `0` for a physically literal spectrum.
-- **`autoGain: true`.** A fixed dB window cannot serve both a `-8 LUFS` master
+- **`autoGain: false`.** A fixed dB window cannot serve both a `-8 LUFS` master
   and a quiet acoustic recording — one pegs every bar, the other never leaves the
   floor. The gain is bounded (`-6`…`+18 dB`), backs off four times faster than it
   builds, and holds still below `-95 dBFS` so it can never amplify a noise floor
   into a full-height display. Set `false` for a calibrated meter whose height
   means one fixed thing.
 
-`useVisualizer(player, options, enabled)` re-renders at the frame rate by
-design, so keep it in a small leaf component. `apps/example` shows the render
-pattern worth copying: the coloured column and the LED grid are laid out once
-and never touched, and each frame moves **two** Views per band by `transform`
-only — no per-frame layout. For anything heavier, subscribe imperatively and
-drive an animated value instead of React state.
+`useVisualizer(player, options, enabled, pauseWhenInactive)` re-renders at the
+frame rate by design, so keep it in a small leaf component. `apps/example` shows
+the render pattern worth copying: the coloured column and the LED grid are laid
+out once and never touched, and each frame moves **two** Views per band by
+`transform` only — no per-frame layout. For anything heavier, subscribe
+imperatively and drive an animated value instead of React state.
+
+**The hook pauses itself when your app is not in the foreground**, and takes the
+subscription back when it returns (`pauseWhenInactive`, default `true`). This is
+not a battery nicety, it is a correctness fix: the frames are **native**
+callbacks, so — unlike a JS timer, which the platform freezes for you — they
+keep arriving at full rate behind a locked screen. An ungated visualizer would
+sit there calling `setState` 60 times a second at a display that cannot present
+anything, and the app would have all of that to work through at the moment the
+user unlocks. Because the tap is derived from the listener set, pausing the hook
+really does stop everything: mpv's ring, the sampler thread and the FFT all go
+away for the duration.
+
+- **Audio is unaffected.** Playback, the media session and the notification
+  carry on exactly as before; only the picture stops.
+- **Resuming is a fresh subscription**, so it re-arms with the same `options`
+  but smoothing, peak caps and auto-gain start from rest — `frame` is
+  `undefined` for a frame or two and the bars rise from zero rather than
+  resuming mid-bounce.
+- **On iOS this includes `'inactive'`** (notification centre, incoming call),
+  which is a brief state — a glance-away costs a re-subscribe, not a stall.
+- **Opt out** — `useVisualizer(player, options, true, false)` — only for a
+  surface that genuinely paints while inactive. For a non-UI consumer, use
+  `player.visualizer.subscribe()` directly: **the imperative API is never
+  `AppState`-gated**, and pausing is entirely a property of the hook.
 
 ### ReplayGain (loudness normalisation)
 
