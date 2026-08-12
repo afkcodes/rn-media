@@ -463,6 +463,36 @@ export function toPlayerError(thrown: unknown, uri?: string): PlayerError {
   }
 }
 
+/**
+ * The failure `retry.retryLiveEof` re-attempts on: a live entry whose server
+ * closed the connection cleanly.
+ *
+ * @param uri - The source that ended, when known.
+ *
+ * @remarks
+ * **This error is synthesised, and that is worth knowing before reading it in a
+ * log.** mpv reported `MPV_END_FILE_REASON_EOF` — a *clean* end, with no error
+ * number and no `mpv_error_string()` — so there is nothing here to classify;
+ * `raw` carries mpv's end-file reason instead of an mpv error string, which is
+ * the only honest thing to put in that field.
+ *
+ * It is `network`/`retryable` because that is what it *is*: an HTTP response
+ * body that ended while the broadcast behind it did not. The player never
+ * emits it on the `error` channel — it exists to give
+ * {@link PlayerEventMap.retrying} a typed reason to show ("Reconnecting…"), and
+ * when the budget runs out the end is reported as the `trackEnded` it always
+ * was. So no app sees this as a failure unless it asked for the behaviour.
+ */
+export function liveEofError(uri: string | undefined): PlayerError {
+  return {
+    code: 'network',
+    message: 'The live stream ended — the server closed the connection.',
+    raw: 'eof',
+    retryable: true,
+    ...(uri !== undefined ? { uri } : {}),
+  }
+}
+
 /** The `disposed` error this library raises for use-after-`destroy()`. */
 export function disposedError(operation: string): PlayerError {
   return {

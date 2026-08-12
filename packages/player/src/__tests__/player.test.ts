@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PlayerError } from '../errors'
 import { PlayerErrorException } from '../errors'
 import type { LogEvent } from '../events'
-import { Player } from '../player'
+import { LIVE_EOF_BUDGET_RESET_SECONDS, Player } from '../player'
 import { MpvProperty, OBSERVED_PROPERTIES } from '../properties'
 import type { PlayerState } from '../state'
 import {
@@ -2158,6 +2158,246 @@ describe('Player — retry before skip', () => {
     client.emit([NETWORK_FAILURE])
     expect(retries).toEqual([])
     expect(errors).toHaveLength(1)
+  })
+})
+
+describe('Player — retryLiveEof (a live stream’s clean close)', () => {
+  /** mpv's *clean* end of file — no error number, no error string. */
+  const CLEAN_END = endFileEvent('endOfFile')
+
+  /**
+   * A playing entry that mpv has declared unseekable, which is the *only* input
+   * to `isLive` — see `withLiveness`.
+   *
+   * `readable` is set as well as the property event because a track change
+   * re-reads `seekable` synchronously (`#readTrackChange`); leaving mpv's own
+   * answer unset would drop liveness the moment the cursor moves, which is not
+   * what a device does.
+   */
+  async function playingStream(
+    overrides: Parameters<typeof Player.create>[0] = {},
+    { live = true }: { live?: boolean } = {}
+  ): Promise<Player> {
+    const player = await createPlayer(overrides)
+    await player.loadPlaylist([URI, 'b.mp3', 'c.mp3'])
+    client.readable.set(MpvProperty.seekable, !live)
+    client.emit([
+      startFileEvent(),
+      propertyEvent(MpvProperty.pause, false),
+      propertyEvent(MpvProperty.playlistCount, 3),
+      propertyEvent(MpvProperty.playlistPos, 0),
+      propertyEvent(MpvProperty.seekable, !live),
+    ])
+    expect(player.state.isLive).toBe(live)
+    client.commands.length = 0
+    return player
+  }
+
+  /** What mpv publishes when a re-attempt actually reconnects. */
+  function reconnected(): void {
+    client.emit([
+      startFileEvent(),
+      playbackRestartEvent(),
+      propertyEvent(MpvProperty.seekable, false),
+    ])
+  }
+
+  it('re-attempts a live entry that ended cleanly, instead of ending the track', async () => {
+    const player = await playingStream({ retry: { retryLiveEof: true } })
+    const retries: unknown[] = []
+    const ended: unknown[] = []
+    const errors: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('trackEnded', (event) => ended.push(event))
+    player.on('error', (error) => errors.push(error))
+
+    client.emit([CLEAN_END])
+
+    expect(retries).toEqual([
+      {
+        index: 0,
+        attempt: 1,
+        maxAttempts: 2,
+        // Synthesised: mpv reported a clean end, so there is no error string to
+        // classify. `network`/`retryable` is what it *is* — see `liveEofError`.
+        error: expect.objectContaining({
+          code: 'network',
+          retryable: true,
+          raw: 'eof',
+        }),
+      },
+    ])
+    // Neither of the two things a clean end normally produces: the track has
+    // not ended, and nothing has failed.
+    expect(ended).toEqual([])
+    expect(errors).toEqual([])
+    expect(client.commands).toEqual([['playlist-play-index', '0']])
+  })
+
+  it('is off by default: the same clean end is a trackEnded', async () => {
+    const player = await playingStream()
+    const retries: unknown[] = []
+    const ended: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('trackEnded', (event) => ended.push(event))
+
+    client.emit([CLEAN_END])
+
+    expect(retries).toEqual([])
+    expect(ended).toEqual([{ index: 0 }])
+    expect(client.commands).toEqual([])
+  })
+
+  it('never touches a finite entry, however loudly it is asked to', async () => {
+    // A seekable entry that reaches its end has ended. This is the guarantee
+    // that makes the option safe to turn on for a mixed queue.
+    const player = await playingStream(
+      { retry: { retryLiveEof: true } },
+      { live: false }
+    )
+    const retries: unknown[] = []
+    const ended: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('trackEnded', (event) => ended.push(event))
+
+    client.emit([CLEAN_END])
+
+    expect(retries).toEqual([])
+    expect(ended).toEqual([{ index: 0 }])
+    expect(client.commands).toEqual([])
+  })
+
+  it('is bounded: maxAttempts re-attempts, then the end stands as an end', async () => {
+    // The documented trade: a broadcast that genuinely ended costs a few extra
+    // connects, and then the queue moves on exactly as it always did.
+    const player = await playingStream({ retry: { retryLiveEof: true } })
+    const retries: { attempt: number }[] = []
+    const ended: unknown[] = []
+    const errors: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('trackEnded', (event) => ended.push(event))
+    player.on('error', (error) => errors.push(error))
+
+    client.emit([CLEAN_END]) // attempt 1
+    client.emit([CLEAN_END]) // attempt 2
+    client.emit([CLEAN_END]) // budget spent
+
+    expect(retries.map((r) => r.attempt)).toEqual([1, 2])
+    // Still `trackEnded`, never `error`: a clean end is not a failure, and
+    // giving up on re-attempting it does not make it one.
+    expect(ended).toEqual([{ index: 0 }])
+    expect(errors).toEqual([])
+    expect(client.commands).toEqual([
+      ['playlist-play-index', '0'],
+      ['playlist-play-index', '0'],
+    ])
+  })
+
+  it('a reconnect that plays only briefly does NOT refill the budget', async () => {
+    // The bug this rule exists to prevent: with the ordinary "reset on
+    // playbackRestart" rule, a server that hangs up after a second would clear
+    // its budget on every reconnect and re-attempt forever.
+    const player = await playingStream({ retry: { retryLiveEof: true } })
+    const retries: { attempt: number }[] = []
+    const ended: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('trackEnded', (event) => ended.push(event))
+
+    client.emit([CLEAN_END]) // attempt 1
+    reconnected()
+    clock.advance((LIVE_EOF_BUDGET_RESET_SECONDS - 1) * 1000)
+    client.emit([CLEAN_END]) // attempt 2 — same generation
+    reconnected()
+    clock.advance((LIVE_EOF_BUDGET_RESET_SECONDS - 1) * 1000)
+    client.emit([CLEAN_END]) // budget spent
+
+    expect(retries.map((r) => r.attempt)).toEqual([1, 2])
+    expect(ended).toEqual([{ index: 0 }])
+  })
+
+  it('sustained playback refills the budget, so an hourly dropout keeps recovering', async () => {
+    const player = await playingStream({ retry: { retryLiveEof: true } })
+    const retries: { attempt: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+
+    client.emit([CLEAN_END]) // attempt 1
+    reconnected()
+    clock.advance(LIVE_EOF_BUDGET_RESET_SECONDS * 1000)
+    client.emit([CLEAN_END]) // a fresh generation, not attempt 2
+
+    expect(retries.map((r) => r.attempt)).toEqual([1, 1])
+  })
+
+  it('anchors the sustained clock to the first restart, not the last', async () => {
+    // A second `playbackRestart` (a stall recovering, a seek in a stream that
+    // turned out to be seekable) must not keep pushing the deadline out.
+    const player = await playingStream({ retry: { retryLiveEof: true } })
+    const retries: { attempt: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+
+    client.emit([CLEAN_END]) // attempt 1
+    reconnected()
+    clock.advance((LIVE_EOF_BUDGET_RESET_SECONDS - 1) * 1000)
+    client.emit([playbackRestartEvent()])
+    clock.advance(2000)
+    client.emit([CLEAN_END])
+
+    // 31 s since the first restart: the generation is over, so this is a new
+    // attempt 1 rather than attempt 2.
+    expect(retries.map((r) => r.attempt)).toEqual([1, 1])
+  })
+
+  it('shares one budget with the ordinary retry path', async () => {
+    // An entry that alternates clean closes and hard failures is one unhealthy
+    // entry, not two independent problems with a budget each.
+    const player = await playingStream({ retry: { retryLiveEof: true } })
+    const retries: { attempt: number }[] = []
+    const errors: { attempts: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('error', (_error, info) => errors.push(info))
+
+    client.emit([CLEAN_END]) // attempt 1, live path
+    client.emit([endFileEvent('error', 'loading failed')]) // attempt 2, error path
+    client.emit([endFileEvent('error', 'loading failed')]) // spent
+
+    expect(retries.map((r) => r.attempt)).toEqual([1, 2])
+    expect(errors).toEqual([{ attempts: 2 }])
+  })
+
+  it('a user skip cancels a live re-attempt, like any other', async () => {
+    const player = await playingStream({ retry: { retryLiveEof: true } })
+    const retries: { attempt: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+
+    client.emit([CLEAN_END])
+    await player.playlist.next()
+    client.emit([CLEAN_END])
+
+    expect(retries.map((r) => r.attempt)).toEqual([1, 1])
+  })
+
+  it('respects maxAttempts: 0', async () => {
+    const player = await playingStream({
+      retry: { maxAttempts: 0, retryLiveEof: true },
+    })
+    const retries: unknown[] = []
+    const ended: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('trackEnded', (event) => ended.push(event))
+
+    client.emit([CLEAN_END])
+
+    expect(retries).toEqual([])
+    expect(ended).toEqual([{ index: 0 }])
+  })
+
+  it('rejects a non-boolean retryLiveEof before any core exists', async () => {
+    await expect(
+      createPlayer({
+        retry: { retryLiveEof: 'yes' as unknown as boolean },
+      })
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    expect(client.initialized).toBe(false)
   })
 })
 

@@ -405,52 +405,6 @@ struct NodeGuard {
   }
 };
 
-/// Walk one `MPV_FORMAT_NODE_MAP` node, handing each member to `visit`.
-///
-/// Shared by the map and the array-of-maps readers so the scalar-extraction
-/// switch — the part that has to know mpv's format zoo — exists exactly once.
-void visitNodeMap(const mpv_node& node, const std::function<void(const NodeMember&)>& visit) {
-  if (node.format != MPV_FORMAT_NODE_MAP || node.u.list == nullptr) {
-    return;
-  }
-  const mpv_node_list* list = node.u.list;
-  for (int i = 0; i < list->num; i++) {
-    const mpv_node& value = list->values[i];
-    NodeMember member;
-    member.key = list->keys[i] == nullptr ? std::string_view{} : std::string_view(list->keys[i]);
-    switch (value.format) {
-      case MPV_FORMAT_INT64:
-        member.integer = value.u.int64;
-        member.number = static_cast<double>(value.u.int64);
-        break;
-      case MPV_FORMAT_DOUBLE:
-        member.number = value.u.double_;
-        break;
-      case MPV_FORMAT_FLAG:
-        member.integer = value.u.flag;
-        member.number = static_cast<double>(value.u.flag);
-        break;
-      case MPV_FORMAT_STRING:
-      case MPV_FORMAT_OSD_STRING:
-        if (value.u.string != nullptr) {
-          member.text = std::string_view(value.u.string);
-        }
-        break;
-      case MPV_FORMAT_BYTE_ARRAY:
-        if (value.u.ba != nullptr) {
-          member.bytes = static_cast<const std::uint8_t*>(value.u.ba->data);
-          member.byteCount = value.u.ba->size;
-        }
-        break;
-      default:
-        // Nested maps/arrays have no consumer yet; skipping them keeps this
-        // primitive honest rather than half-implementing a tree walker.
-        break;
-    }
-    visit(member);
-  }
-}
-
 } // namespace
 
 bool MpvClient::getPropertyNodeMapArray(
@@ -471,16 +425,9 @@ bool MpvClient::getPropertyNodeMapArray(
   }
   NodeGuard guard{&node};
 
-  if (node.format != MPV_FORMAT_NODE_ARRAY || node.u.list == nullptr) {
-    return false;
-  }
-
-  const mpv_node_list* list = node.u.list;
-  for (int i = 0; i < list->num; i++) {
-    const std::size_t index = static_cast<std::size_t>(i);
-    visitNodeMap(list->values[i], [&](const NodeMember& member) { visit(index, member); });
-  }
-  return true;
+  // The walk itself is `NodeReader.hpp` — no handle, no libmpv, unit-tested
+  // against hand-built node trees.
+  return visitNodeMapArray(node, visit);
 }
 
 bool MpvClient::getPropertyNodeMap(const std::string& name,
@@ -501,12 +448,7 @@ bool MpvClient::getPropertyNodeMap(const std::string& name,
   }
   NodeGuard guard{&node};
 
-  if (node.format != MPV_FORMAT_NODE_MAP || node.u.list == nullptr) {
-    return false;
-  }
-
-  visitNodeMap(node, visit);
-  return true;
+  return visitNodeMap(node, visit);
 }
 
 bool MpvClient::configurePcmTap(int frames) {

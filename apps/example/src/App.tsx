@@ -139,7 +139,7 @@ function App(): React.JSX.Element {
         />
 
         <QueueList
-          queue={playback.queue}
+          queue={playback.queueRows}
           index={shell.index}
           playing={shell.playing}
           ready={ready}

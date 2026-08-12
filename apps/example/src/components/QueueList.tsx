@@ -20,7 +20,29 @@ import React from 'react'
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { Track } from '../data/tracks'
+import type { QueueRow } from '../playback/queue'
 import { Chip, ChipRow, Detail, Section } from './ui'
+
+/**
+ * React key for one row.
+ *
+ * mpv's `entryId` is "unique for the entire life time of the current mpv core
+ * instance" and survives inserts, removes, moves and shuffles — which is
+ * exactly what a key has to do, and exactly what an index-based key does not.
+ * Keying on the position meant a shuffle told React "row 3 changed its
+ * contents" instead of "row 3 moved", so every row remounted: artwork
+ * re-fetched, and any per-row state would have landed on the wrong song.
+ *
+ * The fallback covers the rows that have no mpv id yet — `QueueMirror` seeds
+ * itself from `TRACKS` before the core has a playlist to read, and stamps those
+ * placeholders with negative ids. They are positional by nature, so a
+ * positional key is the honest one for them.
+ */
+function rowKey(row: QueueRow, position: number): string {
+  return row.entryId >= 0
+    ? `entry-${row.entryId}`
+    : `slot-${position}-${row.track.id}`
+}
 
 export const QueueList = React.memo(function QueueList({
   queue,
@@ -33,7 +55,7 @@ export const QueueList = React.memo(function QueueList({
   onUnshuffle,
   onClear,
 }: {
-  queue: readonly Track[]
+  queue: readonly QueueRow[]
   index: number
   playing: boolean
   ready: boolean
@@ -53,10 +75,10 @@ export const QueueList = React.memo(function QueueList({
       }
     >
       <View style={styles.rows}>
-        {queue.map((track, position) => (
+        {queue.map((row, position) => (
           <Row
-            key={`${track.id}-${position}`}
-            track={track}
+            key={rowKey(row, position)}
+            track={row.track}
             position={position}
             current={position === index}
             playing={playing}

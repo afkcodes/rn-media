@@ -41,7 +41,7 @@ import {
 } from './engine'
 import { DemoMediaHandler, type PlaybackCommands } from './handler'
 import { OutputOptions } from './output'
-import { QueueMirror } from './queue'
+import { QueueMirror, type QueueRow } from './queue'
 import { Transport } from './transport'
 import { restoreSession, type RestoreOutcome } from './persistence'
 import { SessionBridge } from './session'
@@ -110,6 +110,16 @@ export class Playback implements PlaybackCommands {
   }
   get queue(): readonly Track[] {
     return this.#queue.tracks
+  }
+  /**
+   * The same queue with mpv's identity attached — what the list draws.
+   *
+   * `entryId` is stable across inserts, removes, moves and shuffles, which is
+   * what a React key needs to be; {@link queue} stays the plain metadata list
+   * because that is what the media session and the now-playing lookup want.
+   */
+  get queueRows(): readonly QueueRow[] {
+    return this.#queue.rows
   }
   get restoreNote(): string {
     return this.#restored?.note ?? 'not attempted'

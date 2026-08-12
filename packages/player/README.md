@@ -691,6 +691,27 @@ queue (`jumpTo`, `next`, `previous`, `load`, `loadPlaylist`, `add`, `remove`,
 `move`, `clear`, `shuffle`, `unshuffle`). A user who skips during a retry has
 said what they want, and the player stops arguing.
 
+**Live streams: the clean close (`retryLiveEof`, off by default).** A radio
+server that hangs up *politely* is not a failure at any layer — FFmpeg does not
+reconnect on it (`reconnect_at_eof` is unsafe as a default, see above) and mpv
+reports a clean `eof`, so the queue moves on. Opt in and an `eof` on an entry
+that was **live** (`state.isLive`, i.e. mpv's `seekable = no`) is re-attempted
+under the same bounded budget:
+
+```ts
+const player = await Player.create({
+  retry: { maxAttempts: 2, retryLiveEof: true }, // radio app
+});
+```
+
+A finite track is never affected, whatever this is set to. The re-attempt emits
+`retrying` with a synthesised `network` error and no `trackEnded`; once the
+budget is spent the end is reported as the `trackEnded` it always was — never as
+an `error`. The budget refills only after `LIVE_EOF_BUDGET_RESET_SECONDS` (30 s)
+of playback, so a server that hangs up after one second cannot loop forever. The
+trade, stated plainly: a broadcast that has genuinely ended is re-attempted
+`maxAttempts` times before the queue moves on.
+
 ### Errors: `retryable`, and dismissing one
 
 Every `PlayerError` carries `retryable: boolean` — "could repeating the
