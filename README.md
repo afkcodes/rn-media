@@ -50,7 +50,11 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 | Session layer works with *any* player | ❌ | ❌ | ❌ | ❌ | ✅ (`@rn-media/media-session` is player-agnostic) |
 | Gapless queue | ⚠️ | ✅ | ❌ | ✅ | ✅ 25 ms handover, measured on-device |
 | Signed / expiring URLs stay gapless | ❌ | ❌ | ❌ | ❌ | ✅ resolver runs at **prefetch** time — our own mpv patch, [below](#resolve-sources-at-the-last-moment) |
+| Per-source HTTP headers | ✅ | ✅ | ✅ | ⚠️ global config only | ✅ typed; CR/LF/colon rejected as request splitting |
 | EQ / DSP | ❌ | ❌ | ❌ | ✅ 10-band | ✅ 16 ffmpeg filters, 22 tuned EQ presets |
+| Pitch control, independent of rate | ❌ correction algorithms only | ❌ | ❌ | ❌ | ✅ `setPitch(ratio)` — mpv's first-class `--pitch` |
+| Chapters (read + navigate) | ❌ | ❌ | ⚠️ tvOS, app-supplied marks | ❌ | ✅ `getChapters()`, `state.chapter`, next/previous |
+| Sleep timer | ❌ a DIY guide (V5, commercial, ships one) | ❌ | ❌ | ✅ duration / end-of-track, with fade | ✅ native, duration + end-of-track (no fade) |
 | Spectrum visualizer | ❌ | ❌ | ❌ | ✅ | ✅ both platforms, no `RECORD_AUDIO` |
 | Crossfade | ❌ | ❌ | ❌ | ✅ | ❌ deliberately — built, listened to, dropped ([Limitations](#limitations)) |
 | Casting (Chromecast / AirPlay) | ✅ | ❌ | ❌ app-side | ✅ | ❌ deferred with a reason ([Limitations](#limitations)) |
@@ -59,7 +63,9 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 | Native binary it adds | ≈none (platform codecs) | ≈none | ≈none | — | 3.63 MB downloaded for `arm64-v8a`, ≈7.1 MB for the iOS device slice ([Requirements](#requirements)) |
 
 Every cell in the four competitor columns comes from that project's own
-documentation, read on 2026-08-12; ours are linked to the section that proves
+documentation, read on 2026-08-12/13. The track-player column is **V4, the
+open-source baseline** — V5 is a commercial rewrite, and where it advertises
+something V4 lacks, the cell says so. Ours are linked to the section that proves
 them. The sweet spot: music apps with **non-DRM audio** — indie catalogs,
 self-hosted libraries (Plex / Jellyfin / Subsonic), podcasts, radio, audiobooks.
 The row we pay for is the last one: a shipped engine costs megabytes that
@@ -142,15 +148,23 @@ player.play();
 
 player.on('trackChanged', ({ index }) => console.log('now on', index));
 player.on('trackEnded', () => console.log('finished naturally'));
+player.on('queueEnded', () => console.log('ran off the end of the queue'));
 player.on('prefetchStarted', ({ uri }) => console.log('opening ahead', uri));
+player.on('seekCompleted', ({ reason, position }) =>       // 'seek' | 'auto-advance';
+  console.log('landed at', position, 'because', reason));  // pairs with seekStarted
 player.on('error', e => console.log(e.code, e.message)); // network | unsupported-format | …
 
 // --- the rest of the surface, at a glance ---
 player.pause(); player.toggle();
 await player.seekTo(90);
-player.setRate(1.5);           // pitch-corrected
-player.setVolume(0.5);         // 0..1
-player.setLoop('playlist');    // 'off' | 'track' | 'playlist'
+await player.seekBy(-15);         // relative — immune to projection error
+player.setRate(1.5);              // pitch-corrected speed
+player.setPitch(2 ** (3 / 12));   // transpose 3 semitones up — independent of rate
+player.setVolume(0.5);            // 0..1
+player.setLoop('playlist');       // 'off' | 'track' | 'playlist'
+player.setAudioChannels('mono');  // accessibility downmix; 'auto-safe' restores
+await player.stop();              // stops playback; the queue SURVIVES
+await player.stop({ clearPlaylist: true });  // mpv's full clear, as the opt-in
 
 await player.playlist.add(uri);                                    // to the end
 await player.playlist.add(uri, { position: 'next' });              // play it after this one
@@ -158,12 +172,17 @@ await player.playlist.add(uri, { position: 0 });                   // exact inde
 await player.playlist.add(uri, { position: 'next', play: true });  // …and start if nothing is playing
 await player.playlist.move(0, 4);
 await player.playlist.jumpTo(2);  // plays it; { autoPlay: false } to stay paused
+await player.playlist.previous(); // the ⏮ button: >3 s in restarts, else moves back ({ restartThreshold })
 await player.playlist.shuffle();  // mpv playlist-shuffle; unshuffle() undoes it, once
 
-const snapshot = player.state;    // status, playing, duration, isLive, title, …
+const chapters = player.getChapters();  // [{ title?, start }] — podcasts, m4b audiobooks
+await player.nextChapter();             // with previousChapter() and setChapter(index)
+
+const snapshot = player.state;    // status, playing, duration, isLive, hasNext, pitch, chapter, …
 player.onStateChange(state => render(state));  // only on real changes
 player.getPosition();             // projected locally — no bridge traffic, no timers
 player.getMetadata();             // typed tags, ICY now-playing included
+player.getCommonMetadata();       // the same tags normalised: title/artist/album/trackNumber/year/…
 player.destroy();                 // when you are done with the core
 ```
 
@@ -195,6 +214,29 @@ Worth knowing:
   `insert-next` / `insert-at` load actions, so the queue is never briefly wrong
   the way an append-then-move pair leaves it, and an index outside
   `0 … playlist.count` throws instead of quietly landing at the far end.
+- **HTTP headers are per source, and typed.** `load(uri, { headers: {
+  Authorization: … } })` — `loadPlaylist` and `playlist.add` take the same
+  per-entry options — is the typed form of mpv's `http-header-fields`, escaped
+  through both of mpv's list layers (a comma in a header value used to corrupt
+  the whole option list) and rejecting CR/LF/NUL/colon, which mpv would write
+  into the request verbatim: that is request splitting, not formatting. Headers
+  belong to the *entry*, so a [source resolver](#resolve-sources-at-the-last-moment)
+  rewriting the URL does not lose them.
+- **Pitch is a ratio, not semitones, on purpose**: mpv's `--pitch` is a
+  frequency multiplier, and picking a tuning convention is an app decision —
+  `2 ** (n / 12)` is the twelve-tone version. Speed and pitch compose: `1.5×`
+  rate with `setPitch(1)` is a faster audiobook at the right pitch.
+- **`stop()` keeps the queue.** mpv's own `stop` clears the playlist; ours
+  deliberately inverts that default — RNTP's `stop()` keeps the queue too, and
+  a migrator silently losing one is data loss — with `{ clearPlaylist: true }`
+  as the destructive opt-in.
+- **The signals analytics need are events, not polling**: `queueEnded` when
+  playback runs off the end, the `seekStarted`/`seekCompleted` pair with a
+  `'seek' | 'auto-advance'` reason (reconstruct listened time from those — they
+  arrive with the screen off), `state.bufferingPercent` while stalled, and the
+  `useMilestones` hook for the 25/50/75/90 % scrobbling marks (a hook and not a
+  player timer, because JS timers freeze screen-off and the hook says so
+  honestly).
 
 Queue semantics, shuffle's one-level undo, ReplayGain, prefetch caveats, the
 typed error taxonomy: [`@rn-media/player` README](packages/player/README.md).
@@ -254,7 +296,8 @@ class PlaybackHandler extends BaseMediaHandler {
   override async skipToNext() { await player.playlist.next(); }
   override async skipToPrevious() { await player.playlist.previous(); }
   override async stop() { player.pause(); await service.stopService(); }
-  // onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption: all defaulted.
+  // onSetRepeatMode, onSetShuffle, onTaskRemoved, customAction, onSleepTimer,
+  // onPlaybackResumption: all defaulted.
 }
 
 const service = await MediaService.init(() => new PlaybackHandler(), {
@@ -272,7 +315,7 @@ Then broadcast, typically straight from `player.onStateChange`:
 service.setQueue(tracks.map(t => ({ id: t.id, title: t.title, artist: t.artist })));
 service.setMediaItem({
   id: track.id, title: track.title, artist: track.artist, artworkUri: track.art,
-  duration: track.durationMs, // omit for live — a missing duration IS the live flag
+  duration: track.durationMs, // or isLive: true — explicit, so "no duration yet" ≠ live
 });
 
 player.onStateChange(state => {
@@ -296,6 +339,28 @@ you did not declare). `QueueHandler` supplies default `skipToNext` /
 `CompositeMediaHandler` decorates a handler (analytics, logging) without
 touching it:
 [reference](packages/media-session/README.md#controls-vs-capabilities).
+
+**Repeat and shuffle ride the same contract**: advertise `setRepeatMode` /
+`setShuffle` in `capabilities` (that alone lights up Android Auto, Wear and
+Bluetooth controllers), add `'repeatMode'` / `'shuffle'` to `controls` for
+buttons in the phone's shade with media3's state-following icons, and broadcast
+`repeatMode` / `shuffleEnabled`. A press calls `onSetRepeatMode(mode)` /
+`onSetShuffle(enabled)` on your handler, and nothing changes until your next
+broadcast — the acknowledge-by-broadcast contract every command follows. The
+`fastForward` / `rewind` jumps are one cross-platform pair,
+`jumpForwardSeconds` / `jumpBackwardSeconds` (default 15/15 — before this
+option, the identical JS call skipped back 5 s on Android and 15 s on iOS);
+both platforms resolve the increment natively into an absolute `seekTo`, so
+there is no jump handler to implement. `android.notificationColor` tints the
+notification (an ARGB hint — Android 12+ shades may prefer the artwork's
+palette). And `MediaItem` carries the long tail — `albumArtist`, `trackNumber`,
+`discNumber`, `year`, `subtitle`, `isLive`, `extras` — with a per-field honesty
+table of what each platform actually renders (iOS has no year key, no third
+text line and no extras surface; those are carried and persisted, never faked
+into other fields):
+[repeat & shuffle](packages/media-session/README.md#repeat-and-shuffle) ·
+[jump intervals](packages/media-session/README.md#jump-intervals) ·
+[metadata fields](packages/media-session/README.md#metadata-fields).
 
 ## Handle focus and headphones
 
@@ -355,12 +420,20 @@ would claim a position that grew while the process was dead, and on Android a
 
 **JS timers freeze in the background** (an RN platform behaviour — handlers,
 promises and network callbacks work; `setTimeout` does not). So the sleep timer
-is a library feature rather than something you build: `setSleepTimer(seconds)` /
-`getSleepTimerRemaining()` / `cancelSleepTimer()`, running on a native
-`Handler` / `DispatchQueue` timer. When it fires, playback is paused **natively
-first** — the same path a notification pause takes — and only then is
-`onSleepTimer` called on your handler. Verified on-device with the Activity
-destroyed.
+is a library feature rather than something you build, with both modes people
+actually set: `setSleepTimer(seconds)` for a countdown, and
+`setSleepTimerToTrackEnd()` for "pause when *this* track finishes" — its
+deadline computed natively from the broadcasts you already send and re-armed on
+every discontinuity, so a seek, a rate change or a late-arriving duration all
+move it, and on a live stream (no duration at all) it simply fires when the
+item changes. Both run on a native `Handler` / `DispatchQueue` timer. When one
+fires, playback is paused **natively first** — the same path a notification
+pause takes — and only then is `onSleepTimer` called on your handler.
+`getSleepTimer()` reports `{ mode, remainingSeconds? }` — an armed end-of-track
+timer may legitimately have no number yet, which the plain
+`getSleepTimerRemaining()` cannot distinguish from "not armed" —
+and `cancelSleepTimer()` completes the surface. The countdown path is verified
+on-device with the Activity destroyed.
 
 ### Coming back from the dead (Android)
 
@@ -612,9 +685,11 @@ development build. [Plugin reference](packages/media-session/README.md#expo-conf
   (Android is device-verified, HLS included.)
 - **Force-quitting on iOS kills playback**, and nothing may restart the app for
   audio afterwards — true of every iOS app, and the reason `playbackResumption`
-  is Android-only. Relatedly, an iOS sleep timer armed over silence may never fire
-  (iOS suspends a backgrounded process once audio stops); armed during playback —
-  the case that matters — it does.
+  is Android-only. Relatedly, an iOS sleep timer armed over silence may never
+  fire (iOS suspends a backgrounded process once audio stops, and a suspended
+  process runs no timers — either mode's); armed while audio plays — the case
+  that matters — it fires, because playing audio is exactly what keeps the
+  process out of suspension.
 - **No casting, deferred with a reason.** media3's `CastPlayer` replaces our
   engine with Google's, and there is no AirPlay path out of mpv at all — so a
   casting feature here would be Android-shaped and would hand playback to a
@@ -677,8 +752,9 @@ cd apps/example/android && ./gradlew :app:assembleDebug   # the example app
 ```
 
 [`apps/example`](apps/example) is the reference integration and the on-device
-test bed: a queue of live streams and files, focus wiring, EQ presets, the native
-sleep timer, and session persistence across process death. It carries one
+test bed: a queue of live streams and files, focus wiring, EQ presets, pitch
+and playback-mode controls, chapters, ±15 s jumps, the native sleep timer in
+both modes, and session persistence across process death. It carries one
 dependency the library does not (`react-native-mmkv`, purely as the persistence
 storage) — exactly the point of the injected-storage contract.
 
@@ -712,6 +788,8 @@ Next in the queue, owner-approved:
 5. Video as an additive plugin package — `VideoView`, its own binaries, zero
    core changes.
 
-Investigations rather than promises: pitch control down an LGPL filter path
-(rubberband is GPL and therefore banned) and output-device routing. Casting is
-deferred with the reason in [Limitations](#limitations).
+Investigations rather than promises: output-device routing. Pitch control used
+to sit on this line, pending an LGPL filter path (rubberband is GPL and
+therefore banned) — it shipped instead with no filter at all, as
+`setPitch(ratio)` over mpv 0.41's first-class `--pitch`. Casting is deferred
+with the reason in [Limitations](#limitations).
