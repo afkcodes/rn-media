@@ -264,6 +264,26 @@ alone 1 856 352 → 2 675 912 (+44 %) because libplacebo now lives inside it. Th
 is a real regression against §1's "~3 MB/ABI" framing, accepted deliberately as
 the price of currency, and it is the number to attack next.
 
+**…and the number was attacked (THE SIZE RELEASE, 2026-08-12,
+`v1.1.9-rnmedia.8`/`v0.7.2-rnmedia.7`).** Android `arm64-v8a`
+9 233 464 → **7 338 952 B** stripped (−20.5 %; all four ABIs −19.9…−21.8 %; jar
+4.47 → 3.63 MB — the 9.23 MB start point being 8.19 MB plus the parity
+release's vendored libiconv, whose ~950 KB of charset tables were ruled the
+feature, not the fat). iOS `Mpv.framework` device slice 2 676 512 →
+**1 756 424 B** (−34.4 %). Mechanism: canonical dead-subsystem strip
+(rn-media-engine `patches/011-strip-mpv-dead`, audio variant only — the GPU
+render path was proven already unreachable, `HAVE_GL=0` empties its context
+table), dead-flag drops, and `-ffunction-sections`/`--gc-sections` + `-Os` on
+mpv's own tree (every hot DSP loop is FFmpeg, untouched — CPU measured at
+parity). Zero feature loss enforced by a 62-assertion probe on the shipped
+artifacts, a 50-assertion device harness A/B, and a 16 KB-page loader proof
+with a negative control. Declined on purpose: unwind-table stripping (−437 KB
+more; field crash diagnosis outranks bytes pre-1.0) and LTO (measured +57 KB
+BIGGER). ld64 `-dead_strip` on darwin is deferred, size-only. Shipped filter
+count note: the artifacts carry **17** audio filters — the 16 this fork added
+plus the upstream-inherited `equalizer`; prose that says "16" is counting the
+additions.
+
 **The parity release, 2026-08-12** — Android `v1.1.9-rnmedia.7` (`4200e83`) and
 iOS `v0.7.2-rnmedia.6` (`96334d4`), cut in lockstep because the iconv work spans
 both forks. Same engine as rnmedia.5/.4 (mpv 0.41.0, FFmpeg 8.1.2, libplacebo

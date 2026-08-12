@@ -345,6 +345,59 @@ Typed DSP/EQ API (subset of mpv_audio_kit's 87 filters), FFT/PCM visualizer stre
 mpv hooks/source resolvers, Android Auto + CarPlay browse, casting story (out of
 scope for mpv itself — document), persistence decorator.
 
+## 8.1 ROADMAP AS OF 2026-08-12 (the living queue; see the session task board for detail)
+
+Everything in phases 0–3 and most of phase 5 has SHIPPED (see §7.9 and
+ARCHITECTURE): gapless + measured prefetch, dynamic source resolution at
+prefetch time (our own mpv hook patch, both platforms), typed EQ/filters + 22
+presets, cross-platform PCM/FFT visualizer with a screen-state-gated hook,
+queue insertion (`insert-next`), `prefetchStarted`, persistence + playback
+resumption, sleep timer, Expo plugin, the engine workshop
+(afkcodes/rn-media-engine: canonical patches, generated fork copies,
+verify-artifacts), THE PARITY RELEASE (one identical engine config both
+platforms, 13→0 tracked divergences), THE SIZE RELEASE (−20.5% Android /
+−34.4% iOS Mpv slice, zero feature loss proven), and a full performance pass
+(3.8% CPU screen-off playback; boundary sync-reads 47→5; the AppState-flap
+visualizer fire found and fixed). Crossfade was built, listened to, and
+SCRAPPED by owner decision (branch feat/crossfade parked with salvage notes;
+loudness-aware fade points recorded as the only worthwhile revisit).
+
+**Feature queue (owner-approved 2026-08-12, work resumes tomorrow):**
+1. **React Native 0.87 bump** — currency window closes ~2026-08-25. Contained:
+   notes → bump → codegen idempotency → suites → device smoke.
+2. **Android Auto** (flagship next feature) + CarPlay-symmetric API design.
+   Browse tree over the existing media3 MediaLibraryService
+   (onGetChildren/onGetItem fan-in to a JS handler, mirroring the command
+   fan-in); validate on Google's Desktop Head Unit (runs on Linux). CarPlay
+   half implemented when Apple hardware exists (resumption precedent).
+3. **`@rn-media/downloads`** — offline playback package. Design key: it ships
+   as a source resolver (local file when downloaded, CDN otherwise) — zero
+   player changes. Scope: WorkManager/URLSession backends, storage/eviction,
+   progress events, playlist-level downloads, integrity, encryption decision.
+4. **Quick wins**: `setLoudnessNormalization()` (loudnorm is already
+   compiled in), LRC lyrics utilities + `useLyrics` (pure TS over position
+   projection), `usePrefetchStatus` hook.
+5. **Investigations**: pitch control via an LGPL filter path (rubberband is
+   GPL — banned; needs asetrate/atempo flags = a cheap workshop flags
+   release; ship only if quality is honest), and output-device routing
+   (Android AudioDeviceInfo/iOS route picker). Casting is DEFERRED WITH
+   REASON: media3 CastPlayer abandons our engine and AirPlay-from-mpv does
+   not exist — fails the parity gate; revisit only if a documented
+   platform-shaped feature becomes acceptable.
+
+**Standing maintenance queue:** darwin `-dead_strip` size stage via CI
+(deferred from the size release, size-only); mbedTLS section-flags (~1.1 MB
+unexplored); 16 KB pages on real hardware (emulated proof + negative control
+done); mpv 0.42 rebase worklist pre-written in rn-media-engine issue #1
+(remove-libass rejects on master, pcm-tap global.h anchor gone, name
+amf/libcurl/subrandr); example-app screen-ON visualizer render cost (~80% —
+UI-layer refactor candidate, not engine); media-session shipped
+discontinuity filter + example 2 Hz sleep-timer poll (minor perf leftovers).
+
+**The gate that unlocks shipping:** iOS device testing → naming decision →
+npm publish (owner-gated, in that order; facts on record: bare `rn-media`
+squatted, `react-native-mpv` free, `@afkcodes` guaranteed).
+
 ## 8.5 Music-app feature coverage (added 2026-08-09, "Spotify-class" audit)
 
 Covered in v1: gapless playlist/queue, metadata→system UI, custom actions+icons
