@@ -240,7 +240,29 @@ ext.libmpv = [
     //   fails that repo's CI if this fork drifts, and `workshop
     //   verify-artifacts` is the cross-platform gate that reads the released
     //   binaries rather than the build logs.
-    release   : 'v1.1.9-rnmedia.7',
+    // …rnmedia.8 — THE SIZE RELEASE. Engine unchanged (mpv 0.41.0, FFmpeg
+    //   8.1.2, mbedTLS 3.6.7); the binary is 20.5% smaller: arm64 libmpv.so
+    //   9,233,464 → 7,338,952 stripped (jar 4.47 → 3.63 MB), all four ABIs
+    //   −19.9…−21.8%. Three stages, canonical in rn-media-engine
+    //   (patches/011-strip-mpv-dead, audio variant ONLY): dead-subsystem strip
+    //   (the GPU render path was PROVABLY already unreachable — HAVE_GL=0
+    //   empties its context table), overlay-filter + dead-hwaccels flag drops
+    //   (parity: darwin dropped overlay in the same lockstep release), and
+    //   function/data-sections + --gc-sections + -Os on mpv's own tree only
+    //   (every hot DSP loop is FFmpeg, untouched, CPU measured at parity).
+    //   Zero feature loss, proven not argued: a 62-assertion probe on the
+    //   SHIPPED jars (exports 55/0-leak, all five markers, 17 filters, HLS,
+    //   16 KB alignment, iconv alias tables, static zlib), a 50-assertion
+    //   on-device engine harness (Poco F4) A/B'd against rnmedia.7 — identical
+    //   except screenshot* returning 0 instead of -12, both dead under vid=no
+    //   — and the same 50 on an emulated 16 KB-page system WITH the negative
+    //   control (same objects minus -z,max-page-size=16384 → dlopen refused:
+    //   the flag is load-bearing and observed, not asserted). Deliberately NOT
+    //   taken: -fno-unwind-tables (−437 KB more — field crash diagnosis is
+    //   worth more pre-1.0) and LTO (measured BIGGER, +57 KB). DT_NEEDED
+    //   shrank 4 → 2 (libc, libm). Promoted from beta 2026-08-12 after owner
+    //   on-device testing.
+    release   : 'v1.1.9-rnmedia.8',
     // Asset flavour. LGPL only — do NOT switch to 'full'/'encoders-gpl'.
     flavor    : 'default',
     // mpv version inside that release (buildscripts/include/depinfo.sh → v_mpv).
@@ -306,10 +328,10 @@ ext.libmpv = [
     libiconvVersion: '1.19',
     // SHA-256 of `<flavor>-<abi>.jar`.
     sha256    : [
-        'arm64-v8a'  : '07beb7ba49d1b3f872eadf2c9a5a665e17ea55c5ac2c5ee10aaa13fdd927b59f',
-        'armeabi-v7a': '1b144ab0041aabae7be58245530f3411f8e3c8d9210ae03cb89e091c705045ef',
-        'x86'        : 'f8033e18a50dffc1a21347bbbc5b7e9bd8140e1443d9b098069c95391424a4bf',
-        'x86_64'     : '0d27b5ecce296f1c86e2095330163004d34a2e1f3679b8f9964b0e036be6c45b',
+        'arm64-v8a'  : '364bd7fb1646e3707254b54faeb0439e5da40753f1b0c3eb05181fc1e99443df',
+        'armeabi-v7a': '3cd8cdc81aeef0e8aaff52ce0aee0618ab7c6a7bbd95f76b502035ba2afb609f',
+        'x86'        : '5dc413a1adcb04db3ea55cb731b24b8b59f39de2a2a2345b9b4aacb2ef4e226f',
+        'x86_64'     : 'ee12a9d7dc16e844b164fda440d92e53a42eb60ca49f86fcb559876c1c0b716c',
     ],
 ]
 
