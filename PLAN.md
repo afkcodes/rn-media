@@ -495,3 +495,19 @@ every RN player). AirPlay audio works via iOS system routing.
 3. **Expo support level** — config plugin only (recommended), or also an Expo Modules wrapper?
 4. **Queue ownership** — JS-owned queue with handler callbacks (audio_service model, maximum flexibility, needs JS alive) vs optional native queue fallback for post-kill resilience. **Settled:** JS-owned, and the post-kill case no longer argues against it — ARCHITECTURE §20's native snapshot mirror gives the service a readable queue with no JS alive, without moving queue *ownership* out of JavaScript.
 5. **Windows/macOS/TV** — libmpv supports them all; out of scope for v1, keep the C++ core portable.
+
+## 8.2 API GAP AUDIT (2026-08-13 — parked by owner, "we look into this later")
+
+A full four-input audit (our surface, competitor API references, a music-app
+requirements sweep, the mpv 0.41 manual) produced **50 ranked gaps** — the
+complete table with per-gap verdicts and citations lives at
+[`docs/audits/api-gap-audit-2026-08-13.md`](docs/audits/api-gap-audit-2026-08-13.md),
+and the actionable triage is task #41 on the session board. The eight
+dogfooding findings + retry-before-skip already shipped (d252e5c). Highest-value
+parked items: typed per-source HTTP headers (the authenticated-server
+audience), chapters (audiobooks; no RN competitor has it), setPitch (free —
+mpv 0.41 has first-class --pitch; the old engine-flags premise was stale),
+media-session jump-interval bug + repeat/shuffle capabilities, and the
+table-stakes bundle (stop/seekBy/hasNext/queueEnded/buffering%). Two need a
+small engine-flags release: balance/pan and skip-silence. Landscape note for
+the next README pass: RNTP forked — V4 frozen, V5 commercial.
