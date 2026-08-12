@@ -1,5 +1,5 @@
 import type { PlayerError } from './errors'
-import { toPlayerError } from './errors'
+import { isNetworkUri, toPlayerError } from './errors'
 import type {
   MpvClient,
   SourceResolutionRequest,
@@ -336,6 +336,11 @@ export class SourceResolverController {
           message: `Could not resolve \`${uri}\`: ${raw}`,
           raw,
           uri,
+          // The one `load-failed` with a real URI to judge by: a signing
+          // endpoint or transcode API that failed over the network is worth
+          // asking again, a local path that could not be turned into one is
+          // not. See `Retryable` in `errors.ts`.
+          retryable: isNetworkUri(uri),
         })
         return undefined
       } finally {

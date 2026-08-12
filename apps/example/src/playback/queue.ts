@@ -1,29 +1,48 @@
 /**
- * The app's mirror of mpv's playlist, and the four operations that change it.
+ * The app's view of mpv's queue, and the four operations that change it.
  *
- * ## Why a mirror exists at all
+ * ## Why the app keeps a list at all
  * `PlayerState.playlist` is a **cursor** — index and count — not the contents.
- * That is a deliberate library decision (mirroring mpv's playlist array across
- * the bridge would be a second source of truth that can go stale), and it costs
- * nothing right up until the queue becomes editable. Then an index no longer
- * identifies a `TRACKS` entry, so the app has to keep its own model.
+ * That is deliberate: mirroring mpv's playlist array across the bridge on every
+ * edit would put a variable-size payload on the hot path and make the snapshot a
+ * second copy of state mpv already owns. So the *contents* are a pull, and the
+ * app joins them to its own `TRACKS` metadata here.
  *
- * ## Why it is rebuilt from mpv rather than updated locally
- * `playlist.shuffle()` permutes mpv's array and reports **nothing** about the
- * permutation, so there is no local edit that could reproduce it. Reading
- * `playlist/N/filename` back is the only honest answer, and once that path
- * exists it is also the right one for inserts and clears — one code path,
- * always agreeing with the engine.
+ * ## What this file used to be
+ * A hand-rolled walk: `playlist-count`, then `playlist/N/filename` for every
+ * `N`. That is `N + 1` blocking round-trips into mpv's core, and — worse — it is
+ * not *coherent*: a `playlist-move` landing halfway through the walk returns two
+ * halves of two different orders. `player.playlist.entries()` replaced it with
+ * **one** `mpv_get_property("playlist", MPV_FORMAT_NODE)`, which mpv builds under
+ * its own lock, so the answer is one generation of the queue whatever else is
+ * happening. Same information, constant cost, and no way to read a torn list.
+ *
+ * ## Identity, not position
+ * Rows are joined to `TRACKS` by **URI**, and carry mpv's `entryId` — "unique
+ * for the entire life time of the current mpv core instance", and stable across
+ * inserts, removes, moves and shuffles. An `index → metadata` map would be
+ * silently one row off from the first "play next" onwards: the queue stays
+ * correct and the labels do not, which shows up later as the wrong artwork on
+ * the wrong song.
  */
-import type { Player } from '@rn-media/player'
-import { MpvProperty, playlistFilenameProperty } from '@rn-media/player'
+import type { Player, PlaylistEntry } from '@rn-media/player'
 import { TRACKS, type Track } from '../data/tracks'
+
+/** One queue row: what mpv holds, joined to what this app knows about it. */
+export interface QueueRow {
+  /** mpv's entry id — the identity that survives every queue edit. */
+  readonly entryId: number
+  /** Whether `playlist-current-pos` points at this entry. */
+  readonly current: boolean
+  /** The app's metadata for it, or a placeholder for something it did not queue. */
+  readonly track: Track
+}
 
 export interface QueueMirrorHooks {
   /** The player, or `undefined` before it exists. */
   readonly player: () => Player | undefined
-  /** The mirror changed — re-broadcast channel 3 and re-render. */
-  readonly onChange: (tracks: readonly Track[]) => void
+  /** The queue changed — re-broadcast channel 3 and re-render. */
+  readonly onChange: (rows: readonly QueueRow[]) => void
   /** A queue command was accepted; used to clear a stale error banner. */
   readonly onEdited: () => void
   /** A queue command was rejected. Typed, surfaced, never swallowed. */
@@ -32,51 +51,44 @@ export interface QueueMirrorHooks {
 
 export class QueueMirror {
   readonly #hooks: QueueMirrorHooks
-  #tracks: readonly Track[] = TRACKS
-  #lastCount = -1
+  #rows: readonly QueueRow[] = TRACKS.map((track, index) => ({
+    entryId: -1 - index,
+    current: index === 0,
+    track,
+  }))
 
   constructor(hooks: QueueMirrorHooks) {
     this.#hooks = hooks
   }
 
+  get rows(): readonly QueueRow[] {
+    return this.#rows
+  }
+
   get tracks(): readonly Track[] {
-    return this.#tracks
+    return this.#rows.map((row) => row.track)
   }
 
   at(index: number): Track | undefined {
-    return this.#tracks[index]
+    return this.#rows[index]?.track
   }
 
   /**
-   * Re-mirror when mpv's playlist length has moved without this app asking — an
-   * insert that landed late, a `playlist-clear` from a remote surface.
+   * Re-read the queue from mpv.
    *
-   * `count > 0` because the first snapshots arrive before `loadPlaylist` has
-   * appended anything, and an empty mirror there would blank the queue card.
+   * Called from the player's `queueChanged` event, which is what says "the
+   * contents moved" — `'resized'` for an add/remove/clear (mpv's observed
+   * `playlist-count`), `'reordered'` for a move/shuffle/unshuffle (which change
+   * no observable property at all, so the library emits it from the methods).
+   * Not on a timer, and not per render.
    */
-  syncIfChanged(count: number): void {
-    if (count === this.#lastCount || count <= 0) return
-    this.#lastCount = count
-    this.sync()
-  }
-
-  /** Rebuild from `playlist/N/filename`, which is the authority. */
   sync(): void {
     const player = this.#hooks.player()
     if (player === undefined) return
     try {
-      const count = player.getPropertyNumber(MpvProperty.playlistCount) ?? 0
-      if (count <= 0) return
-      const next: Track[] = []
-      for (let index = 0; index < count; index += 1) {
-        const uri = player.getPropertyString(playlistFilenameProperty(index))
-        next.push(matchTrack(uri) ?? unknownTrack(uri, index))
-      }
-      this.#lastCount = count
-      this.#tracks = next
-      this.#hooks.onChange(next)
+      this.#adopt(player.playlist.entries())
     } catch (cause) {
-      console.warn('[example] could not mirror the playlist:', cause)
+      console.warn('[example] could not read the playlist:', cause)
     }
   }
 
@@ -106,9 +118,15 @@ export class QueueMirror {
    * mpv keeps the *entry* current, not the index, so the music does not stop —
    * but `playlist-pos` almost certainly changes and arrives as a `trackChanged`
    * for a track that did not change. Treat that event as "the cursor moved".
+   *
+   * Note there is no follow-up read here: `shuffle()` **returns the resulting
+   * order**, because mpv's `playlist-shuffle` reports nothing about the
+   * permutation it performed and an app's only alternative was to guess.
    */
   async shuffle(): Promise<void> {
-    await this.#run((player) => player.playlist.shuffle())
+    await this.#run(async (player) => {
+      this.#adopt(await player.playlist.shuffle())
+    })
   }
 
   /**
@@ -120,7 +138,9 @@ export class QueueMirror {
    * `loadPlaylist`.
    */
   async unshuffle(): Promise<void> {
-    await this.#run((player) => player.playlist.unshuffle())
+    await this.#run(async (player) => {
+      this.#adopt(await player.playlist.unshuffle())
+    })
   }
 
   /** Removes every entry *except* the one playing. */
@@ -128,11 +148,28 @@ export class QueueMirror {
     await this.#run((player) => player.playlist.clear())
   }
 
+  /** Join mpv's entries to `TRACKS` and publish, skipping an empty answer. */
+  #adopt(entries: readonly PlaylistEntry[]): void {
+    // `[]` is what an idle core answers, and blanking the queue card because
+    // mpv has not been given a playlist yet would be a worse lie than being one
+    // event stale.
+    if (entries.length === 0) return
+    this.#rows = entries.map((entry, index) => ({
+      entryId: entry.entryId,
+      current: entry.current,
+      track: matchTrack(entry.uri) ?? unknownTrack(entry.uri, index),
+    }))
+    this.#hooks.onChange(this.#rows)
+  }
+
   async #run(action: (player: Player) => Promise<void>): Promise<void> {
     const player = this.#hooks.player()
     if (player === undefined) return
     try {
       await action(player)
+      // `shuffle`/`unshuffle` already adopted their own answer; for the rest
+      // this is the one read that follows the edit. `queueChanged` will also
+      // fire, and a second read of an unchanged queue is idempotent.
       this.sync()
       this.#hooks.onEdited()
     } catch (cause) {
@@ -151,8 +188,7 @@ export class QueueMirror {
  * app is absolute, so the exact match is expected to win — but a prefixed
  * filename should degrade to the right row rather than to "unknown".
  */
-function matchTrack(uri: string | undefined): Track | undefined {
-  if (uri === undefined) return undefined
+function matchTrack(uri: string): Track | undefined {
   return (
     TRACKS.find((track) => track.uri === uri) ??
     TRACKS.find((track) => uri.endsWith(track.uri))
@@ -160,11 +196,11 @@ function matchTrack(uri: string | undefined): Track | undefined {
 }
 
 /** A queue row for something this app did not put there. */
-function unknownTrack(uri: string | undefined, index: number): Track {
+function unknownTrack(uri: string, index: number): Track {
   return {
     id: `unknown-${index}`,
-    title: uri ?? 'Unknown entry',
+    title: uri === '' ? 'Unknown entry' : uri,
     artist: 'Not in TRACKS',
-    uri: uri ?? '',
+    uri,
   }
 }

@@ -1,4 +1,5 @@
 import type { HybridObject, UInt64 } from 'react-native-nitro-modules'
+import { MpvProperty } from '../properties'
 import type {
   MpvClient,
   MpvEndFileReason,
@@ -6,6 +7,7 @@ import type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  PlaylistEntry,
   PrefetchStartedEvent,
   SourceResolutionRequest,
   VisualizerCapture,
@@ -46,6 +48,19 @@ export class FakeMpvClient implements MpvClient {
 
   /** How many `getPropertyMap` reads were issued, in order. */
   readonly mapReads: string[] = []
+
+  /**
+   * What `getPlaylistEntries` should return — mpv's `playlist` node, modelled.
+   *
+   * Deliberately independent of {@link readable}: a node read is a different
+   * mpv format, not a different rendering of `playlist-count`, and keeping them
+   * separate is what lets a test set up a queue whose count and contents
+   * disagree (which is exactly what a stale snapshot looks like).
+   */
+  playlist: PlaylistEntry[] = []
+
+  /** How many `getPlaylistEntries()` calls were issued — the read budget. */
+  playlistReads = 0
 
   /**
    * Property names whose `getProperty*` should throw, keyed to the message.
@@ -180,6 +195,15 @@ export class FakeMpvClient implements MpvClient {
     const failure = this.readErrors.get(name)
     if (failure !== undefined) throw new Error(failure)
     return this.readableMaps.get(name)
+  }
+
+  getPlaylistEntries(): PlaylistEntry[] {
+    this.playlistReads += 1
+    const failure = this.readErrors.get(MpvProperty.playlist)
+    if (failure !== undefined) throw new Error(failure)
+    // A fresh array per call, exactly as the Nitro boundary produces one, so a
+    // test cannot accidentally assert on shared identity.
+    return this.playlist.map((entry) => ({ ...entry }))
   }
 
   setPropertyString(name: string, value: string): void {

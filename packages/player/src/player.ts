@@ -27,6 +27,7 @@ import type {
   TrackChangeReads,
 } from './state'
 import {
+  clearPlayerError,
   createInitialState,
   isPositionDiscontinuity,
   projectPosition,
@@ -38,6 +39,7 @@ import type {
   MpvEvent,
   MpvFormat,
   MpvLogLevel,
+  PlaylistEntry,
   PrefetchStartedEvent,
 } from './specs/mpv-client.nitro'
 
@@ -172,6 +174,159 @@ export type Metadata = Readonly<Record<string, string>>
  */
 export type GaplessAudioMode = 'no' | 'yes' | 'weak'
 
+/**
+ * FFmpeg's own HTTP reconnection, wired through mpv's `stream-lavf-o`.
+ *
+ * @remarks
+ * **This is the primary recovery layer, and it is entirely native.** It runs
+ * inside libavformat's read loop, on mpv's demuxer thread, with no JavaScript
+ * and no timers anywhere near it — which is the only kind of retry that works
+ * with the screen off (ARCHITECTURE, "Platform truths": JS timers freeze in the
+ * background). {@link PlayerOptions.retry} is the *second* layer and covers the
+ * failures this one cannot see, namely an entry that never opened at all.
+ *
+ * ### What is set, and why each one
+ * Verified against the shipped binary (`strings` on
+ * `libmpv.so`, `v1.1.9-rnmedia.7`, FFmpeg `n8.1.2` / `Lavf62.12.102`) and
+ * against that exact FFmpeg tree's `libavformat/http.c`:
+ *
+ * | AVOption | value | what it buys |
+ * | -------- | ----- | ------------ |
+ * | `reconnect` | `1` | reconnects a **premature** end of a sized response — `http.c:1871`, guarded by `is_premature = filesize > 0 && off < filesize`. This is the truncated-download case |
+ * | `reconnect_on_network_error` | `1` | retries the **connect** on any non-HTTP-status failure — DNS, refused TCP, TLS — `http.c:437` via `http_should_reconnect()`'s `default:` arm. This is the "the radio came back" case |
+ * | `reconnect_streamed` | `1` | lifts `http.c:1868`'s hard `break` for non-seekable streams, which is what makes any mid-read retry legal on a live stream at all |
+ * | `reconnect_delay_max` | {@link maxDelaySeconds} | the give-up bound. FFmpeg's backoff is `delay = 1 + 2 * delay` from `0`, so `5` means attempts at 0 s, 1 s and 3 s and then a stop (the next delay, 7, exceeds it) — about four seconds of trying |
+ *
+ * FFmpeg's own defaults for all four are off / `120 s`
+ * (`http.c:195-201`), which is why this is opt-*out* rather than opt-in.
+ *
+ * ### What it does **not** cover, stated plainly
+ * - **`reconnect_at_eof` is deliberately NOT set.** It is the option that would
+ *   make a live stream reconnect when the server simply closes the connection
+ *   — and it is unsafe as a global default, because `http.c:1871` does not
+ *   guard it on `is_streamed`. On an ordinary sized file, reaching the natural
+ *   end of the response *is* `AVERROR_EOF`, so enabling it turns every clean
+ *   track end into a reconnect storm that runs for {@link maxDelaySeconds} and
+ *   then returns `AVERROR(EIO)` — i.e. it would convert "the song finished"
+ *   into "the song failed", destroying the very `trackEnded`-vs-`error`
+ *   distinction this library is built around. An app whose queue is *only* live
+ *   streams can still opt in, by passing the whole list raw (see below).
+ * - **HTTP status codes.** A `404` or a `503` is not retried; FFmpeg gates that
+ *   on `reconnect_on_http_error`, which takes a status list and is a policy
+ *   decision an app must make for itself. Pass it raw if you want it.
+ * - **A source that never opened.** If the very first connect exhausts its
+ *   attempts, mpv fails the load and the entry ends with a typed `error`. That
+ *   is {@link PlayerOptions.retry}'s job, not this one's.
+ * - **Non-HTTP protocols.** These are `libavformat/http.c` options. `file://`,
+ *   `rtsp://`, `srt://` and friends ignore them (mpv's manual: "Unknown or
+ *   misspelled options are silently ignored").
+ *
+ * ### Cost
+ * A hard connect failure now takes up to ~`maxDelaySeconds` before mpv reports
+ * it, instead of failing at once. That is the trade: bounded, and paid only on
+ * a failure path.
+ *
+ * ### Overriding
+ * A raw `mpvOptions['stream-lavf-o']` **replaces this whole list** — mpv's
+ * key/value list options are set, not merged. So opting into one extra key
+ * means writing all of them:
+ *
+ * ```ts
+ * await Player.create({
+ *   mpvOptions: {
+ *     'stream-lavf-o':
+ *       'reconnect=1,reconnect_on_network_error=1,reconnect_streamed=1,' +
+ *       'reconnect_delay_max=5,reconnect_at_eof=1', // live-only app
+ *   },
+ * })
+ * ```
+ */
+export interface NetworkReconnectOptions {
+  /**
+   * Turn the whole thing off, leaving FFmpeg's own defaults (every reconnect
+   * option disabled).
+   *
+   * @defaultValue `true`
+   */
+  readonly enabled?: boolean
+  /**
+   * FFmpeg's `reconnect_delay_max`, in seconds: retrying stops once the *next*
+   * backoff step would exceed it.
+   *
+   * Must be an integer in `0 … 4294` — FFmpeg's own domain
+   * (`AV_OPT_TYPE_INT`, `M_RANGE(0, UINT_MAX/1000/1000)`, `http.c:200`).
+   * Anything else throws an `invalid-state` {@link PlayerError} rather than
+   * being clamped.
+   *
+   * @defaultValue {@link DEFAULT_RECONNECT_DELAY_MAX_SECONDS}
+   */
+  readonly maxDelaySeconds?: number
+}
+
+/**
+ * Give a failed entry another go before the queue moves past it.
+ *
+ * @remarks
+ * mpv's own behaviour on a hard failure is to advance: the entry ends with
+ * `MPV_END_FILE_REASON_ERROR` and the next one starts. That is right for a file
+ * that will never play and wrong for a stream that was unlucky, and nothing in
+ * mpv distinguishes the two. This option is where that distinction is made, and
+ * it is made from {@link PlayerError.retryable} — the same flag a UI reads to
+ * decide whether to draw a Retry button.
+ *
+ * ### Exactly what happens
+ * 1. An entry ends with an `error` whose typed classification is `retryable`.
+ * 2. If that entry has attempts left, the player jumps **back** to it
+ *    (`playlist-play-index`), preserving whether it was playing, and emits
+ *    {@link PlayerEventMap.retrying}. **No `error` event is emitted for that
+ *    attempt** — nothing has failed for good yet.
+ * 3. On success the counter resets. On another failure step 1 runs again.
+ * 4. When the attempts run out, the advance mpv already performed is left
+ *    alone and the `error` event fires with the attempt count in its second
+ *    argument.
+ *
+ * ### There is deliberately no delay between attempts
+ * Not "we did not get to it" — a delay is the one thing this layer must not
+ * have. The only way to wait in JavaScript is a timer, and JS timers freeze
+ * with the screen off (ARCHITECTURE, "Platform truths"), so a backoff written
+ * here would silently become "retry when the user next unlocks the phone" —
+ * a bug that is invisible in every test that runs with the display on. Spaced,
+ * backed-off retrying is owned by the layer that can actually do it natively:
+ * {@link PlayerOptions.networkReconnect}. This layer only answers the question
+ * that layer cannot see, "should the queue move on?", and it answers it
+ * immediately.
+ *
+ * The consequence to know: a re-attempt is issued a moment *after* mpv has
+ * already started the next entry, so a failure at a queue boundary can produce
+ * a brief blip of the following track before the failed one restarts.
+ *
+ * ### When the counter resets
+ * Attempts are tracked per **entry generation**, not per player. The count
+ * resets when:
+ * - the entry plays successfully (any `playbackRestart` reaching `ready`),
+ * - the failure is on a *different* playlist index than the one being retried,
+ * - the app moves the cursor itself — {@link PlaylistApi.jumpTo},
+ *   {@link PlaylistApi.next}, {@link PlaylistApi.previous}, {@link Player.load},
+ *   {@link Player.loadPlaylist},
+ * - the app edits the queue — {@link PlaylistApi.add}, `remove`, `move`,
+ *   `clear`, `shuffle`, `unshuffle`.
+ *
+ * The cursor moves are also the cancellation rule: a user who skips during a
+ * retry has said what they want, and the player stops arguing.
+ */
+export interface RetryOptions {
+  /**
+   * How many extra attempts one entry gets before the queue is allowed to move
+   * past it. `0` disables retrying entirely (mpv's own behaviour).
+   *
+   * Must be a non-negative integer; anything else throws an `invalid-state`
+   * {@link PlayerError}.
+   *
+   * @defaultValue {@link DEFAULT_RETRY_MAX_ATTEMPTS}
+   */
+  readonly maxAttempts?: number
+}
+
 /** Options for {@link Player.create}. */
 export interface PlayerOptions {
   /**
@@ -263,6 +418,19 @@ export interface PlayerOptions {
    * Raw `mpvOptions['replaygain*']` entries still win over this.
    */
   readonly replayGain?: ReplayGainOptions
+  /**
+   * FFmpeg's native HTTP reconnection, on by default. See
+   * {@link NetworkReconnectOptions} — including exactly what it covers, what it
+   * deliberately does not, and why one FFmpeg option is left off.
+   *
+   * A raw `mpvOptions['stream-lavf-o']` replaces it wholesale.
+   */
+  readonly networkReconnect?: NetworkReconnectOptions
+  /**
+   * Re-attempt a failed entry before letting the queue advance past it. See
+   * {@link RetryOptions}.
+   */
+  readonly retry?: RetryOptions
   /** Initial volume in `0..1`. */
   readonly volume?: number
   /** Initial mute state. */
@@ -406,6 +574,46 @@ export interface TrackChangedEvent {
   readonly previousIndex: number
 }
 
+/** Payload of the `retrying` event. */
+export interface RetryingEvent {
+  /** Playlist index of the entry being re-attempted. */
+  readonly index: number
+  /** Which attempt this is, `1`-based. */
+  readonly attempt: number
+  /** The budget it is counting against ({@link RetryOptions.maxAttempts}). */
+  readonly maxAttempts: number
+  /** The typed failure that triggered the re-attempt. */
+  readonly error: PlayerError
+}
+
+/** What this library knows about a {@link QueueChangedEvent}. */
+export type QueueChangeReason =
+  /** `playlist-count` moved: an add, a remove, a clear, a fresh `loadPlaylist`. */
+  | 'resized'
+  /** The order changed with the length intact: a `move`, `shuffle`, `unshuffle`. */
+  | 'reordered'
+
+/** Payload of the `queueChanged` event. */
+export interface QueueChangedEvent {
+  /** Number of entries after the change. */
+  readonly count: number
+  /** Which of the two things this library can honestly report happened. */
+  readonly reason: QueueChangeReason
+}
+
+/** Extra facts about an `error` event, beyond the typed error itself. */
+export interface PlayerErrorInfo {
+  /**
+   * How many automatic re-attempts were spent on this entry before giving up
+   * (see {@link PlayerOptions.retry}).
+   *
+   * `0` when nothing was retried — because retrying is off, because the error
+   * was not {@link PlayerError.retryable}, or because the failure did not come
+   * from a playlist entry at all.
+   */
+  readonly attempts: number
+}
+
 /**
  * Discrete events, as opposed to the whole-state subscription.
  *
@@ -416,8 +624,58 @@ export interface TrackChangedEvent {
 export interface PlayerEventMap {
   /** A playlist entry reached its natural end (mpv `end-file` reason `eof`). */
   trackEnded: (event: TrackEndedEvent) => void
-  /** Playback failed. Also reflected in `state.error` with `status: 'error'`. */
-  error: (error: PlayerError) => void
+  /**
+   * Playback failed, **finally**. Also reflected in `state.error` with
+   * `status: 'error'`.
+   *
+   * @param error - The typed failure.
+   * @param info - How many automatic re-attempts preceded it. A listener
+   * written as `(error) => …` stays valid; the second argument is additive.
+   *
+   * @remarks
+   * With {@link PlayerOptions.retry} enabled this fires only once the attempt
+   * budget is spent — an entry that failed and then played on the second try
+   * produces {@link PlayerEventMap.retrying} and no `error` at all. That is the
+   * point of the feature, and it is also the one thing to know before treating
+   * this event as "count of failures": it counts *give-ups*, not failures.
+   */
+  error: (error: PlayerError, info: PlayerErrorInfo) => void
+  /**
+   * A failed entry is being re-attempted rather than skipped.
+   *
+   * Fires once per attempt, immediately (there is no delay to wait out — see
+   * {@link RetryOptions} for why a JS-timer backoff would be a bug). Use it to
+   * show "reconnecting…" instead of an error banner.
+   */
+  retrying: (event: RetryingEvent) => void
+  /**
+   * The queue's contents changed. Read the new contents with
+   * {@link PlaylistApi.entries}.
+   *
+   * @remarks
+   * **What actually triggers it, honestly.** There is no native observation of
+   * mpv's `playlist` array (see {@link PlaylistApi.entries} for why), so this
+   * event is derived from the two things this library genuinely knows:
+   *
+   * - `reason: 'resized'` — `playlist-count`, which *is* observed, changed. It
+   *   arrives on the ordinary event batch, so it is as late as any other state
+   *   update and covers every add/remove/clear whatever issued it. Building a
+   *   queue with {@link Player.loadPlaylist} may produce more than one, since
+   *   the count climbs as entries are appended (the native batcher coalesces
+   *   property changes, so it is usually far fewer than one per entry).
+   * - `reason: 'reordered'` — this library issued a `move`, `shuffle` or
+   *   `unshuffle` and mpv accepted it. Emitted by those methods, because a
+   *   reorder changes no observable property at all: `playlist-count` is
+   *   identical and `playlist-pos` may or may not move. Nothing else can
+   *   report it, and pretending otherwise would mean observing the whole
+   *   playlist node.
+   *
+   * The gap that leaves: a reorder issued through the raw
+   * {@link Player.command} escape hatch is invisible here. That is the price of
+   * not streaming the queue across the bridge, and it is written down rather
+   * than papered over.
+   */
+  queueChanged: (event: QueueChangedEvent) => void
   /** The current playlist entry changed. */
   trackChanged: (event: TrackChangedEvent) => void
   /**
@@ -426,8 +684,39 @@ export interface PlayerEventMap {
    * `icy-title` tag and folds into `media-title`).
    *
    * Fires at most once per native event batch, and **only while at least one
-   * listener is registered**: building the map costs one property read per tag,
-   * so a player nobody is asking pays nothing.
+   * listener is registered**: building the map costs one property read, so a
+   * player nobody is asking pays nothing.
+   *
+   * @remarks
+   * **This is the tag-store route; {@link PlayerState.title} is the
+   * now-playing route.** The split is deliberate and it is not redundancy:
+   *
+   * - `state.title` is mpv's `media-title` — one coalesced string, carried in
+   *   every snapshot, so it reaches the media session, the lock screen and the
+   *   app's own UI through the ordinary state fan-out with no extra work and no
+   *   extra read. On a radio stream it *is* the currently-playing song, and it
+   *   updates on its own as `StreamTitle` changes.
+   * - This event plus {@link Player.getMetadataValue} is the full tag map, for
+   *   apps that need a *specific* key — `icy-name` for the station, `icy-br`
+   *   for the bitrate, `album`/`date`/`musicbrainz_*` for a library.
+   *
+   * The map could not simply be a field of {@link PlayerState}, because
+   * building it is a synchronous read into mpv's core and most apps never look
+   * at it; and the title could not simply be an event, because a media session
+   * re-broadcasts state rather than events, so a now-playing line delivered
+   * only as an event would never reach the notification. Hence two routes, each
+   * paying only for what it is used for.
+   *
+   * mpv invalidates `metadata` and `media-title` together on one
+   * `MP_EVENT_METADATA_UPDATE` (`player/command.c`), so the two are always
+   * describing the same instant — they are two views of one update, never two
+   * different truths.
+   *
+   * @example
+   * ```ts
+   * // The station, once per update; the song comes from state.title.
+   * player.on('metadataChanged', (tags) => setStation(tags['icy-name']))
+   * ```
    */
   metadataChanged: (metadata: Metadata) => void
   /**
@@ -473,7 +762,43 @@ export type PlayerEventName = keyof PlayerEventMap
 /** Unsubscribes a listener. Safe to call more than once. */
 export type Unsubscribe = () => void
 
-/** Options for {@link PlaylistApi.add}. */
+/**
+ * Options for {@link PlaylistApi.add}.
+ *
+ * @remarks
+ * **Before you use any of this: an insert renumbers the queue.** That sentence
+ * is obvious and its consequence is not, so it is written down here rather than
+ * left to be discovered.
+ *
+ * Apps almost always keep a side table mapping playlist index → their own track
+ * metadata (artwork, ids, analytics keys), because {@link PlayerState} carries
+ * a playlist *cursor* and not its contents. Every such map is invalidated the
+ * moment an entry is inserted anywhere but the end: `position: 'next'` and
+ * `position: <n>` push every later entry down by one, and after that index `k`
+ * describes the track that used to be at `k - 1`. Nothing throws, nothing warns
+ * — the queue is correct, the app's labels are one row off, and the symptom
+ * shows up later as the wrong artwork on the wrong song.
+ *
+ * `PlaylistApi.remove` and `PlaylistApi.move` have the identical property, and
+ * `PlaylistApi.shuffle` has it maximally.
+ *
+ * **The fix is to key on identity, not position.** Read
+ * {@link PlaylistApi.entries} and use `entryId` — mpv's own entry id, "unique
+ * for the entire life time of the current mpv core instance" (mpv 0.41.0
+ * `input.rst`), which survives inserts, removes, moves and shuffles — or the
+ * entry's `uri` if your sources are unique. Re-read after every
+ * {@link PlayerEventMap.queueChanged}; that is what the event is for.
+ *
+ * ```ts
+ * // Fragile: `myTracks[index]` after any insert.
+ * // Stable:
+ * const byId = new Map(myTracks.map((t) => [t.uri, t]))
+ * const rows = player.playlist.entries().map((e) => ({
+ *   ...e,
+ *   track: byId.get(e.uri),
+ * }))
+ * ```
+ */
 export interface PlaylistAddOptions {
   /**
    * Where the entry goes. Omitted, it is appended to the end.
@@ -535,6 +860,53 @@ export interface PlaylistAddOptions {
  * one ends).
  */
 export interface PlaylistApi {
+  /**
+   * The queue's actual contents — every entry's logical URI, mpv's own entry
+   * id, and which one is current.
+   *
+   * @returns The entries in playlist order. `[]` when nothing is queued.
+   *
+   * @remarks
+   * **One bounded synchronous native read, on demand.** It is a single
+   * `mpv_get_property("playlist", MPV_FORMAT_NODE)` — constant, whatever the
+   * queue length — and it is a *pull*, not a subscription, deliberately.
+   *
+   * The temptation is to observe the playlist and publish it in
+   * {@link PlayerState}. That would put a variable-size array on the bridge
+   * every time the queue is touched, and it would make the snapshot a second
+   * copy of state mpv already owns — the exact shape of the mistake this
+   * library avoids everywhere else (position is anchored and projected rather
+   * than streamed; `metadata` is pulled rather than pushed). Cheap reads on
+   * demand beat an expensive feed nobody asked for, and the read is cheap
+   * precisely because it is one node rather than an `N + 1` sub-property walk.
+   *
+   * It is also **coherent**, which the walk was not: mpv builds the node under
+   * its own lock, so the result is one generation of the queue. A walk of
+   * `playlist/0/filename … playlist/N/filename` can interleave with a
+   * `playlist-move` and return two halves of two different orders.
+   *
+   * Call it when something tells you the queue moved —
+   * {@link PlayerEventMap.queueChanged}, or the value returned to you by
+   * {@link shuffle}/{@link unshuffle} — not on a timer, and not per render.
+   *
+   * **Prefer `entryId` over the array index for identity.** Ids are "unique for
+   * the entire life time of the current mpv core instance" (mpv 0.41.0
+   * `input.rst`) and survive `move`/`remove`/`shuffle`; positions do not. See
+   * {@link PlaylistAddOptions.position} for what that costs an app that keys on
+   * index instead.
+   *
+   * @throws {@link PlayerErrorException} if the player has been destroyed.
+   *
+   * @example
+   * ```ts
+   * player.on('queueChanged', () => {
+   *   for (const entry of player.playlist.entries()) {
+   *     console.log(entry.current ? '▶' : ' ', entry.entryId, entry.uri)
+   *   }
+   * })
+   * ```
+   */
+  entries(): readonly PlaylistEntry[]
   /**
    * Add a source to the playlist — at the end, next, or at an exact index.
    *
@@ -635,8 +1007,18 @@ export interface PlaylistApi {
    *   re-read `state.playlist.index`.
    * - **Each shuffle overwrites the entries' recorded original order**, which is
    *   exactly why {@link unshuffle} can only undo the most recent one.
+   *
+   * @returns The queue **after** the shuffle, exactly as {@link entries} would
+   * report it — because a permutation nobody can see is not a feature. mpv's
+   * `playlist-shuffle` reports nothing about what it did, so before this
+   * returned anything an app's only options were to re-read the playlist itself
+   * or to guess; the read is one node round-trip and it happens here, once,
+   * where it is unmissable.
+   *
+   * Also emits {@link PlayerEventMap.queueChanged} with `reason: 'reordered'`,
+   * for listeners that are not the caller.
    */
-  shuffle(): Promise<void>
+  shuffle(): Promise<readonly PlaylistEntry[]>
   /**
    * Undo the most recent {@link shuffle} (mpv's `playlist-unshuffle`).
    *
@@ -654,8 +1036,18 @@ export interface PlaylistApi {
    *
    * Calling it when nothing was shuffled is harmless (mpv sorts an already
    * sorted list); it is not an error.
+   *
+   * Carries the same {@link shuffle} caveat about `trackChanged`: mpv keeps the
+   * *entry* current, so the music does not stop, but `playlist-pos` almost
+   * certainly moves and surfaces as a `trackChanged` for a track that did not
+   * change.
+   *
+   * @returns The queue after the restore, exactly as {@link entries} would
+   * report it — including when the undo did nothing, which is how a caller can
+   * tell. Also emits {@link PlayerEventMap.queueChanged} with
+   * `reason: 'reordered'`.
    */
-  unshuffle(): Promise<void>
+  unshuffle(): Promise<readonly PlaylistEntry[]>
 }
 
 const DEFAULT_LOG_LEVEL: PlayerLogLevel = 'warn'
@@ -697,6 +1089,44 @@ export const DEFAULT_USER_AGENT = 'rn-media (libmpv)'
  * Override per player with `mpvOptions: { 'cache-secs': '…' }`.
  */
 export const DEFAULT_CACHE_SECS = 30
+
+/**
+ * Default {@link NetworkReconnectOptions.maxDelaySeconds}.
+ *
+ * FFmpeg's own default is `120`, i.e. it would keep retrying for over two
+ * minutes (`http.c:200`, `{ .i64 = 120 }`). That is a sensible default for a
+ * download tool and a terrible one for a media session: the player would sit in
+ * a silent, uncancellable-looking limbo while the notification still said
+ * "playing".
+ *
+ * `5` is chosen against FFmpeg's actual backoff, which is `delay = 1 + 2 *
+ * delay` starting at `0` and stops once the *next* delay exceeds this bound —
+ * so it means attempts at 0 s, 1 s and 3 s, ~4 s of trying, three chances at a
+ * network blip. Long enough to ride out a cell handover, short enough that a
+ * genuinely dead source is reported while the user is still looking at the
+ * screen — and short enough that {@link PlayerOptions.retry}, which runs
+ * *after* this gives up, still gets to act promptly.
+ */
+export const DEFAULT_RECONNECT_DELAY_MAX_SECONDS = 5
+
+/**
+ * FFmpeg's own domain for `reconnect_delay_max` — `AV_OPT_TYPE_INT` with
+ * `max = UINT_MAX / 1000 / 1000` (`libavformat/http.c:200`, FFmpeg 8.1.2).
+ */
+const RECONNECT_DELAY_MAX_CEILING = 4294
+
+/**
+ * Default {@link RetryOptions.maxAttempts}.
+ *
+ * Two, because the failure this exists for — a stream that dropped, a CDN edge
+ * that blinked — is overwhelmingly fixed by the first re-attempt, and a second
+ * covers the case where the first landed on the same bad edge. Beyond that the
+ * evidence says the source is down, and since there is no delay between
+ * attempts (see {@link RetryOptions}) a larger budget would not wait for
+ * anything to recover — it would just burn through connects and make the queue
+ * appear stuck.
+ */
+export const DEFAULT_RETRY_MAX_ATTEMPTS = 2
 
 /**
  * Our TS level names → mpv's `mpv_request_log_messages` strings.
@@ -752,7 +1182,11 @@ const GAPLESS_AUDIO_MODES: readonly GaplessAudioMode[] = ['no', 'yes', 'weak']
  * bare `TypeError`.
  */
 function invalidArgument(message: string): PlayerErrorException {
-  return new PlayerErrorException({ code: 'invalid-state', message })
+  return new PlayerErrorException({
+    code: 'invalid-state',
+    message,
+    retryable: false,
+  })
 }
 
 /** mpv spells booleans `yes`/`no` in option strings. */
@@ -830,6 +1264,67 @@ function replayGainOptions(
 }
 
 /**
+ * Validate {@link NetworkReconnectOptions} against FFmpeg's own value domain.
+ *
+ * Done here rather than left to FFmpeg because mpv's `stream-lavf-o` swallows
+ * bad AVOptions in silence — "Unknown or misspelled options are silently
+ * ignored" (mpv 0.41.0 `options.rst`) — so an out-of-range value would not
+ * fail, it would simply not apply, and the reconnection an app thought it had
+ * configured would not exist.
+ */
+function assertNetworkReconnect(options: NetworkReconnectOptions): void {
+  const max = options.maxDelaySeconds
+  if (max === undefined) return
+  if (!Number.isInteger(max) || max < 0 || max > RECONNECT_DELAY_MAX_CEILING) {
+    throw invalidArgument(
+      `\`networkReconnect.maxDelaySeconds\` must be an integer between 0 and ${RECONNECT_DELAY_MAX_CEILING} ` +
+        `(FFmpeg's own range for \`reconnect_delay_max\`); got ${max}.`
+    )
+  }
+}
+
+/**
+ * The `stream-lavf-o` value implementing {@link NetworkReconnectOptions}.
+ *
+ * Emits nothing when disabled, which leaves FFmpeg's defaults (every reconnect
+ * option off) rather than writing them out — an absent key is also what lets a
+ * raw `mpvOptions['stream-lavf-o']` be the only writer.
+ *
+ * Booleans are spelled `1`/`0`: FFmpeg's `set_string_bool` accepts
+ * `true/y/yes/enable/enabled/on` and the negatives too (`libavutil/opt.c:568`),
+ * but the numeric form is the one that cannot be misread by any AVOption
+ * consumer. See {@link NetworkReconnectOptions} for what each key does and for
+ * the one option deliberately left out.
+ */
+function networkReconnectOptions(
+  options: NetworkReconnectOptions | undefined
+): Record<string, string> {
+  if (options?.enabled === false) return {}
+  const maxDelay =
+    options?.maxDelaySeconds ?? DEFAULT_RECONNECT_DELAY_MAX_SECONDS
+  return {
+    [MpvProperty.streamLavfO]: [
+      'reconnect=1',
+      'reconnect_on_network_error=1',
+      'reconnect_streamed=1',
+      `reconnect_delay_max=${maxDelay}`,
+    ].join(','),
+  }
+}
+
+/** Validate {@link RetryOptions} and resolve it to a plain attempt budget. */
+function resolveRetryOptions(options: RetryOptions | undefined): number {
+  const attempts = options?.maxAttempts
+  if (attempts === undefined) return DEFAULT_RETRY_MAX_ATTEMPTS
+  if (!Number.isInteger(attempts) || attempts < 0) {
+    throw invalidArgument(
+      `\`retry.maxAttempts\` must be a non-negative integer; got ${attempts}.`
+    )
+  }
+  return attempts
+}
+
+/**
  * Reject impossible {@link PlayerOptions} before an mpv core is even created.
  *
  * Validating up front means a typo costs no `mpv_create()`/`mpv_terminate`
@@ -864,6 +1359,11 @@ function assertPlayerOptions(options: PlayerOptions): void {
   assertNonNegative(options.resolverTimeoutMs, 'resolverTimeoutMs')
   assertNonNegative(options.resolverTtlMs, 'resolverTtlMs')
   if (options.replayGain !== undefined) assertReplayGain(options.replayGain)
+  if (options.networkReconnect !== undefined) {
+    assertNetworkReconnect(options.networkReconnect)
+  }
+  // Throws on a bad budget; the resolved value is recomputed in `create()`.
+  resolveRetryOptions(options.retry)
 }
 
 function assertNonNegative(value: number | undefined, option: string): void {
@@ -1090,12 +1590,28 @@ export class Player {
   #visualizer: VisualizerController | undefined
   #resolution: SourceResolverController | undefined
 
+  /**
+   * The attempt budget from {@link RetryOptions.maxAttempts}. `0` disables
+   * retrying, which is mpv's own behaviour.
+   */
+  #maxRetryAttempts = DEFAULT_RETRY_MAX_ATTEMPTS
+  /**
+   * The entry currently being re-attempted, and how many attempts it has cost.
+   *
+   * One record, not a map: mpv plays one entry at a time, so there is exactly
+   * one generation in flight. It is dropped — the "generation" resetting — by
+   * {@link #resetRetry}, which every cursor move and every queue edit calls.
+   */
+  #retry: { readonly index: number; readonly attempts: number } | undefined
+
   readonly #stateListeners = new Set<(state: PlayerState) => void>()
   readonly #eventListeners: {
     [K in PlayerEventName]: Set<PlayerEventMap[K]>
   } = {
     trackEnded: new Set(),
     error: new Set(),
+    retrying: new Set(),
+    queueChanged: new Set(),
     trackChanged: new Set(),
     metadataChanged: new Set(),
     prefetchStarted: new Set(),
@@ -1139,12 +1655,17 @@ export class Player {
     const now = options.now ?? Date.now
     const client = factory()
     const player = new Player(client, now)
+    player.#maxRetryAttempts = resolveRetryOptions(options.retry)
     player.#visualizer = new VisualizerController(client)
     player.#resolution = new SourceResolverController(client, {
       timeoutMs: options.resolverTimeoutMs ?? DEFAULT_RESOLVER_TIMEOUT_MS,
       ttlMs: options.resolverTtlMs ?? DEFAULT_RESOLVER_TTL_MS,
       onError: (error) => {
-        player.#emit('error', error)
+        // A resolver failure is not an entry that failed to play, so no
+        // attempt budget applies to it and the count is honestly zero. mpv is
+        // still going to try the logical URI, and if *that* fails it arrives
+        // through the `end-file` path where retrying does apply.
+        player.#emit('error', error, { attempts: 0 })
       },
       now,
     })
@@ -1189,6 +1710,7 @@ export class Player {
         ...(options.gaplessAudio === undefined
           ? {}
           : { [MpvProperty.gaplessAudio]: options.gaplessAudio }),
+        ...networkReconnectOptions(options.networkReconnect),
         ...replayGainOptions(options.replayGain),
         ...(options.mpvOptions ?? {}),
         'log-level': MPV_LOG_LEVEL_NAMES[options.logLevel ?? DEFAULT_LOG_LEVEL],
@@ -1260,6 +1782,38 @@ export class Player {
   }
 
   /**
+   * Dismiss a settled error from {@link state}, without pretending it did not
+   * happen.
+   *
+   * @returns `true` if there was an error to clear.
+   *
+   * @remarks
+   * **You usually do not need this.** `state.error` clears itself three ways —
+   * a new entry starting, playback restarting, or a deliberate stop — all of
+   * which are documented on {@link PlayerState.error}. It survives in exactly
+   * one situation: the last entry failed and nothing has happened since. This
+   * is the button for that, i.e. for a user dismissing a banner.
+   *
+   * **It clears state, never events.** The `error` event has already fired and
+   * is already in your logs; nothing here suppresses a future one, replays a
+   * past one, or makes the failure un-happen. If you want fewer error events,
+   * the knob is {@link PlayerOptions.retry}, which changes what *is* a final
+   * failure — not this, which only changes what the UI is still showing.
+   *
+   * `status` moves to `'idle'`, because `error` and `status: 'error'` are one
+   * fact and a snapshot carrying one without the other would be a lie. Listeners
+   * are notified exactly as for any other snapshot change.
+   */
+  clearError(): boolean {
+    this.#assertAlive('clearError')
+    const next = clearPlayerError(this.#state)
+    if (next === this.#state) return false
+    this.#state = next
+    for (const listener of [...this.#stateListeners]) listener(next)
+    return true
+  }
+
+  /**
    * The playback position in seconds, projected locally from the last anchor.
    *
    * `time-pos` is never observed and never polled natively: mpv publishes the
@@ -1310,6 +1864,9 @@ export class Player {
    */
   async load(source: string, options: LoadOptions = {}): Promise<void> {
     this.#assertAlive('load')
+    // A caller replacing what is playing has superseded whatever the retry
+    // machinery was still arguing about. See `RetryOptions`.
+    this.#resetRetry()
     this.#currentUri = source
     // Before the command, not after: `loadfile` makes mpv open the source, and
     // resolving first is what lets the load hook hit a warm cache instead of
@@ -1363,6 +1920,7 @@ export class Player {
           'call `playlist.shuffle()` afterwards.'
       )
     }
+    this.#resetRetry()
     const startIndex = options.startIndex ?? 0
     this.#currentUri = sources[startIndex] ?? sources[0]
 
@@ -1581,8 +2139,10 @@ export class Player {
 
   /** Queue manipulation. See {@link PlaylistApi}. */
   readonly playlist: PlaylistApi = {
+    entries: () => this.#readPlaylistEntries('playlist.entries'),
     add: async (source, options) => {
       this.#assertAlive('playlist.add')
+      this.#resetRetry()
       const position = options?.position
       // Validated before the command, like every other typed option here: an
       // out-of-range index must not reach mpv, which would quietly append.
@@ -1605,46 +2165,101 @@ export class Player {
     },
     remove: async (index) => {
       this.#assertAlive('playlist.remove')
+      this.#resetRetry()
       await this.command(['playlist-remove', String(index)])
     },
     move: async (from, to) => {
       this.#assertAlive('playlist.move')
+      this.#resetRetry()
       // mpv: "Move the playlist entry at index1, so that it takes the place of
       // the entry index2." For a downward move the target must therefore be
       // shifted by one to land where an array `splice` would put it.
       const target = to > from ? to + 1 : to
       await this.command(['playlist-move', String(from), String(target)])
+      // A reorder leaves `playlist-count` identical, so nothing observed
+      // changes and no batch will report this. Emitting it here is the only
+      // honest route — see `PlayerEventMap.queueChanged`.
+      this.#emitReordered()
     },
     jumpTo: async (index, options) => {
       this.#assertAlive('playlist.jumpTo')
-      // Order matters: clear `pause` before the jump so mpv's own playback
-      // restart already runs with the right intent and cannot publish a
-      // paused-then-playing flicker to observers.
-      if (options?.autoPlay !== false) this.#setBool(MpvProperty.pause, false)
-      // `playlist-play-index` rather than writing `playlist-pos`: mpv
-      // guarantees playback restarts even when jumping to the current entry.
-      await this.command(['playlist-play-index', String(index)])
+      // The user picked an entry. That answers the question a pending retry was
+      // asking, so the retry stops arguing. See `RetryOptions`.
+      this.#resetRetry()
+      await this.#jumpTo(index, options?.autoPlay !== false)
     },
     next: async () => {
       this.#assertAlive('playlist.next')
+      this.#resetRetry()
       await this.command(['playlist-next', 'weak'])
     },
     previous: async () => {
       this.#assertAlive('playlist.previous')
+      this.#resetRetry()
       await this.command(['playlist-prev', 'weak'])
     },
     clear: async () => {
       this.#assertAlive('playlist.clear')
+      this.#resetRetry()
       await this.command(['playlist-clear'])
     },
     shuffle: async () => {
       this.#assertAlive('playlist.shuffle')
+      this.#resetRetry()
       await this.command(['playlist-shuffle'])
+      this.#emitReordered()
+      // Read *after* the command resolved, so this is the permutation mpv
+      // actually produced rather than a prediction of one.
+      return this.#readPlaylistEntries('playlist.shuffle')
     },
     unshuffle: async () => {
       this.#assertAlive('playlist.unshuffle')
+      this.#resetRetry()
       await this.command(['playlist-unshuffle'])
+      this.#emitReordered()
+      return this.#readPlaylistEntries('playlist.unshuffle')
     },
+  }
+
+  /**
+   * Turn mpv's `prefetch-playlist` on or off on a running player.
+   *
+   * @param enabled - Whether mpv may open the *next* queue entry while the
+   * current one is finishing.
+   * @throws {@link PlayerErrorException} with code `invalid-state` when
+   * `enabled` is not a boolean, or if the player has been destroyed.
+   *
+   * @remarks
+   * The runtime twin of {@link PlayerOptions.prefetchPlaylist} — read that
+   * first, because **every caveat it documents applies here and one more does
+   * on top**. mpv's manual disclaims correctness when the playlist is edited or
+   * stepped backwards while an entry is ending, and turning the option on
+   * mid-session does not change that; it only changes when you start paying for
+   * it. Specifically: an entry inserted after an opener has already started
+   * gets no prefetch of its own, and at the boundary mpv logs
+   * `Dropping finished prefetch of wrong URL.` and opens cold
+   * (`player/loadfile.c:1223`, mpv 0.41.0). See
+   * {@link PlaylistAddOptions.position}.
+   *
+   * Flipping it takes effect from the *next* prefetch decision. Turning it off
+   * does not abort an opener already running — mpv checks the option when it
+   * decides to prefetch (`prefetch_next()`), not while it is doing so — so one
+   * more boundary may still be gapless after you disable it. That is not a race
+   * this library could close without cancelling an in-flight open, which would
+   * be a worse trade than one extra early connection.
+   *
+   * There is nothing to undo and no state kept here: this writes mpv's property
+   * and mpv is the record. Read it back with
+   * `getPropertyBool(MpvProperty.prefetchPlaylist)` if you need to.
+   */
+  setPrefetchPlaylist(enabled: boolean): void {
+    this.#assertAlive('setPrefetchPlaylist')
+    if (typeof enabled !== 'boolean') {
+      throw invalidArgument(
+        `\`setPrefetchPlaylist\` takes a boolean; got '${String(enabled)}'.`
+      )
+    }
+    this.#setBool(MpvProperty.prefetchPlaylist, enabled)
   }
 
   // -------------------------------------------------------------------------
@@ -1813,10 +2428,26 @@ export class Player {
    * @returns The tag's value, or `undefined` when the entry has no such tag
    * (or nothing is loaded).
    *
+   * @remarks
+   * The pull half of the tag-store route — pair it with
+   * {@link PlayerEventMap.metadataChanged}, which tells you *when* to pull.
+   * Reading one key is one property read; reading several is cheaper through
+   * {@link Player.getMetadata}, which is one node read for the whole map.
+   *
+   * **For the now-playing line, prefer {@link PlayerState.title}.** It is the
+   * same underlying update (mpv folds `icy-title` into `media-title` and
+   * invalidates both together), but it arrives in the snapshot, so it reaches
+   * the media session and every broadcast channel for free. This function is
+   * for the keys `media-title` does *not* carry — the station name, the
+   * bitrate, the album. See `state.title` for the full comparison.
+   *
    * @example
    * ```ts
-   * // Radio now-playing, straight from the ICY stream.
-   * player.getMetadataValue('icy-title')
+   * // The song is `player.state.title`. This is everything around it:
+   * player.getMetadataValue('icy-name')  // station
+   * player.getMetadataValue('icy-genre')
+   * player.getMetadataValue('icy-title') // the song again, pulled rather than
+   *                                      // pushed — useful inside a handler
    * ```
    */
   getMetadataValue(key: string): string | undefined {
@@ -1969,6 +2600,10 @@ export class Player {
   destroy(): void {
     if (this.#destroyed) return
     this.#destroyed = true
+    // Nothing may re-attempt anything after this. `#tryRetry` also re-checks
+    // the flag, because it runs from a fan-out closure a listener could have
+    // destroyed the player from.
+    this.#resetRetry()
     // Before the core goes: the sampler thread reads mpv properties, so it has
     // to be stopped while the handle is still valid.
     this.#visualizer?.destroy()
@@ -2046,11 +2681,34 @@ export class Player {
 
     this.#collectMetadataEmission(mapped, emissions)
 
+    const retryBefore = this.#retry
+
     if (next !== previous) {
       this.#state = next
       for (const listener of [...this.#stateListeners]) listener(next)
     }
     for (const emit of emissions) emit()
+
+    // A `playbackRestart` is mpv's "position is meaningful again" signal, i.e.
+    // the entry opened and audio is flowing. Whatever it cost to get there is
+    // paid off, so the next failure starts a fresh budget. (A seek produces one
+    // too, which is harmless: an entry you can seek in is an entry that
+    // played.) Deliberately not keyed on `status === 'ready'` — that is derived
+    // from `core-idle` as well, so a restart into a buffering stream would not
+    // count and a live entry could retry forever.
+    //
+    // Checked *after* the fan-out and guarded on record identity, because a
+    // batch that accumulated across a queue boundary can carry both an entry's
+    // failure and the next entry's restart. Resetting blindly there would clear
+    // the attempt this very batch just armed, and the budget would never
+    // deplete.
+    if (
+      mapped.some(isPositionDiscontinuity) &&
+      this.#retry !== undefined &&
+      this.#retry === retryBefore
+    ) {
+      this.#resetRetry()
+    }
 
     // Deliberately reuses the existing discontinuity signals rather than adding
     // a native event: the queue moving is already visible here, and the whole
@@ -2146,13 +2804,31 @@ export class Player {
           })
         } else if (after.status === 'error' && after.error !== undefined) {
           const error = after.error
+          // The cursor mpv had when the entry failed — it advances to the next
+          // entry immediately afterwards, so `after` is already too late. This
+          // is the same reading `trackEnded` above uses.
+          const index = before.playlist.index
+          const wasPlaying = before.playing
           out.push(() => {
-            this.#emit('error', error)
+            // Retry first: if an attempt is taken, nothing has finally failed
+            // and there is no `error` event to emit yet.
+            if (this.#tryRetry(index, error, wasPlaying)) return
+            this.#emit('error', error, {
+              attempts: this.#retryAttemptsSpent(index),
+            })
           })
         }
         return
       }
       case 'property': {
+        if (event.name === MpvProperty.playlistCount) {
+          const count = after.playlist.count
+          if (count === before.playlist.count) return
+          out.push(() => {
+            this.#emit('queueChanged', { count, reason: 'resized' })
+          })
+          return
+        }
         if (event.name !== MpvProperty.playlistPos) return
         const index = after.playlist.index
         const previousIndex = before.playlist.index
@@ -2216,12 +2892,126 @@ export class Player {
 
   #emit<K extends PlayerEventName>(
     name: K,
-    payload: Parameters<PlayerEventMap[K]>[0]
+    ...args: Parameters<PlayerEventMap[K]>
   ): void {
     for (const listener of [...this.#eventListeners[name]]) {
       // Each listener is typed by its own key; the cast is confined here.
-      ;(listener as (value: typeof payload) => void)(payload)
+      ;(listener as (...values: typeof args) => void)(...args)
     }
+  }
+
+  /**
+   * One `mpv_get_property("playlist", NODE)`, mapped to the public tuple.
+   *
+   * The array is frozen because it is a *snapshot of mpv's state at this
+   * instant*, and handing out something mutable would invite an app to edit its
+   * copy and believe the queue changed. mpv is the record; this is a photograph
+   * of it.
+   */
+  #readPlaylistEntries(operation: string): readonly PlaylistEntry[] {
+    this.#assertAlive(operation)
+    return Object.freeze(this.#guard(() => this.#client.getPlaylistEntries()))
+  }
+
+  /**
+   * Announce a reorder this library just performed.
+   *
+   * Deliberately reads the count from the last snapshot rather than from mpv: a
+   * `move`/`shuffle`/`unshuffle` cannot change the length, so the snapshot is
+   * exact here and a property read would buy nothing but a round-trip.
+   */
+  #emitReordered(): void {
+    this.#emit('queueChanged', {
+      count: this.#state.playlist.count,
+      reason: 'reordered',
+    })
+  }
+
+  /**
+   * End the current retry generation.
+   *
+   * Called by every public path that moves the cursor or edits the queue. A
+   * dropped record means the next failure of any entry starts its count from
+   * zero — which is exactly what "the user took over" should mean.
+   */
+  #resetRetry(): void {
+    this.#retry = undefined
+  }
+
+  /**
+   * Decide whether a failed entry gets another attempt, and if so, take it.
+   *
+   * @param index - The playlist index that failed, taken from the snapshot
+   * *before* the `endFile` was reduced (mpv moves the cursor afterwards).
+   * @param error - The typed failure.
+   * @param wasPlaying - Playback intent at the moment of the failure, so the
+   * re-attempt restores it rather than silently starting a paused player.
+   * @returns `true` when an attempt was taken (and therefore no `error` event
+   * should be emitted for this failure), `false` when the caller should report
+   * the failure — with {@link #retryAttemptsSpent} as the count.
+   *
+   * @remarks
+   * Runs inside the batch fan-out, after listeners have seen the new snapshot.
+   * The jump itself is issued fire-and-forget: it is a command, this is not an
+   * async context, and there is nobody to hand a rejection to — a jump that
+   * mpv refuses simply leaves the queue where mpv already put it, which is the
+   * same place a non-retried failure leaves it.
+   */
+  #tryRetry(index: number, error: PlayerError, wasPlaying: boolean): boolean {
+    if (this.#destroyed) return false
+    if (this.#maxRetryAttempts <= 0) return false
+    if (!error.retryable) return false
+    // `-1` is "no current entry" — there is nothing to jump back to, and
+    // `playlist-play-index -1` would be a different operation entirely.
+    if (index < 0) return false
+
+    // A failure on a different entry starts a new generation. Without this a
+    // queue of three dead streams would share one budget and only the first
+    // would ever be retried.
+    const spent = this.#retry?.index === index ? this.#retry.attempts : 0
+    if (spent >= this.#maxRetryAttempts) return false
+
+    // A *new* record object every time, never a mutation: `#handleBatch` uses
+    // record identity to tell "this batch armed an attempt" from "this batch
+    // was a success", and those can arrive together when a batch accumulates
+    // across a queue boundary.
+    const attempt = spent + 1
+    this.#retry = { index, attempts: attempt }
+    this.#emit('retrying', {
+      index,
+      attempt,
+      maxAttempts: this.#maxRetryAttempts,
+      error,
+    })
+    // No await, no timer. See `RetryOptions` for why the absence of a delay is
+    // the design and not an omission.
+    void this.#jumpTo(index, wasPlaying).catch(() => {
+      // The jump failed (the core is tearing down, or the index went away with
+      // the queue). Nothing to report that the original failure has not already
+      // said, and throwing out of a fan-out closure would abort the rest of it.
+    })
+    return true
+  }
+
+  /** How many attempts the current generation has spent, for `PlayerErrorInfo`. */
+  #retryAttemptsSpent(index: number): number {
+    return this.#retry?.index === index ? this.#retry.attempts : 0
+  }
+
+  /**
+   * `playlist-play-index`, with the pause flag cleared first when the caller
+   * wants playback.
+   *
+   * Shared by {@link PlaylistApi.jumpTo} and the retry path so the ordering
+   * rule lives in one place: `pause` is written *before* the jump so mpv's own
+   * playback restart already runs with the right intent and cannot publish a
+   * paused-then-playing flicker to observers. (mpv's `playlist-play-index`
+   * restarts the entry but never touches the global `pause` flag — see
+   * ARCHITECTURE §12.)
+   */
+  async #jumpTo(index: number, autoPlay: boolean): Promise<void> {
+    if (autoPlay) this.#setBool(MpvProperty.pause, false)
+    await this.command(['playlist-play-index', String(index)])
   }
 
   /**

@@ -47,6 +47,47 @@ export type PlayerErrorCode =
   | 'mpv'
 
 /**
+ * Whether repeating the *identical* operation could plausibly succeed with
+ * nothing else changed.
+ *
+ * @remarks
+ * Present on every member of {@link PlayerError} — that is the point: an app
+ * that wants "retry on transient failures" should read this field rather than
+ * maintain its own table of codes, which is how such tables go stale. It is
+ * also what {@link PlayerOptions.retry} consumes to decide whether a failed
+ * entry gets another attempt before the queue advances.
+ *
+ * The classification, and the reasoning behind each row:
+ *
+ * | code                 | `retryable` | why |
+ * | -------------------- | ----------- | --- |
+ * | `network`            | `true`      | a dropped connection, a premature EOF, a CDN hiccup — the definition of transient |
+ * | `unsupported-format` | `false`     | no demuxer/codec exists in this binary; a second attempt runs the same code |
+ * | `load-failed`        | `false`\*   | see below |
+ * | `disposed`           | `false`     | an app bug, and the object is gone |
+ * | `invalid-state`      | `false`     | the argument was rejected before mpv saw it; the same argument is rejected again |
+ * | `unsupported`        | `false`     | the operation does not exist in the audio core |
+ * | `mpv`                | per errno   | see {@link isRetryableErrno} |
+ *
+ * \* **`load-failed` is `false` on the classified path, and that is a fact
+ * about the classifier rather than a policy.** `classifyEndFile` splits a
+ * failed open on {@link isNetworkUri}: a network URI becomes `network`, and
+ * everything else becomes `load-failed`. So a `load-failed` produced from an
+ * `end-file` is *by construction* never a network source — it is a local file
+ * that is missing or unreadable, or a source whose URI was not known at all.
+ * Neither improves by being asked twice in a row.
+ *
+ * The one `load-failed` that carries a real URI is the source-resolver failure
+ * (`SourceResolverController`), which builds the error itself and sets this
+ * field from {@link isNetworkUri} of the URI it was asked to resolve — a signing
+ * endpoint that timed out genuinely is worth another go.
+ *
+ * **`retryable` is advice about one repetition, not a promise.** It never means
+ * "this will work"; it means "asking again is not obviously pointless".
+ */
+export type Retryable = boolean
+
+/**
  * Playback of a network source failed part-way: a premature EOF, a dropped
  * connection, or a stream that never delivered decodable data.
  */
@@ -58,6 +99,8 @@ export interface NetworkError {
   readonly raw: string
   /** The source URI that failed, when known. */
   readonly uri?: string
+  /** Always `true`. See {@link Retryable}. */
+  readonly retryable: Retryable
 }
 
 /** mpv could not demux/decode the source: no matching demuxer or codec. */
@@ -69,6 +112,8 @@ export interface UnsupportedFormatError {
   readonly raw: string
   /** The source URI that failed, when known. */
   readonly uri?: string
+  /** Always `false`. See {@link Retryable}. */
+  readonly retryable: Retryable
 }
 
 /** The source could not be opened at all (missing file, refused connection). */
@@ -80,6 +125,8 @@ export interface LoadFailedError {
   readonly raw: string
   /** The source URI that failed, when known. */
   readonly uri?: string
+  /** See {@link Retryable} — `false` from `end-file`, resolver-dependent otherwise. */
+  readonly retryable: Retryable
 }
 
 /** The player (or its underlying mpv core) has already been destroyed. */
@@ -87,6 +134,8 @@ export interface DisposedError {
   readonly code: 'disposed'
   /** Human-readable summary, safe to show in a UI. */
   readonly message: string
+  /** Always `false`. See {@link Retryable}. */
+  readonly retryable: Retryable
 }
 
 /** A call was made in a state that does not allow it (e.g. double `initialize`). */
@@ -94,6 +143,8 @@ export interface InvalidStateError {
   readonly code: 'invalid-state'
   /** Human-readable summary, safe to show in a UI. */
   readonly message: string
+  /** Always `false`. See {@link Retryable}. */
+  readonly retryable: Retryable
 }
 
 /**
@@ -104,6 +155,8 @@ export interface UnsupportedError {
   readonly code: 'unsupported'
   /** Human-readable summary, safe to show in a UI. */
   readonly message: string
+  /** Always `false`. See {@link Retryable}. */
+  readonly retryable: Retryable
 }
 
 /** Anything mpv reported that this layer does not classify further. */
@@ -117,6 +170,8 @@ export interface RawMpvError {
   readonly errno?: number
   /** The source URI that failed, when known. */
   readonly uri?: string
+  /** Per {@link isRetryableErrno}. See {@link Retryable}. */
+  readonly retryable: Retryable
 }
 
 /**
@@ -172,6 +227,37 @@ const NETWORK_SCHEMES = [
   'ftps',
   'smb',
 ]
+
+/**
+ * Whether a bare `MPV_ERROR_*` number describes a condition that could clear on
+ * its own — the `code: 'mpv'` half of {@link Retryable}.
+ *
+ * @param errno - The mpv error number, or `undefined` when the failure carried
+ * none (an untagged native throw). `undefined` is `false`: an error this layer
+ * could not even attribute to mpv is not evidence of a transient condition.
+ *
+ * @remarks
+ * The table is short because almost every `MPV_ERROR_*` is a *statement about
+ * the call*, not about the world — a bad option name, a property that does not
+ * exist, a malformed command. Repeating those runs the same code with the same
+ * arguments and reaches the same line of mpv.
+ *
+ * | errno | `MPV_ERROR_*` | retryable | reasoning |
+ * | ----- | ------------- | --------- | --------- |
+ * | -14 | `AO_INIT_FAILED` | **`true`** | the audio device is a shared, exclusive resource. A phone call, another app taking exclusive output, or a route change landing mid-open makes the *same* open fail now and succeed a moment later. This is the one mpv errno whose cause is outside the process. |
+ * | -1 … -12 | `EVENT_QUEUE_FULL` … `COMMAND` | `false` | all argument/state faults: the same call fails identically |
+ * | -13, -16 | `LOADING_FAILED`, `NOTHING_TO_PLAY` | *n/a* | never reach here — {@link fromErrno} maps them to `network`/`load-failed` first |
+ * | -15 | `VO_INIT_FAILED` | `false` | the audio core never opens a video output (`vid=no`), so this cannot be a transient device race the way -14 is |
+ * | -17 | `UNKNOWN_FORMAT` | *n/a* | mapped to `unsupported-format` |
+ * | -18, -19 | `UNSUPPORTED`, `NOT_IMPLEMENTED` | *n/a* | mapped to `unsupported` |
+ * | -20 | `GENERIC` | `false` | mpv's catch-all. "Unclassified" is not "transient", and guessing otherwise would make every unknown failure retry twice |
+ *
+ * Anything mpv adds in a future release falls to `false` for the same reason as
+ * `GENERIC`: an unknown condition is not evidence of a recoverable one.
+ */
+export function isRetryableErrno(errno: number | undefined): boolean {
+  return errno === MpvErrno.audioOutputInitFailed
+}
 
 /**
  * Whether a source URI is fetched over the network.
@@ -257,11 +343,11 @@ export function toVisualizerError(thrown: unknown): PlayerError {
   const detail = withoutStackTrace(match?.[2] ?? message)
   switch (tag) {
     case 'unavailable':
-      return { code: 'unsupported', message: detail }
+      return { code: 'unsupported', message: detail, retryable: false }
     case 'invalid-state':
-      return { code: 'invalid-state', message: detail }
+      return { code: 'invalid-state', message: detail, retryable: false }
     default:
-      return { code: 'invalid-state', message: detail }
+      return { code: 'invalid-state', message: detail, retryable: false }
   }
 }
 
@@ -282,6 +368,7 @@ function fromErrno(
         code: 'unsupported-format',
         message: `Unsupported media format: ${detail}`,
         raw: detail,
+        retryable: false,
         ...(uri !== undefined ? { uri } : {}),
       }
     case MpvErrno.loadingFailed:
@@ -292,22 +379,27 @@ function fromErrno(
             message: `Network playback failed: ${detail}`,
             raw: detail,
             uri: uri as string,
+            retryable: true,
           }
         : {
             code: 'load-failed',
             message: `Failed to load media: ${detail}`,
             raw: detail,
+            // Not network-classified by construction — the branch above took
+            // every network URI. See `Retryable`.
+            retryable: false,
             ...(uri !== undefined ? { uri } : {}),
           }
     case MpvErrno.unsupported:
     case MpvErrno.notImplemented:
-      return { code: 'unsupported', message: detail }
+      return { code: 'unsupported', message: detail, retryable: false }
     default:
       return {
         code: 'mpv',
         message: detail,
         raw: detail,
         errno,
+        retryable: isRetryableErrno(errno),
         ...(uri !== undefined ? { uri } : {}),
       }
   }
@@ -337,6 +429,8 @@ export function toPlayerError(thrown: unknown, uri?: string): PlayerError {
       code: 'mpv',
       message,
       raw: message,
+      // No `[mpv:…]` tag, so no errno to judge by. See `isRetryableErrno`.
+      retryable: false,
       ...(uri !== undefined ? { uri } : {}),
     }
   }
@@ -347,11 +441,12 @@ export function toPlayerError(thrown: unknown, uri?: string): PlayerError {
       return {
         code: 'disposed',
         message: detail || 'Player has been destroyed',
+        retryable: false,
       }
     case 'invalid-state':
-      return { code: 'invalid-state', message: detail }
+      return { code: 'invalid-state', message: detail, retryable: false }
     case 'unsupported':
-      return { code: 'unsupported', message: detail }
+      return { code: 'unsupported', message: detail, retryable: false }
     default: {
       const errno = Number.parseInt(tag, 10)
       if (Number.isNaN(errno)) {
@@ -359,6 +454,7 @@ export function toPlayerError(thrown: unknown, uri?: string): PlayerError {
           code: 'mpv',
           message: detail || message,
           raw: detail || message,
+          retryable: false,
           ...(uri !== undefined ? { uri } : {}),
         }
       }
@@ -372,6 +468,7 @@ export function disposedError(operation: string): PlayerError {
   return {
     code: 'disposed',
     message: `Cannot call \`${operation}\` — the player has been destroyed.`,
+    retryable: false,
   }
 }
 
@@ -462,6 +559,7 @@ function endFileError(
         code: 'unsupported-format',
         message: 'The media format is not supported.',
         raw,
+        retryable: false,
         ...(uri !== undefined ? { uri } : {}),
       }
     case END_FILE_ERROR_TEXT.loadingFailed:
@@ -472,11 +570,15 @@ function endFileError(
             message: `Network playback failed (${raw}).`,
             raw,
             uri: uri as string,
+            retryable: true,
           }
         : {
             code: 'load-failed',
             message: `Failed to load media (${raw}).`,
             raw,
+            // `network` above claimed every network URI, so what is left is a
+            // local path (or no URI at all). See `Retryable`.
+            retryable: false,
             ...(uri !== undefined ? { uri } : {}),
           }
     case END_FILE_ERROR_TEXT.audioOutputInitFailed:
@@ -485,6 +587,7 @@ function endFileError(
         message: 'Audio output initialization failed.',
         raw,
         errno: MpvErrno.audioOutputInitFailed,
+        retryable: isRetryableErrno(MpvErrno.audioOutputInitFailed),
         ...(uri !== undefined ? { uri } : {}),
       }
     default:
@@ -494,11 +597,14 @@ function endFileError(
             message: `Network playback failed (${raw}).`,
             raw,
             uri: uri as string,
+            retryable: true,
           }
         : {
             code: 'mpv',
             message: raw,
             raw,
+            // An unrecognised `mpv_error_string()` with no errno attached.
+            retryable: false,
             ...(uri !== undefined ? { uri } : {}),
           }
   }

@@ -4,6 +4,7 @@ import { toPlayerEvents } from '../events'
 import { MpvProperty } from '../properties'
 import type { PlayerState, ReducerContext } from '../state'
 import {
+  clearPlayerError,
   createInitialState,
   isPositionDiscontinuity,
   projectPosition,
@@ -881,5 +882,106 @@ describe('isPositionDiscontinuity', () => {
       false,
       false,
     ])
+  })
+})
+
+describe('clearPlayerError', () => {
+  const context: ReducerContext = { now: 1_000 }
+
+  /** A snapshot that has settled into `status: 'error'`. */
+  function failed(): PlayerState {
+    return reducePlayerState(
+      createInitialState(0),
+      {
+        kind: 'endFile',
+        reason: 'error',
+        error: 'loading failed',
+      },
+      { ...context, uri: 'https://cdn.example.com/a.flac' }
+    )
+  }
+
+  it('drops the error and moves status off the sticky terminal', () => {
+    const before = failed()
+    expect(before.status).toBe('error')
+    const after = clearPlayerError(before)
+    expect(after.error).toBeUndefined()
+    expect(after.status).toBe('idle')
+  })
+
+  it('keeps `error` and `status` consistent — never one without the other', () => {
+    const after = clearPlayerError(failed())
+    expect('error' in after).toBe(false)
+    expect(after.status).not.toBe('error')
+  })
+
+  it('returns the same identity when there is nothing to clear', () => {
+    // The reducer's no-op contract: an unchanged snapshot must not wake
+    // `onStateChange`.
+    const state = createInitialState(0)
+    expect(clearPlayerError(state)).toBe(state)
+  })
+
+  it('touches nothing else', () => {
+    const before = failed()
+    const after = clearPlayerError(before)
+    expect(after.positionAnchor).toEqual(before.positionAnchor)
+    expect(after.volume).toBe(before.volume)
+    expect(after.playlist).toEqual(before.playlist)
+    expect(after.loopRaw).toEqual(before.loopRaw)
+  })
+})
+
+describe('PlayerState.error — the three automatic clears', () => {
+  const context: ReducerContext = { now: 1_000 }
+
+  function failed(): PlayerState {
+    return reducePlayerState(
+      createInitialState(0),
+      { kind: 'endFile', reason: 'error', error: 'loading failed' },
+      { ...context, uri: 'https://cdn.example.com/a.flac' }
+    )
+  }
+
+  it('clears on startFile — a new entry is loading', () => {
+    const after = reducePlayerState(failed(), { kind: 'startFile' }, context)
+    expect(after.error).toBeUndefined()
+    expect(after.status).toBe('loading')
+  })
+
+  it('clears on playbackRestart — audio is flowing again', () => {
+    const after = reducePlayerState(
+      failed(),
+      { kind: 'playbackRestart' },
+      context
+    )
+    expect(after.error).toBeUndefined()
+    expect(after.status).toBe('ready')
+  })
+
+  it('clears on a deliberate stop', () => {
+    const after = reducePlayerState(
+      failed(),
+      { kind: 'endFile', reason: 'stop', error: undefined },
+      context
+    )
+    expect(after.error).toBeUndefined()
+    expect(after.status).toBe('idle')
+  })
+
+  it('survives everything else, which is why clearPlayerError exists', () => {
+    // The one case with no automatic exit: the last entry failed and nothing
+    // has happened since. A late `idle-active` must not erase it either.
+    let state = failed()
+    for (const event of [
+      { kind: 'property', name: MpvProperty.idleActive, value: true },
+      { kind: 'property', name: MpvProperty.coreIdle, value: true },
+      { kind: 'property', name: MpvProperty.volume, value: 50 },
+      { kind: 'log', level: 'info', prefix: 'x', text: 'y' },
+    ] as PlayerEvent[]) {
+      state = reducePlayerState(state, event, context)
+    }
+    expect(state.status).toBe('error')
+    expect(state.error?.code).toBe('network')
   })
 })

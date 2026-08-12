@@ -137,6 +137,7 @@ export class VisualizerController {
       throw new PlayerErrorException({
         code: 'disposed',
         message: 'Player has been destroyed',
+        retryable: false,
       })
     }
     const capabilities = this.capabilities
@@ -149,6 +150,7 @@ export class VisualizerController {
           'visualizer needs a libmpv built from the rn-media forks (Android ' +
           '>= v1.1.9-rnmedia.3, iOS >= v0.7.2-rnmedia.3). Check ' +
           'player.visualizer.capabilities before subscribing.',
+        retryable: false,
       })
     }
 

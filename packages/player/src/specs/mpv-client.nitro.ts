@@ -209,6 +209,58 @@ export interface PrefetchStartedEvent {
 }
 
 /**
+ * One entry of mpv's playlist, as read from the `playlist` node property.
+ *
+ * @remarks
+ * mpv 0.41.0 `input.rst` documents the node this is built from verbatim:
+ *
+ * ```text
+ * MPV_FORMAT_NODE_ARRAY
+ *     MPV_FORMAT_NODE_MAP (for each playlist entry)
+ *         "filename"  MPV_FORMAT_STRING
+ *         "current"   MPV_FORMAT_FLAG (might be missing; since mpv 0.7.0)
+ *         "playing"   MPV_FORMAT_FLAG (same)
+ *         "title"     MPV_FORMAT_STRING (optional)
+ *         "id"        MPV_FORMAT_INT64
+ * ```
+ *
+ * Only the three fields that identify an entry are carried across the bridge.
+ * `title` is deliberately not: it is "available if the playlist file contains
+ * such fields […] or if the playlist entry has been opened before", i.e. it is
+ * `undefined` for every entry the user has not reached yet, which makes it a
+ * trap rather than a feature. The now-playing title lives in `PlayerState.title`
+ * and the full tag store behind `Player.getMetadata()`.
+ */
+export interface PlaylistEntry {
+  /**
+   * `playlist/N/filename` — the *logical* URI, i.e. the exact string that was
+   * passed to `loadfile`.
+   *
+   * A source resolver rewrites `stream-open-filename` on the way to the stream
+   * layer and never touches the playlist, so this stays the key an app's queue
+   * is built on no matter how many times the entry has been resolved.
+   */
+  readonly uri: string
+  /**
+   * `playlist/N/id` — mpv's own entry id, "unique for the entire life time of
+   * the current mpv core instance" (`input.rst`).
+   *
+   * This is the identity that survives `playlist-move`, `playlist-remove` and
+   * `playlist-shuffle`; the array position does not. It is the same id space as
+   * {@link PrefetchStartedEvent.entryId}.
+   */
+  readonly entryId: number
+  /**
+   * `playlist/N/current` — "yes/true if the `playlist-current-pos` property
+   * points to this entry" (`input.rst`).
+   *
+   * The field "might be missing" on an entry mpv has never selected, which
+   * native reads as `false`.
+   */
+  readonly current: boolean
+}
+
+/**
  * A thin, complete binding over one `mpv_handle` (one `mpv_create()` core).
  *
  * One instance == one player core; create as many as you need via
@@ -295,6 +347,30 @@ export interface MpvClient
    * small and constant, not to make each one faster.
    */
   getPropertyMap(name: string): Record<string, string> | undefined
+
+  /**
+   * Read mpv's whole `playlist` in **one** `MPV_FORMAT_NODE` round-trip.
+   *
+   * `[]` when the playlist is empty or mpv reports the property unavailable
+   * (an idle core); the two are indistinguishable to a caller and mean the same
+   * thing.
+   *
+   * @remarks
+   * This exists for the same reason {@link getPropertyMap} does, one level up.
+   * The alternative is `playlist-count` + `playlist/N/filename` per entry —
+   * `N + 1` blocking round-trips into mpv's core for a list the core builds
+   * atomically under its own lock anyway. mpv's own header warns that a
+   * synchronous read "[has] to wait until the playback core is ready, which
+   * currently can take an unbounded time" (`mpv/client.h`), so the fix is to make
+   * the number of reads small and *constant*, not to make each one faster. It
+   * is also what makes the answer coherent: a walk can interleave with a
+   * `playlist-move` and return two different generations of the queue stitched
+   * together, whereas one node read cannot.
+   *
+   * The node is walked in place and freed before this returns; nothing is
+   * retained natively.
+   */
+  getPlaylistEntries(): PlaylistEntry[]
 
   /** Set a property from a string. Throws on mpv error. */
   setPropertyString(name: string, value: string): void

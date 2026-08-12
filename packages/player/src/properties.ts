@@ -134,6 +134,32 @@ export const MpvProperty = {
    */
   audioFilters: 'af',
   /**
+   * `playlist` — the whole queue as one node.
+   *
+   * Read on demand through `MpvClient.getPlaylistEntries()` (one
+   * `MPV_FORMAT_NODE` round-trip), never observed: the array would be a second
+   * copy of mpv's own state crossing the bridge on every edit, and the cursor
+   * (`playlist-pos`/`playlist-count`) is what state actually needs. See
+   * `PlaylistApi.entries`.
+   */
+  playlist: 'playlist',
+  /**
+   * `stream-lavf-o` — "Set AVOptions on streams opened with libavformat"
+   * (mpv 0.41.0 `options.rst`), a key/value list.
+   *
+   * Applied by `mp_setup_av_network_options()` **last**, after every option mpv
+   * derives from its own settings (`stream/stream_lavf.c:242`,
+   * `mp_set_avdict(dict, opts->avopts)`), so an entry here wins over mpv's
+   * defaults. The same function is called from both `stream_lavf.c:407` (the
+   * top-level connection) and `demux_lavf.c:1024` (an `AVFMT_NOFILE` demuxer
+   * opening its own connections, which is how HLS fetches segments) — so one
+   * value covers both layers.
+   *
+   * This library uses it for exactly one thing: FFmpeg's HTTP reconnect
+   * options. See `PlayerOptions.networkReconnect`.
+   */
+  streamLavfO: 'stream-lavf-o',
+  /**
    * `pcm-tap` — int, read/write. Samples per channel mpv retains for the
    * visualizer; `0` (the default) disarms the tap.
    *

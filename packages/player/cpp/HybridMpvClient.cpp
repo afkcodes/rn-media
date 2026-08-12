@@ -8,6 +8,11 @@ namespace margelo::nitro::rnmediaplayer {
 
 namespace {
 
+/// mpv's playlist property. Named here rather than inline because it is the one
+/// property this layer reads on its own initiative (everything else is a name
+/// the TypeScript side passed down).
+constexpr const char* kPlaylistProperty = "playlist";
+
 MpvEventKind toNitroKind(rnmedia::EventKind kind) {
   switch (kind) {
     case rnmedia::EventKind::Property:
@@ -592,6 +597,41 @@ HybridMpvClient::getPropertyMap(const std::string& name) {
   if (!present) {
     return std::nullopt;
   }
+  return out;
+}
+
+std::vector<PlaylistEntry> HybridMpvClient::getPlaylistEntries() {
+  std::vector<PlaylistEntry> out;
+  // One `mpv_get_property("playlist", MPV_FORMAT_NODE)`. The walker hands us
+  // every member of every element tagged with the element index, so the entries
+  // are filled in place and each string is copied exactly once — mpv's node is
+  // freed before the read returns.
+  //
+  // Field names and formats are mpv 0.41.0 `input.rst`, verbatim:
+  //   "filename" STRING, "id" INT64, "current" FLAG (might be missing),
+  //   "playing" FLAG (might be missing), "title" STRING (optional).
+  // `current` missing is read as `false`, which is what mpv means by it — the
+  // flag is only emitted for the entry `playlist-current-pos` points at.
+  _client->getPropertyNodeMapArray(kPlaylistProperty,
+                                   [&out](std::size_t index, const rnmedia::NodeMember& member) {
+                                     if (out.size() <= index) {
+                                       out.resize(index + 1, PlaylistEntry(std::string(), 0, false));
+                                     }
+                                     PlaylistEntry& entry = out[index];
+                                     if (member.key == "filename") {
+                                       if (member.text.has_value()) {
+                                         entry.uri = std::string(*member.text);
+                                       }
+                                     } else if (member.key == "id") {
+                                       if (member.number.has_value()) {
+                                         entry.entryId = *member.number;
+                                       }
+                                     } else if (member.key == "current") {
+                                       entry.current = member.integer.value_or(0) != 0;
+                                     }
+                                   });
+  // An unavailable property (idle core) and an empty playlist are the same
+  // answer to the caller, so `false` needs no separate branch: `out` is empty.
   return out;
 }
 

@@ -56,6 +56,45 @@ service.setPlaybackState({
 await service.stopService() // the ONLY way to end background execution
 ```
 
+## `MediaItem.id`: stable per **source**, and duplicates are fine
+
+One rule, because two different mechanisms depend on it:
+
+> Derive the id from the thing being played — its catalogue id, or its URI.
+> Never from its position in the queue, and never uniquified with a counter or a
+> timestamp.
+
+**Duplicates are legal.** The same id may appear twice in a queue, and it
+routinely does — "play next" on a track already in the queue produces exactly
+that. Nothing rejects it and nothing breaks: position is carried by
+`queueIndex`, and media3's timeline uids are built as `"$index:$id"`, so they
+stay unique even when the ids do not.
+
+**Where the id actually matters:**
+
+1. **The channel-2 merge.** `setMediaItem` enriches the *current* queue entry
+   field-by-field, and only when `item.id` equals the id of the entry at the
+   broadcast `queueIndex`. Keying on the id *at a known index* is what keeps the
+   merge well-defined when a queue contains duplicates — it never has to guess
+   which copy you meant. If the ids disagree, the queue entry wins unchanged and
+   Android logs the mismatch; the usual symptom is a missing scrubber, because
+   `duration` is the field that normally arrives only through `setMediaItem`.
+2. **`restorePersisted`.** A restored record is matched back to your catalogue
+   by id. Ids minted per *insertion* — `track-7#2`, `` `${id}-${Date.now()}` ``,
+   an array index — no longer exist when the app cold-starts, so the match fails
+   and the session comes back blank.
+
+So suffixing ids to "avoid" duplicates breaks resumption and buys nothing,
+because nothing here needed them unique in the first place.
+
+```ts
+// Wrong: unique per insertion, meaningless after a restart.
+service.setQueue(tracks.map((t, i) => ({ id: `${t.id}-${i}`, title: t.title })))
+
+// Right: the same source is always the same id, however many times it appears.
+service.setQueue(tracks.map((t) => ({ id: t.id, title: t.title })))
+```
+
 ## The position anchor
 
 `position` is `{ value, at, rate }` — **not** a number you keep pushing.

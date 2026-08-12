@@ -361,6 +361,21 @@ carries the exact standing.
   edited or stepped backwards while a track is ending — that is the app's call,
   not ours to make silently.
 
+- **HTTP reconnection on by default, `reconnect_at_eof` off.** See §22 for the
+  four AVOptions and Platform truths for why the fifth is a trap.
+- **The queue's *contents* are a pull, never a feed.** `PlayerState.playlist` is
+  a cursor; `playlist.entries()` is one `mpv_get_property("playlist", NODE)` on
+  demand. Observing the array would put a variable-size payload on the bridge on
+  every edit and make the snapshot a second copy of state mpv owns — the same
+  trade already refused for position (§7) and metadata. One node read is also the
+  only *coherent* answer: an `N + 1` walk of `playlist/N/filename` can interleave
+  with a `playlist-move` and return two halves of two different orders. The
+  `queueChanged` event is derived from what is genuinely knowable — the observed
+  `playlist-count` (`'resized'`) and the library's own move/shuffle/unshuffle
+  calls (`'reordered'`, because a reorder changes no observable property at all)
+  — and the gap that leaves (a reorder issued through the raw `command()` hatch)
+  is documented rather than papered over.
+
 ### 13. Honest state for live streams
 mpv reports a perpetually-growing *cache length* as the duration of unseekable
 streams. `seekable === false` is the reliable live discriminator (verified in
@@ -804,6 +819,46 @@ recording, because it is the one number here that says more about Hermes running
 unoptimised JS than about the engine, and measuring a visualizer in a debug
 build is how you conclude the wrong thing about where the ceiling is.
 
+### 22. Recovery from a failed entry is two layers, and only one of them may wait
+mpv advances past an entry that fails hard. That is right for a file that will
+never play and wrong for a stream that was unlucky, and nothing in mpv separates
+the two — so the separation is ours, made from the typed taxonomy's new
+`PlayerError.retryable` flag.
+
+**Layer 1 is FFmpeg's own HTTP reconnection**, wired through mpv's
+`stream-lavf-o` (applied by `mp_setup_av_network_options()` *last*, so it beats
+mpv's derived options, and applied from both `stream_lavf.c:407` and
+`demux_lavf.c:1024` — the top-level connection *and* an `AVFMT_NOFILE` demuxer's
+own fetches, which is how HLS segments are covered by one value). It runs inside
+libavformat's read loop with no timers and no JavaScript, which is the only
+place a *delay* is allowed to exist at all (see Platform truths: JS timers
+freeze with the screen off). Defaults, verified against the shipped
+`libmpv.so`'s strings and that FFmpeg tree's `libavformat/http.c`, not from
+memory: `reconnect=1`, `reconnect_on_network_error=1`, `reconnect_streamed=1`,
+`reconnect_delay_max=5`. FFmpeg's own defaults are all-off / 120 s, so this is
+opt-out (`networkReconnect: { enabled: false }`).
+
+**Layer 2 is the player's bounded re-attempt** (`retry`, 2 attempts by default),
+which answers the one question layer 1 cannot see: *should the queue move on?*
+On an `end-file` error whose classified error is `retryable`, the player jumps
+back to the same entry with playback intent preserved, emits a typed `retrying`
+event, and emits **no** `error` — nothing has finally failed yet. When the budget
+is spent the advance mpv already performed is left alone and `error` fires with
+the attempt count. Attempts are tracked per entry generation and reset on
+success (a `playbackRestart`), on a different entry failing, and on any app
+cursor move or queue edit — a user who skips during a retry has said what they
+want.
+
+**There is deliberately no delay in layer 2**, and that is the load-bearing
+constraint rather than an omission: the only way to wait in JavaScript is a
+timer, so a backoff written there would silently become "retry when the user
+next unlocks the phone" — a bug invisible to every test that runs with the
+display on. Spaced, backed-off retrying belongs to the layer that is native.
+The cost of acting immediately is that a re-attempt is issued a moment after mpv
+has already started the next entry, so a boundary failure can produce a brief
+blip of the following track; that is the honest trade and it is documented on
+the option.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
@@ -840,6 +895,25 @@ build is how you conclude the wrong thing about where the ceiling is.
   a 10-second allowlist (`media_button_receiver_fgs_allowlist_duration_ms`).
   That window, not the 5-second `startForeground` promise, is the real budget for
   everything before the notification is up.
+- **FFmpeg's `reconnect_at_eof` is not guarded on `is_streamed`, so it cannot be
+  a global default** (verified 2026-08-12 against the exact tree the shipped
+  engine is built from, FFmpeg `n8.1.2`). It is the option that makes a live
+  stream reconnect when the server simply closes the connection — the obvious
+  thing to want for radio — but `http.c`'s read loop tests
+  `!(reconnect && is_premature) && !(reconnect_at_eof && read_ret ==
+  AVERROR_EOF)` with no seekability term above it. On an ordinary sized file the
+  natural end of the response *is* `AVERROR_EOF` and `is_premature` is false, so
+  enabling it makes every clean track end reconnect on the backoff schedule until
+  `reconnect_delay_max` is exceeded and then return `AVERROR(EIO)` — turning "the
+  song finished" into "the song failed", i.e. destroying the `trackEnded`-vs-
+  `error` distinction the whole taxonomy rests on. Shipped defaults therefore
+  omit it, and the consequence is stated rather than hidden: a *live* stream's
+  mid-play drop is recovered by §22's layer 2 (re-open the entry), not by
+  FFmpeg. A live-only app can opt in through the raw
+  `mpvOptions['stream-lavf-o']`, which replaces the list wholesale. The general
+  lesson is the recurring one: read the option's *use site*, not its description
+  — the help string ("auto reconnect at EOF") says nothing about which streams it
+  is safe for.
 - **`--enable-protocol=hls` in an ffmpeg build proves nothing** — it's the
   deprecated `hls://` protocol; only the `hls`+`mpegts` *demuxers* matter.
 - **Nor does the string `aresample` in libavfilter** — same family, found while

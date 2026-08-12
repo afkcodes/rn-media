@@ -214,6 +214,21 @@ public:
   /// The node is freed before this returns, including when `visit` throws.
   bool getPropertyNodeMap(const std::string& name, const std::function<void(const NodeMember&)>& visit);
 
+  /// Read `name` as `MPV_FORMAT_NODE` expecting an **array of maps**, and visit
+  /// every member of every element exactly once, in mpv's order, tagged with the
+  /// element's 0-based index. Returns false when the property is unavailable or
+  /// is not an array; throws `MpvError` on any other mpv error.
+  ///
+  /// One `mpv_get_property` for the whole list, which is both the cheap way and
+  /// the only coherent one: mpv builds the node under its own lock, so unlike an
+  /// `N + 1` sub-property walk the result cannot stitch two generations of an
+  /// edited playlist together.
+  ///
+  /// Elements that are not maps contribute no members rather than aborting the
+  /// walk. The node is freed before this returns, including when `visit` throws.
+  bool getPropertyNodeMapArray(const std::string& name,
+                               const std::function<void(std::size_t index, const NodeMember&)>& visit);
+
   /// Arm mpv's PCM tap for `frames` samples per channel, or disarm it with 0.
   ///
   /// Returns **false** when this libmpv has no `pcm-tap` property, i.e. it was

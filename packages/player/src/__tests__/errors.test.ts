@@ -4,6 +4,7 @@ import {
   classifyEndFile,
   disposedError,
   isNetworkUri,
+  isRetryableErrno,
   toPlayerError,
 } from '../errors'
 import type { MpvEndFileReason } from '../specs/mpv-client.nitro'
@@ -34,13 +35,18 @@ describe('toPlayerError — native `[mpv:…]` tags', () => {
     expect(error).toEqual({
       code: 'disposed',
       message: 'Cannot call `command` after destroy',
+      retryable: false,
     })
   })
 
   it('maps [mpv:invalid-state]', () => {
     expect(
       toPlayerError(new Error('[mpv:invalid-state] already initialized'))
-    ).toEqual({ code: 'invalid-state', message: 'already initialized' })
+    ).toEqual({
+      code: 'invalid-state',
+      message: 'already initialized',
+      retryable: false,
+    })
   })
 
   it('maps [mpv:unsupported]', () => {
@@ -51,6 +57,7 @@ describe('toPlayerError — native `[mpv:…]` tags', () => {
     ).toEqual({
       code: 'unsupported',
       message: '`attachVideoOutput` is not implemented.',
+      retryable: false,
     })
   })
 
@@ -106,6 +113,7 @@ describe('toPlayerError — native `[mpv:…]` tags', () => {
       code: 'mpv',
       message: 'kaboom',
       raw: 'kaboom',
+      retryable: false,
     })
   })
 
@@ -252,6 +260,127 @@ describe('disposedError', () => {
     expect(disposedError('seekTo')).toEqual({
       code: 'disposed',
       message: 'Cannot call `seekTo` — the player has been destroyed.',
+      retryable: false,
     })
+  })
+})
+
+describe('retryable — the flag PlayerOptions.retry consumes', () => {
+  it('marks a network failure retryable', () => {
+    const outcome = classifyEndFile(
+      'error',
+      'loading failed',
+      'https://cdn.example.com/a.flac'
+    )
+    expect(outcome).toMatchObject({
+      type: 'failed',
+      error: { code: 'network', retryable: true },
+    })
+  })
+
+  it('marks an unsupported format NOT retryable — the binary will not change', () => {
+    expect(
+      classifyEndFile(
+        'error',
+        'unrecognized file format',
+        'https://cdn.example.com/a.xyz'
+      )
+    ).toMatchObject({
+      type: 'failed',
+      error: { code: 'unsupported-format', retryable: false },
+    })
+  })
+
+  it('marks load-failed NOT retryable, because it is never a network source', () => {
+    // The classifier splits on `isNetworkUri`: every network URI became
+    // `network` above, so a `load-failed` from an end-file is by construction a
+    // local path (or an unknown one). Asking twice changes nothing.
+    expect(
+      classifyEndFile('error', 'loading failed', '/sdcard/missing.mp3')
+    ).toMatchObject({
+      type: 'failed',
+      error: { code: 'load-failed', retryable: false },
+    })
+    expect(classifyEndFile('error', 'loading failed')).toMatchObject({
+      type: 'failed',
+      error: { code: 'load-failed', retryable: false },
+    })
+  })
+
+  it('marks an audio-output init failure retryable — the device is shared', () => {
+    expect(
+      classifyEndFile('error', 'audio output initialization failed')
+    ).toMatchObject({
+      type: 'failed',
+      error: { code: 'mpv', errno: -14, retryable: true },
+    })
+  })
+
+  it('marks an unrecognised mpv error string on a network source retryable', () => {
+    expect(
+      classifyEndFile('error', 'something new', 'https://cdn.example.com/a')
+    ).toMatchObject({
+      type: 'failed',
+      error: { code: 'network', retryable: true },
+    })
+  })
+
+  it('marks an unrecognised mpv error string on a local source NOT retryable', () => {
+    expect(
+      classifyEndFile('error', 'something new', '/sdcard/a.mp3')
+    ).toMatchObject({
+      type: 'failed',
+      error: { code: 'mpv', retryable: false },
+    })
+  })
+
+  it('never marks an argument or lifecycle fault retryable', () => {
+    expect(disposedError('play').retryable).toBe(false)
+    expect(
+      toPlayerError(new Error('[mpv:invalid-state] already initialized'))
+        .retryable
+    ).toBe(false)
+    expect(
+      toPlayerError(new Error('[mpv:unsupported] no video here')).retryable
+    ).toBe(false)
+  })
+
+  it('is present on every error the taxonomy can produce', () => {
+    const samples = [
+      toPlayerError(new Error('[mpv:disposed] gone')),
+      toPlayerError(new Error('[mpv:invalid-state] no')),
+      toPlayerError(new Error('[mpv:unsupported] no')),
+      toPlayerError(new Error('[mpv:-17] bad format')),
+      toPlayerError(new Error('[mpv:-13] nope'), 'https://x.example/a'),
+      toPlayerError(new Error('[mpv:-13] nope'), '/tmp/a.mp3'),
+      toPlayerError(new Error('[mpv:-14] no device')),
+      toPlayerError(new Error('[mpv:weird] hmm')),
+      toPlayerError('untagged'),
+      disposedError('load'),
+    ]
+    for (const error of samples) {
+      expect(typeof error.retryable).toBe('boolean')
+    }
+  })
+})
+
+describe('isRetryableErrno', () => {
+  it('is true for MPV_ERROR_AO_INIT_FAILED and nothing else', () => {
+    expect(isRetryableErrno(-14)).toBe(true)
+    for (const errno of [
+      -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -15, -20,
+    ]) {
+      expect(isRetryableErrno(errno)).toBe(false)
+    }
+  })
+
+  it('treats an absent errno as not retryable', () => {
+    // An error this layer could not even attribute to mpv is not evidence of a
+    // transient condition.
+    expect(isRetryableErrno(undefined)).toBe(false)
+  })
+
+  it('treats an errno mpv has not invented yet as not retryable', () => {
+    expect(isRetryableErrno(-99)).toBe(false)
   })
 })

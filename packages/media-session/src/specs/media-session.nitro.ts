@@ -296,7 +296,44 @@ export interface NativePlaybackState {
 
 /** Metadata for the item currently playing. */
 export interface NativeMediaItem {
-  /** Stable id. Doubles as the media3 `MediaItem.mediaId`. */
+  /**
+   * Stable id. Doubles as the media3 `MediaItem.mediaId`.
+   *
+   * @remarks
+   * **Use a stable id per *source*, and let duplicates be duplicates.**
+   *
+   * ### Duplicates are legal
+   * The same id may appear more than once in a queue, and it routinely does:
+   * "play next" on a track that is already queued produces exactly that, and so
+   * does a repeat-one-song-twice playlist. Nothing here rejects it and nothing
+   * misbehaves because of it — position is carried by `queueIndex`, and media3's
+   * timeline uids are built as `"$index:${item.id}"`
+   * (`BroadcastPlayer.kt`), which stays unique even when the ids do not.
+   *
+   * ### Where the id is load-bearing
+   * Two places, both of which want the id to mean "this source", not "this row":
+   *
+   * 1. **The channel-2 merge.** `setMediaItem` enriches the *current* queue
+   *    entry field-by-field, and only when `item.id` equals the id of the entry
+   *    at the broadcast `queueIndex` (`Snapshot.kt`'s `timeline`). Matching on
+   *    the id at a known index is what makes the merge well-defined in the
+   *    presence of duplicates — it never has to ask "which of the two copies did
+   *    you mean". When the ids disagree the queue entry wins unchanged and
+   *    Android logs the mismatch; that combination means the two broadcasts got
+   *    out of step, and it is usually visible as a missing scrubber (the
+   *    duration is the field that normally arrives only via `setMediaItem`).
+   * 2. **Restoring a persisted session.** A restored record is matched back to
+   *    the app's catalogue by id. An id that was minted per *insertion* rather
+   *    than per source — `track-7#2`, `${id}-${Date.now()}`, an array index —
+   *    does not exist any more by the time the app cold-starts, so the match
+   *    fails and the session comes back blank.
+   *
+   * ### The rule
+   * Derive the id from the thing being played (its catalogue id, or its URI) —
+   * never from its position in the queue, and never uniquified with a counter
+   * or a timestamp to "avoid" duplicates. Suffixing to make ids unique breaks
+   * resumption and buys nothing, because nothing here needed them unique.
+   */
   id: string
   title: string
   artist?: string

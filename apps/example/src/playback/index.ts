@@ -13,7 +13,7 @@ import type { Player } from '@rn-media/player'
 import { Playback } from './controller'
 
 export { Playback } from './controller'
-export type { PrefetchNote } from './controller'
+export type { PrefetchNote, RetryNote } from './controller'
 
 /**
  * Parked on `globalThis` so a Fast Refresh of this module reuses the running

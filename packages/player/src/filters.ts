@@ -137,7 +137,11 @@ export function escapeAfParam(value: string): string {
 const FILTER_NAME = /^[a-zA-Z0-9_-]+$/
 
 function invalid(message: string): never {
-  throw new PlayerErrorException({ code: 'invalid-state', message })
+  throw new PlayerErrorException({
+    code: 'invalid-state',
+    message,
+    retryable: false,
+  })
 }
 
 /**

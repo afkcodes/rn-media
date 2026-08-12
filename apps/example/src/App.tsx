@@ -23,7 +23,7 @@
  *   controller.ts           the commands the UI and the remotes both call
  *   engine.ts               create the player → wire audio → subscribe → load
  *   transport.ts            play/pause/skip/seek, all behind the focus gate
- *   queue.ts                the app's mirror of mpv's playlist + its edits
+ *   queue.ts                mpv's queue joined to this app's metadata + its edits
  *   output.ts               engine options changeable live (ReplayGain, prefetch)
  *   session.ts              fan-out — the three broadcast channels
  *   handler.ts              fan-in — every remote surface funnels here
@@ -54,6 +54,7 @@ import { NowPlaying } from './components/NowPlaying'
 import { OutputControls } from './components/OutputControls'
 import { PersistenceNote } from './components/PersistenceNote'
 import { PrefetchBanner } from './components/PrefetchBanner'
+import { RetryBanner } from './components/RetryBanner'
 import { QueueList } from './components/QueueList'
 import { ReplayGainToggle } from './components/ReplayGainToggle'
 import { SleepTimerSection } from './components/SleepTimerSection'
@@ -114,9 +115,20 @@ function App(): React.JSX.Element {
           onStop={() => void playback.stop()}
         />
 
+        {/* While the player is re-attempting a failed entry, NO `error` event
+            fires — an app that only drew the banner below would show nothing at
+            all while a stream reconnects. */}
+        <RetryBanner note={playback.retrying} />
+
+        {/* `retryable` comes from the error itself; this screen keeps no table
+            of which codes are worth retrying. `Dismiss` calls
+            `player.clearError()`, which clears STATE only — the event already
+            fired and is already in the log. */}
         <ErrorBanner
           error={playback.error ?? shell.error}
+          attempts={playback.errorAttempts}
           onRetry={() => void playback.jumpTo(shell.index)}
+          onDismiss={() => playback.dismissError()}
         />
 
         <PrefetchBanner

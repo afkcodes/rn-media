@@ -263,7 +263,11 @@ describe('toVisualizerError', () => {
   it('classifies a tagged unavailable engine as `unsupported`', () => {
     expect(
       toVisualizerError(new Error('[visualizer:unavailable] no PCM tap here'))
-    ).toEqual({ code: 'unsupported', message: 'no PCM tap here' })
+    ).toEqual({
+      code: 'unsupported',
+      message: 'no PCM tap here',
+      retryable: false,
+    })
   })
 
   it('finds the tag even when Nitro has wrapped the message', () => {
@@ -286,11 +290,16 @@ describe('toVisualizerError', () => {
     expect(toVisualizerError(new Error('something else entirely'))).toEqual({
       code: 'invalid-state',
       message: 'something else entirely',
+      retryable: false,
     })
   })
 
   it('passes a typed error straight through', () => {
-    const original = new PlayerErrorException({ code: 'disposed', message: 'gone' })
+    const original = new PlayerErrorException({
+      code: 'disposed',
+      message: 'gone',
+      retryable: false,
+    })
     expect(toVisualizerError(original)).toBe(original.playerError)
   })
 })
