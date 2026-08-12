@@ -81,8 +81,8 @@ export type ReplayGainMode = 'no' | 'track' | 'album'
  * Loudness normalisation from the ReplayGain tags embedded in a file.
  *
  * Maps onto mpv's four `replaygain*` options. All four are runtime-settable:
- * each carries mpv's `UPDATE_VOL` flag (`options/options.c`, mpv 0.35.1), which
- * makes an option write re-run `audio_update_volume()` — so
+ * each carries mpv's `UPDATE_VOL` flag (`options/options.c`, verified in mpv
+ * 0.41.0), which makes an option write re-run `audio_update_volume()` — so
  * {@link Player.setReplayGain} takes effect on the *currently playing* track,
  * without a reload.
  *
@@ -92,6 +92,12 @@ export type ReplayGainMode = 'no' | 'track' | 'album'
  * `compute_replaygain()` takes the fallback branch *instead of* the tag branch,
  * which is what the manual means by "If this is applied, no other replaygain
  * options are applied."
+ *
+ * The fallback branch is broader than "untagged file": it is the `else` of
+ * `if (opts->rgain_mode && rg)` (`player/audio.c`, mpv 0.41.0), so a non-zero
+ * {@link fallback} also applies when {@link mode} is `'no'` — the manual's
+ * "always applied if the replaygain logic is somehow inactive". Turning
+ * ReplayGain off for real means `{ mode: 'no', fallback: 0 }`.
  */
 export interface ReplayGainOptions {
   /** Which tag set to use. `'no'` disables tag-based adjustment entirely. */
@@ -124,8 +130,14 @@ export interface ReplayGainOptions {
    */
   readonly clip?: boolean
   /**
-   * Gain in dB applied when the file carries no ReplayGain tags at all (mpv
-   * `replaygain-fallback`, default `0`).
+   * Gain in dB applied whenever the tag branch is inactive (mpv
+   * `replaygain-fallback`, default `0`) — the file carries no ReplayGain tags,
+   * **or** {@link mode} is `'no'`. mpv 0.41.0 `options.rst`: "This option is
+   * always applied if the replaygain logic is somehow inactive."
+   *
+   * Because of that second case, `mode: 'no'` does *not* silence a fallback
+   * written earlier: a non-zero value keeps attenuating (or boosting) every
+   * track until you write `fallback: 0` yourself.
    *
    * Must be within mpv's own range, `-200 … 60` (`options/options.c`,
    * `M_RANGE(-200, 60)`).
@@ -3000,7 +3012,10 @@ export class Player {
    *
    * Only the fields you pass are written: `setReplayGain({ mode: 'album' })`
    * switches tag set and leaves preamp, clipping and fallback exactly as they
-   * were. Pass `mode: 'no'` to stop honouring tags at all.
+   * were. Pass `mode: 'no'` to stop honouring tags — but note that a non-zero
+   * `fallback` written earlier is mode-independent and keeps applying (see
+   * {@link ReplayGainOptions.fallback}); to return to unity gain, pass
+   * `{ mode: 'no', fallback: 0 }`.
    *
    * @param options - See {@link ReplayGainOptions}.
    * @throws {@link PlayerErrorException} with code `invalid-state` if `mode` is

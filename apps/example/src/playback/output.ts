@@ -8,7 +8,27 @@
  * then show a state the engine is not in. So every setter here writes first and
  * only records the new value if the write survived.
  */
-import type { Player, ReplayGainMode } from '@rn-media/player'
+import type {
+  Player,
+  ReplayGainMode,
+  ReplayGainOptions,
+} from '@rn-media/player'
+
+/**
+ * The exact `setReplayGain` payload each UI mode writes.
+ *
+ * The sharp edge is `fallback`: mpv applies `replaygain-fallback` whenever the
+ * tag branch is inactive — an untagged file, but **also** `replaygain=no`. In
+ * mpv 0.41.0's `compute_replaygain()` (`player/audio.c`) the fallback branch is
+ * the `else` of `if (opts->rgain_mode && rg)`, and `options.rst` says so too:
+ * "This option is always applied if the replaygain logic is somehow inactive."
+ * So switching to Off must write `fallback: 0`, or the −6 dB this app uses for
+ * untagged files keeps applying to *every* track and loudness never returns to
+ * the pre-ReplayGain level (owner-reported, task #43).
+ */
+export function replayGainOptionsFor(mode: ReplayGainMode): ReplayGainOptions {
+  return { mode, preamp: 0, fallback: mode === 'no' ? 0 : -6 }
+}
 
 export interface OutputOptionsHooks {
   readonly player: () => Player | undefined
@@ -40,14 +60,15 @@ export class OutputOptions {
    *
    * All four mpv options behind it carry `UPDATE_VOL`, so this applies to the
    * track already playing — no reload, no gap. `'album'` falls back to the
-   * track gain when there is no album tag; files with no tags at all get the
-   * `fallback` and nothing else, which is why one is passed here.
+   * track gain when there is no album tag; the −6 dB `fallback` covers files
+   * with no tags at all. See {@link replayGainOptionsFor} for why `'no'` must
+   * zero the fallback rather than leave it in place.
    */
   setReplayGain(mode: ReplayGainMode): void {
     const player = this.#hooks.player()
     if (player === undefined) return
     try {
-      player.setReplayGain({ mode, preamp: 0, fallback: -6 })
+      player.setReplayGain(replayGainOptionsFor(mode))
       this.#replayGain = mode
       this.#hooks.onChange()
     } catch (cause) {

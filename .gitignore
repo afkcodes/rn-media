@@ -97,3 +97,4 @@ packages/player/ios/.cache/
 # Local-only test fixtures (never committed; see task notes)
 apps/example/*.local.ts
 apps/example/*.local.tsx
+.claude/
