@@ -12,7 +12,9 @@
   },
   "//typescript": "NOT the version this repo is written in — every package and the example app pin `typescript` themselves (^7.0.2) and their own `tsc` resolves that. This root pin exists for the ESLint stack: typescript-eslint 8 peers `typescript >=4.8.4 <6.1.0`, has no TypeScript 7 support, and npm hoists its packages (`@typescript-eslint/*`, `ts-api-utils`) to the workspace root — where `require('typescript')` resolves HERE. With TypeScript 7 in this slot `ts-api-utils` throws on load (`ts.TypeFlags` is undefined) and `eslint .` cannot run at all. `~6.0.3` is the newest release inside typescript-eslint's peer range. Delete this pin (and the whole workaround) once typescript-eslint supports TypeScript 7.",
   "devDependencies": {
+    "eslint-plugin-prettier": "^5.5.6",
     "jsdom": "^30.0.1",
+    "prettier": "3.9.6",
     "typescript": "~6.0.3"
   },
   "workspaces": [

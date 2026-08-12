@@ -105,12 +105,24 @@
           "trailingComma": "es5",
           "useTabs": false
         }
+      ],
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          "ignoreRestSiblings": true,
+          "argsIgnorePattern": "^_",
+          "varsIgnorePattern": "^_"
+        }
       ]
     }
   },
   "eslintIgnore": [
     "node_modules/",
-    "lib/"
+    "lib/",
+    "android/build/",
+    "plugin/build/",
+    "nitrogen/",
+    "cpp/tests/build/"
   ],
   "prettier": {
     "quoteProps": "consistent",

@@ -112,7 +112,10 @@
   },
   "eslintIgnore": [
     "node_modules/",
-    "lib/"
+    "lib/",
+    "android/build/",
+    "plugin/build/",
+    "nitrogen/"
   ],
   "prettier": {
     "quoteProps": "consistent",
