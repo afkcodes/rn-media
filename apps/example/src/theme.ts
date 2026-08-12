@@ -1,5 +1,5 @@
 /**
- * The example app's palette.
+ * The example app's design tokens.
  *
  * Explicit on purpose. React Native gives an unstyled `<Text>` a near-black
  * colour and leaves the window background to the platform theme, so on a device
@@ -7,33 +7,32 @@
  * only if you already knew what it said. A demo that is also the on-device test
  * bed has to be readable in both system themes, and the cheapest way to
  * guarantee that is to own both ends of the contrast.
+ *
+ * The design language is deliberately **flat and card-less**: content is
+ * grouped by whitespace and hairline rules, hierarchy is typography's job, and
+ * there is exactly one accent. Nothing here describes a container — no shadow
+ * tokens, and radii exist only for *controls* (chips, the play button) and
+ * artwork, never for boxes around content.
  */
 export const COLORS = {
-  /** Window background. */
+  /** Window background — the only "surface" on the screen. */
   background: '#0d1117',
-  /** Cards and list rows sitting on {@link background}. */
+  /** Control fills that must read as an object: artwork fallback, thumbnails. */
   surface: '#1b222c',
-  /** The current queue row. */
-  surfaceActive: '#16304f',
   /** Primary copy. */
   text: '#e6edf3',
   /** Secondary copy: labels, counters, the "buffered …" line. */
   muted: '#9aa4b2',
-  /** Hairlines and the unfilled part of the seek bar. */
+  /** Hairline rules, control outlines, and the unfilled part of the seek bar. */
   border: '#333c48',
   /** Buffered-ahead fill: brighter than {@link border}, dimmer than the fill. */
   track: '#4a5563',
-  /** Transport accent. */
+  /** The one accent. Also the notification colour (see `session.ts`). */
   accent: '#1f6feb',
   error: '#ff7b72',
-
-  /* --- added with the modular restructure ------------------------------- */
-
-  /** One step below {@link surface}: section wells inside a card. */
-  surfaceSunken: '#131a23',
-  /** Hairline that reads as a border on {@link surface} rather than on the bg. */
+  /** Hairline one step quieter than {@link border} — section rules. */
   borderSoft: '#242c38',
-  /** Lighter accent, for gradients-by-hand and pressed states. */
+  /** Lighter accent, for text-on-dark accent copy and active labels. */
   accentBright: '#4c9aff',
   /** "On air" — the same red the level meter's top zone uses. */
   live: '#ff453a',
@@ -46,11 +45,21 @@ export const COLORS = {
 } as const
 
 /**
+ * The notification accent, as Android wants it: a full **ARGB** integer.
+ *
+ * The same `#1f6feb` as {@link COLORS.accent}, with the alpha byte written out
+ * — `0x1F6FEB` alone would be transparent black, which is the documented trap
+ * on `MediaServiceConfig.android.notificationColor`.
+ */
+export const ACCENT_ARGB = 0xff1f6feb
+
+/**
  * A 4-point spacing scale.
  *
  * One scale, used everywhere, is what makes a screen assembled from a dozen
- * independent components look like one screen — every gap in this app is one of
- * these six numbers.
+ * independent components look like one screen — every gap in this app is one
+ * of these numbers. In a card-less design the scale *is* the grouping
+ * mechanism, so the top end is generous on purpose.
  */
 export const SPACE = {
   xs: 4,
@@ -59,46 +68,26 @@ export const SPACE = {
   lg: 16,
   xl: 24,
   xxl: 32,
-} as const
-
-/** Corner radii. `pill` is the "clamp to a capsule" idiom. */
-export const RADIUS = {
-  sm: 8,
-  md: 14,
-  lg: 20,
-  xl: 28,
-  pill: 999,
+  /** Between sections — whitespace is the container now. */
+  section: 40,
 } as const
 
 /**
- * Elevation, spelled for both platforms.
+ * Corner radii — **controls and artwork only**.
  *
- * iOS reads the `shadow*` group and ignores `elevation`; Android does the
- * reverse. Writing both in one object is the only way a card looks the same on
- * a Pixel and an iPhone, and it is the single most-forgotten thing in RN
- * styling.
+ * Containers are flat: no group on this screen gets a rounded box around it.
+ * `pill` survives for the one circular control (play/pause); everything else
+ * that keeps a radius is something a finger presses or a sleeve of artwork.
  */
-export const SHADOW = {
-  card: {
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
-  },
-  /** For the one control that should look like it is floating: play/pause. */
-  accent: {
-    shadowColor: COLORS.accent,
-    shadowOpacity: 0.55,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 10,
-  },
+export const RADIUS = {
+  sm: 6,
+  md: 12,
+  pill: 999,
 } as const
 
 /** Type ramp. Sizes only — weight and colour are set at the call site. */
 export const TYPE = {
-  hero: 26,
+  hero: 28,
   title: 19,
   body: 15,
   label: 13,

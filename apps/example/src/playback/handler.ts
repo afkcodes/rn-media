@@ -6,7 +6,7 @@
  * `@rn-media/media-session` — one interface, however many surfaces — and it is
  * why this file has no idea which of them called it.
  */
-import { BaseMediaHandler } from '@rn-media/media-session'
+import { BaseMediaHandler, type MediaRepeatMode } from '@rn-media/media-session'
 
 /**
  * What the handler needs from the app's playback layer.
@@ -25,6 +25,8 @@ export interface PlaybackCommands {
   previous(): void
   jumpTo(index: number): Promise<void>
   setRate(rate: number): void
+  setRepeatMode(mode: MediaRepeatMode): void
+  setShuffleEnabled(enabled: boolean): Promise<void>
 }
 
 /**
@@ -78,6 +80,30 @@ export class DemoMediaHandler extends BaseMediaHandler {
   override setRate(rate: number): void {
     this.#log('setRate')
     this.target().setRate(rate)
+  }
+
+  /**
+   * The notification's repeat button. **A request, not a fact**: nothing on
+   * any surface changes until the app writes the loop mode and the resulting
+   * state snapshot is re-broadcast carrying the new `repeatMode` — on Android
+   * that broadcast is literally what completes media3's pending operation and
+   * flips the icon. The controller's `setRepeatMode` is that write.
+   */
+  override onSetRepeatMode(mode: MediaRepeatMode): void {
+    this.#log(`onSetRepeatMode(${mode})`)
+    this.target().setRepeatMode(mode)
+  }
+
+  /**
+   * The shuffle button, same acknowledgement contract as
+   * {@link onSetRepeatMode}. In this app "shuffle on" is a real reorder of
+   * mpv's playlist (see `Playback.setShuffleEnabled` for the honest caveats),
+   * so the toggle is also reachable from a car head unit — which is the point
+   * of routing it through the one handler.
+   */
+  override onSetShuffle(enabled: boolean): void {
+    this.#log(`onSetShuffle(${String(enabled)})`)
+    return void this.target().setShuffleEnabled(enabled)
   }
 
   /**

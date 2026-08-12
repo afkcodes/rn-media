@@ -10,10 +10,15 @@
  * Every play path — this button, the notification, a Bluetooth remote — goes
  * through the same `Playback.play()`, which requests audio focus first. That is
  * the app's job by design: only the app knows when it is about to make sound.
+ *
+ * Visually the row is flat on purpose: the accent-filled play circle is the
+ * only filled control on the whole screen, the skip and jump buttons are bare
+ * glyphs with generous hit areas, and stop is a line of quiet text — the
+ * hierarchy is "one loud thing, everything else whispers".
  */
 import React from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { COLORS, RADIUS, SHADOW, SPACE, TYPE } from '../theme'
+import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 
 export const TransportControls = React.memo(function TransportControls({
   playing,
@@ -40,14 +45,24 @@ export const TransportControls = React.memo(function TransportControls({
   return (
     <View style={styles.container}>
       <View style={styles.row}>
+        {/* Relative jumps flank the transport. `seekBy` is mpv's own relative
+            seek — deriving an absolute target from the projected position
+            races the projection. The 15/30 asymmetry matches the media-session
+            config's jumpBackwardSeconds/jumpForwardSeconds, so the lock screen
+            and this row move by the same amounts. */}
+        <Quiet
+          label="↺ 15"
+          accessibilityLabel="Back 15 seconds"
+          disabled={!ready}
+          onPress={() => onSeekBy(-15)}
+        />
+
         {/* ⏮ stays enabled at the head of the queue: past three seconds it
             restarts the entry, which is what every music app does and what
             `playlist.previous()` implements for us. */}
-        <Round
+        <Glyph
           label="⏮"
-          accessibilityLabel={
-            hasPrevious ? 'Previous track' : 'Restart track'
-          }
+          accessibilityLabel={hasPrevious ? 'Previous track' : 'Restart track'}
           disabled={!ready}
           onPress={onPrevious}
         />
@@ -72,25 +87,15 @@ export const TransportControls = React.memo(function TransportControls({
 
         {/* …but ⏭ genuinely has nothing to do at the end of a queue, and
             `hasNext` already knows about the loop mode. */}
-        <Round
+        <Glyph
           label="⏭"
           accessibilityLabel="Next track"
           disabled={!ready || !hasNext}
           onPress={onNext}
         />
-      </View>
 
-      {/* Relative jumps. `seekBy` is mpv's own relative seek — deriving an
-          absolute target from the projected position races the projection. */}
-      <View style={styles.row}>
-        <Jump
-          label="⏪ 15"
-          accessibilityLabel="Back 15 seconds"
-          disabled={!ready}
-          onPress={() => onSeekBy(-15)}
-        />
-        <Jump
-          label="30 ⏩"
+        <Quiet
+          label="30 ↻"
           accessibilityLabel="Forward 30 seconds"
           disabled={!ready}
           onPress={() => onSeekBy(30)}
@@ -107,13 +112,14 @@ export const TransportControls = React.memo(function TransportControls({
           pressed && styles.pressed,
         ]}
       >
-        <Text style={styles.stopLabel}>■ Stop &amp; dismiss notification</Text>
+        <Text style={styles.stopLabel}>■ stop &amp; dismiss notification</Text>
       </Pressable>
     </View>
   )
 })
 
-function Round({
+/** A bare transport glyph — no outline, no fill, just a generous hit area. */
+function Glyph({
   label,
   accessibilityLabel,
   disabled,
@@ -131,17 +137,18 @@ function Round({
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
-        styles.round,
+        styles.glyph,
         disabled && styles.dim,
         pressed && styles.pressed,
       ]}
     >
-      <Text style={styles.roundGlyph}>{label}</Text>
+      <Text style={styles.glyphLabel}>{label}</Text>
     </Pressable>
   )
 }
 
-function Jump({
+/** The quietest control on the row: a small tabular label, nothing around it. */
+function Quiet({
   label,
   accessibilityLabel,
   disabled,
@@ -159,32 +166,34 @@ function Jump({
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
-        styles.jump,
+        styles.quiet,
         disabled && styles.dim,
         pressed && styles.pressed,
       ]}
     >
-      <Text style={styles.jumpLabel}>{label}</Text>
+      <Text style={styles.quietLabel}>{label}</Text>
     </Pressable>
   )
 }
 
-const PRIMARY = 76
+const PRIMARY = 68
 
 const styles = StyleSheet.create({
   container: { alignSelf: 'stretch', alignItems: 'center', gap: SPACE.md },
-  row: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xl },
-  round: {
-    width: 56,
-    height: 56,
-    borderRadius: RADIUS.pill,
+  row: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.borderSoft,
-    backgroundColor: COLORS.surface,
+    gap: SPACE.lg,
   },
-  roundGlyph: { fontSize: 20, color: COLORS.text },
+  glyph: {
+    width: 52,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glyphLabel: { fontSize: 24, color: COLORS.text },
   primary: {
     width: PRIMARY,
     height: PRIMARY,
@@ -192,28 +201,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.accent,
-    ...SHADOW.accent,
   },
-  primaryGlyph: { fontSize: 24, color: COLORS.onAccent },
-  playGlyph: { marginLeft: 4, fontSize: 28 },
-  stop: {
+  primaryGlyph: { fontSize: 22, color: COLORS.onAccent },
+  playGlyph: { marginLeft: 4, fontSize: 26 },
+  stop: { paddingVertical: SPACE.xs, paddingHorizontal: SPACE.md },
+  stopLabel: {
+    fontSize: TYPE.caption,
+    letterSpacing: 0.4,
+    color: COLORS.muted,
+  },
+  quiet: {
     paddingVertical: SPACE.md,
-    paddingHorizontal: SPACE.lg,
-    borderRadius: RADIUS.pill,
-    borderWidth: 1,
-    borderColor: COLORS.borderSoft,
-    backgroundColor: COLORS.surfaceSunken,
+    paddingHorizontal: SPACE.xs,
   },
-  stopLabel: { fontSize: TYPE.label, color: COLORS.muted },
-  jump: {
-    paddingVertical: SPACE.sm,
-    paddingHorizontal: SPACE.lg,
-    borderRadius: RADIUS.pill,
-    borderWidth: 1,
-    borderColor: COLORS.borderSoft,
-    backgroundColor: COLORS.surface,
+  quietLabel: {
+    fontSize: TYPE.label,
+    fontVariant: ['tabular-nums'],
+    color: COLORS.muted,
   },
-  jumpLabel: { fontSize: TYPE.label, color: COLORS.text },
   dim: { opacity: 0.4 },
   pressed: { opacity: 0.75 },
 })

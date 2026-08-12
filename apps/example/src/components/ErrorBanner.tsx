@@ -30,7 +30,8 @@
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import type { PlayerError, PlayerErrorCode } from '@rn-media/player'
-import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
+import { COLORS, SPACE, TYPE } from '../theme'
+import { Strip } from './ui'
 
 /** Copy per code. Advice about *what happened*, never about what to do next. */
 const ADVICE: Record<PlayerErrorCode, { headline: string; hint: string }> = {
@@ -82,57 +83,53 @@ export const ErrorBanner = React.memo(function ErrorBanner({
   const retryable = error.retryable
 
   return (
-    <View
-      accessibilityRole="alert"
-      style={[styles.banner, retryable && styles.transient]}
-    >
-      <Text style={styles.headline}>
-        {advice.headline}
-        <Text style={styles.code}>
-          {' · '}
-          {error.code}
-          {retryable ? ' · retryable' : ''}
+    // A flat strip: the rule's colour is the taxonomy (warning while a retry
+    // is worth offering, error once it is not), the copy is the fact. No box.
+    <View accessibilityRole="alert" style={styles.container}>
+      <Strip color={retryable ? COLORS.warning : COLORS.error}>
+        <Text style={styles.headline}>
+          {advice.headline}
+          <Text style={styles.code}>
+            {' · '}
+            {error.code}
+            {retryable ? ' · retryable' : ''}
+          </Text>
         </Text>
-      </Text>
-      <Text style={styles.message}>{error.message}</Text>
-      <Text style={styles.hint}>{advice.hint}</Text>
-      {attempts !== undefined && attempts > 0 ? (
-        <Text style={styles.hint}>
-          Re-attempted {attempts} {attempts === 1 ? 'time' : 'times'} before
-          giving up.
-        </Text>
-      ) : null}
-      <View style={styles.actions}>
-        {retryable && onRetry !== undefined ? (
-          <Text accessibilityRole="button" onPress={onRetry} style={styles.retry}>
-            Retry
+        <Text style={styles.message}>{error.message}</Text>
+        <Text style={styles.hint}>{advice.hint}</Text>
+        {attempts !== undefined && attempts > 0 ? (
+          <Text style={styles.hint}>
+            Re-attempted {attempts} {attempts === 1 ? 'time' : 'times'} before
+            giving up.
           </Text>
         ) : null}
-        {onDismiss !== undefined ? (
-          <Text
-            accessibilityRole="button"
-            onPress={onDismiss}
-            style={styles.dismiss}
-          >
-            Dismiss
-          </Text>
-        ) : null}
-      </View>
+        <View style={styles.actions}>
+          {retryable && onRetry !== undefined ? (
+            <Text
+              accessibilityRole="button"
+              onPress={onRetry}
+              style={styles.retry}
+            >
+              Retry
+            </Text>
+          ) : null}
+          {onDismiss !== undefined ? (
+            <Text
+              accessibilityRole="button"
+              onPress={onDismiss}
+              style={styles.dismiss}
+            >
+              Dismiss
+            </Text>
+          ) : null}
+        </View>
+      </Strip>
     </View>
   )
 })
 
 const styles = StyleSheet.create({
-  banner: {
-    alignSelf: 'stretch',
-    gap: SPACE.xs,
-    padding: SPACE.md,
-    borderRadius: RADIUS.md,
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.error,
-    backgroundColor: COLORS.surfaceSunken,
-  },
-  transient: { borderLeftColor: COLORS.warning },
+  container: { alignSelf: 'stretch' },
   actions: { flexDirection: 'row', gap: SPACE.lg },
   headline: { fontSize: TYPE.label, fontWeight: '700', color: COLORS.text },
   code: { fontWeight: '400', color: COLORS.muted },

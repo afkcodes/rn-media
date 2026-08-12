@@ -33,7 +33,12 @@ import {
   type ReplayGainMode,
 } from '@rn-media/player'
 import { AudioSession } from '@rn-media/audio-session'
+import type {
+  MediaRepeatMode,
+  SleepTimerState,
+} from '@rn-media/media-session'
 import type { Track } from '../data/tracks'
+import { repeatToLoop } from './broadcast'
 import {
   createEngine,
   type Engine,
@@ -64,12 +69,23 @@ export class Playback implements PlaybackCommands {
   #station: string | undefined
   #prefetch: PrefetchNote | undefined
   #retrying: RetryNote | undefined
+  /**
+   * The shuffle toggle — **app** state, because mpv has no shuffle *mode*.
+   *
+   * What mpv has is a reorder command, so "shuffle on" here is an honest
+   * physical shuffle of the playlist (`playlist.shuffle`) and "off" is mpv's
+   * one level of undo (`playlist.unshuffle`). This boolean records which was
+   * asked for last; the session bridge reads it at broadcast time, which is
+   * how the notification's shuffle icon and the in-app toggle stay one fact.
+   */
+  #shuffleEnabled = false
 
   readonly #listeners = new Set<() => void>()
 
   readonly #session = new SessionBridge({
     handler: () => new DemoMediaHandler(() => this),
     snapshot: () => this.#engine?.player.state,
+    shuffleEnabled: () => this.#shuffleEnabled,
     onChange: () => this.#notify(),
   })
 
@@ -141,6 +157,10 @@ export class Playback implements PlaybackCommands {
   }
   get replayGain(): ReplayGainMode {
     return this.#output.replayGain
+  }
+  /** The app-owned half of the mode pair; repeat lives in `ShellState.loop`. */
+  get shuffleEnabled(): boolean {
+    return this.#shuffleEnabled
   }
 
   /** Re-render notification for the UI. Nothing else depends on it. */
@@ -305,14 +325,50 @@ export class Playback implements PlaybackCommands {
   playNext(track: Track): Promise<void> {
     return this.#queue.playNext(track)
   }
-  shuffle(): Promise<void> {
-    return this.#queue.shuffle()
+  addLast(track: Track): Promise<void> {
+    return this.#queue.addLast(track)
   }
-  unshuffle(): Promise<void> {
-    return this.#queue.unshuffle()
+  removeAt(index: number): Promise<void> {
+    return this.#queue.remove(index)
   }
   clearQueue(): Promise<void> {
     return this.#queue.clear()
+  }
+
+  /* --- repeat & shuffle ---------------------------------------------------- */
+
+  /**
+   * Repeat, in media-session vocabulary — the one method both the in-app
+   * chips and the notification's repeat button call.
+   *
+   * The mapping (`one` → mpv's `loop-file`, `all` → `loop-playlist`) lives in
+   * `broadcast.ts` next to its inverse. No local state and no `#notify()`:
+   * `loop` is an observed player property, so the confirmation flows back
+   * through the snapshot — the UI re-renders off `ShellState.loop` and the
+   * session bridge re-broadcasts `repeatMode`, which is the acknowledgement
+   * every remote surface is waiting on.
+   */
+  setRepeatMode(mode: MediaRepeatMode): void {
+    this.#transport.setLoop(repeatToLoop(mode))
+  }
+
+  /**
+   * Shuffle, as a toggle — the shape every remote surface speaks.
+   *
+   * The honest wiring, stated plainly: mpv has no shuffle *mode*, so `true`
+   * performs a real `playlist.shuffle` (the playing entry moves too — mpv
+   * keeps the entry current, not the index) and `false` is `unshuffle`, which
+   * is one level of undo and no more. The flag is recorded first so the
+   * queue-edit rebroadcast that follows the reorder already carries it; if mpv
+   * rejects the reorder the error surfaces on the banner (`QueueMirror`'s
+   * `onError`) while the toggle keeps the user's intent — the same optimistic
+   * contract a network toggle has.
+   */
+  async setShuffleEnabled(enabled: boolean): Promise<void> {
+    this.#shuffleEnabled = enabled
+    this.#notify()
+    if (enabled) await this.#queue.shuffle()
+    else await this.#queue.unshuffle()
   }
 
   /* --- engine options (delegated) ------------------------------------------ */
@@ -332,11 +388,15 @@ export class Playback implements PlaybackCommands {
   setSleepTimer(seconds: number): void {
     this.#session.setSleepTimer(seconds)
   }
+  setSleepTimerToTrackEnd(): void {
+    this.#session.setSleepTimerToTrackEnd()
+  }
   cancelSleepTimer(): void {
     this.#session.cancelSleepTimer()
   }
-  sleepTimerRemaining(): number | undefined {
-    return this.#session.sleepTimerRemaining()
+  /** Mode + remaining seconds, for the badge. See `SessionBridge.sleepTimer`. */
+  sleepTimer(): SleepTimerState | undefined {
+    return this.#session.sleepTimer()
   }
   saveSession(): void {
     this.#session.save()

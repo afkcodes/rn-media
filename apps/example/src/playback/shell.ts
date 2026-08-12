@@ -26,7 +26,7 @@
  * root looks the track up in `playback.queue` — the one place both
  * subscriptions have already been read.
  */
-import type { PlayerState } from '@rn-media/player'
+import type { LoopMode, PlayerState } from '@rn-media/player'
 import type { TrackFacts } from './broadcast'
 
 export interface ShellState extends TrackFacts {
@@ -39,6 +39,12 @@ export interface ShellState extends TrackFacts {
   readonly pitch: number
   readonly volume: number
   readonly muted: boolean
+  /**
+   * Repeat, read from the player rather than mirrored in app state — the same
+   * observed property the media-session broadcast projects (`loopToRepeat`),
+   * so the in-app toggle and the notification icon cannot disagree.
+   */
+  readonly loop: LoopMode
   /**
    * Whether ⏭ / ⏮ would move — computed by the library from the cursor and the
    * loop mode, as an atomic pair.
@@ -76,6 +82,7 @@ export function selectShell(state: PlayerState): ShellState {
     pitch: state.pitch,
     volume: state.volume,
     muted: state.muted,
+    loop: state.loop,
     hasNext: state.hasNext,
     hasPrevious: state.hasPrevious,
     bufferingPercent: state.bufferingPercent,

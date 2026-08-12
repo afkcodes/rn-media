@@ -88,7 +88,7 @@ export async function restoreSession(): Promise<RestoreOutcome> {
           // `> 0` is the whole guard. A live entry is persisted at position
           // 0 by the session itself — it publishes no duration, which is the
           // library's live discriminator — so this app does not need its own
-          // `track.live` check here, and would be wrong to trust one: the
+          // `track.isLive` check here, and would be wrong to trust one: the
           // authority on "is this seekable" is what was broadcast, not a
           // static flag in the queue file.
           pendingResumeMs: index >= 0 && positionMs > 0 ? positionMs : undefined,

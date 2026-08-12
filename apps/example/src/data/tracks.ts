@@ -9,21 +9,22 @@ import type { MediaItem } from '@rn-media/media-session'
 export interface Track extends MediaItem {
   /** What the player loads. Kept out of `MediaItem`, which is metadata only. */
   readonly uri: string
-  /**
-   * Endless stream with no meaningful total length.
+  /*
+   * There used to be an app-side `live?: boolean` here. It is gone because
+   * `MediaItem.isLive` now says the same thing *to the media session as well*:
+   * the radio entries below set it, the broadcast projection forwards it, and
+   * every surface (this screen, the notification, the lock screen) reads one
+   * flag instead of inferring live-ness from a missing duration.
    *
-   * This is the app's own, *static* knowledge. The player now works this out on
-   * its own — `PlayerState.isLive` is `true` once mpv reports `seekable = no`,
-   * and `duration` is suppressed there — so this flag is only a head start for
-   * the window before mpv has published seekability.
-   *
-   * Why either matters: on an Icecast stream mpv reports a `duration` equal to
-   * how much it has *cached*, so it grows several times a second forever.
-   * Broadcasting that would turn the media session into a ticker — the exact
-   * thing the position anchor exists to avoid — and would draw a seek bar whose
-   * end keeps running away from the listener.
+   * The flag is still the app's own, *static* knowledge — a head start for the
+   * window before mpv has published seekability (`PlayerState.isLive` flips
+   * once mpv reports `seekable = no`). Why it matters at all: on an Icecast
+   * stream mpv reports a `duration` equal to how much it has *cached*, so it
+   * grows several times a second forever. Broadcasting that would turn the
+   * media session into a ticker — the exact thing the position anchor exists
+   * to avoid — and would draw a seek bar whose end keeps running away from the
+   * listener.
    */
-  readonly live?: boolean
 }
 
 /**
@@ -150,7 +151,10 @@ export const TRACKS: readonly Track[] = [
     uri: 'https://carol.epichosts.co.uk:8570/;',
     artworkUri:
       'https://static.mytuner.mobi/media/tvos_radios/621/diverse-fm-bollywood-music-mix.7ea30dfa.png',
-    live: true,
+    // The extended `MediaItem.isLive` tag: tells every surface "this is live"
+    // as a *fact*, instead of leaving them to infer it from the duration that
+    // never arrives. Forwarded by `toMediaItem` and by the queue channel.
+    isLive: true,
   },
   {
     id: 'fip-hls',
@@ -158,7 +162,7 @@ export const TRACKS: readonly Track[] = [
     artist: 'Radio France',
     album: 'HLS master · AAC · live',
     uri: 'https://stream.radiofrance.fr/fip/fip.m3u8',
-    live: true,
+    isLive: true,
   },
   {
     id: 'vividh-bharati-hls',
@@ -171,13 +175,15 @@ export const TRACKS: readonly Track[] = [
     uri: 'https://radio.wavespb.com/live/146ed6ec6dea5a24/146ed6ec6dea5a24.m3u8',
     artworkUri:
       'https://airdco.pc.cdn.bitgravity.com/images/vividh-bharati.jpg',
-    live: true,
+    isLive: true,
   },
   {
     id: 'mp3-test',
     title: 'MP3 Test File',
     artist: 'Internet Archive',
     album: 'Finite · 12 s',
+    // Deliberately no extended tags: the source file carries none, and this
+    // queue does not invent metadata. The tagged entries are below.
     uri: 'https://archive.org/download/testmp3testfile/mpthreetest.mp3',
   },
   {
@@ -191,6 +197,14 @@ export const TRACKS: readonly Track[] = [
     uri: 'https://aac.saavncdn.com/905/f968ceef36dde517a2aee1b74e119166_160.mp4',
     artworkUri:
       'https://c.saavncdn.com/905/Dhurandhar-The-Revenge-Aari-Aari-From-Dhurandhar-The-Revenge-Hindi-2026-20260312141004-500x500.jpg',
+    // Extended tags — only the ones that are *true* of this source. It is a
+    // 2026 film single (the CDN's own asset naming says `Hindi-2026`), so the
+    // release year and "track 1 of a single" are facts; an album artist or a
+    // composer credit would be a guess, so neither is here. On Android these
+    // land as `MediaMetadata.releaseYear` / `.trackNumber`; iOS publishes the
+    // track number and has no year key at all (see the `MediaItem` TSDoc).
+    year: 2026,
+    trackNumber: 1,
   },
   {
     // Entry 6: see the `demo://` paragraph in the block comment above. The id
@@ -204,6 +218,9 @@ export const TRACKS: readonly Track[] = [
     uri: 'demo://track/aari-aari',
     artworkUri:
       'https://c.saavncdn.com/905/Dhurandhar-The-Revenge-Aari-Aari-From-Dhurandhar-The-Revenge-Hindi-2026-20260312141004-500x500.jpg',
+    // Same audio as entry 5, so the same honest tags apply.
+    year: 2026,
+    trackNumber: 1,
   },
   {
     // Entry 7: the error path, on demand. See the block comment above — this

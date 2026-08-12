@@ -1,20 +1,30 @@
 /**
  * The queue — mpv's own playlist, which is what makes the transitions gapless.
  *
- * Feature map for this one card:
+ * Feature map for this one group:
  *
  * - **tap a row** → `Playback.jumpTo` (`playlist.jumpTo`, behind the audio-focus
  *   gate, and never restarting the entry that is already open);
- * - **"Next"** → `playlist.add(uri, { position: 'next' })`, one atomic mpv
- *   `insert-next`. Press it on row 6 (the `demo://` entry) to insert a
- *   resolver-backed source — the combination most likely to be wrong;
- * - **Shuffle / Undo / Clear** → `playlist.shuffle`, `playlist.unshuffle` (one
- *   level of undo only — mpv's limitation, not ours) and `playlist.clear`
- *   (which keeps the entry that is playing).
+ * - **`⤴`** → `playlist.add(uri, { position: 'next' })`, one atomic mpv
+ *   `insert-next`. Press it on the `demo://` row to insert a resolver-backed
+ *   source — the combination most likely to be wrong;
+ * - **`⤵`** → `playlist.add(uri)`, the plain append — the other insert
+ *   position, so both cells of `loadfile`'s table are one tap away;
+ * - **`✕`** → `playlist.remove(index)`. Removing the current entry stops it
+ *   and starts the next — mpv's rule, stated in the footnote;
+ * - **Clear** → `playlist.clear()` (which keeps the entry that is playing).
  *
- * The rows are drawn from the app's *mirror* of mpv's playlist, rebuilt from
- * `playlist/N/filename` after every edit — see `Playback.#syncQueue` for why
- * that has to be read back rather than assumed.
+ * Shuffle lives with repeat in `PlaybackModes` now — it is a broadcast *mode*
+ * shared with the notification, not a queue edit button, even though under the
+ * hood it performs one (see `Playback.setShuffleEnabled`).
+ *
+ * The rows are drawn from the app's *mirror* of mpv's playlist, re-read after
+ * every `queueChanged` — see `QueueMirror` for why that is a pull, not a push.
+ *
+ * Visually: no row boxes. Rows are separated by hairlines, the current row is
+ * marked by the accent title and the ▶/❚❚ glyph, and the row actions are
+ * quiet glyphs — each its own hit target so a fat thumb cannot start the track
+ * it meant to queue.
  */
 import React from 'react'
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
@@ -51,8 +61,8 @@ export const QueueList = React.memo(function QueueList({
   ready,
   onJump,
   onPlayNext,
-  onShuffle,
-  onUnshuffle,
+  onAddLast,
+  onRemove,
   onClear,
 }: {
   queue: readonly QueueRow[]
@@ -61,8 +71,8 @@ export const QueueList = React.memo(function QueueList({
   ready: boolean
   onJump: (index: number) => void
   onPlayNext: (track: Track) => void
-  onShuffle: () => void
-  onUnshuffle: () => void
+  onAddLast: (track: Track) => void
+  onRemove: (index: number) => void
   onClear: () => void
 }): React.JSX.Element {
   return (
@@ -74,7 +84,7 @@ export const QueueList = React.memo(function QueueList({
         </Text>
       }
     >
-      <View style={styles.rows}>
+      <View>
         {queue.map((row, position) => (
           <Row
             key={rowKey(row, position)}
@@ -83,21 +93,22 @@ export const QueueList = React.memo(function QueueList({
             current={position === index}
             playing={playing}
             ready={ready}
+            first={position === 0}
             onJump={onJump}
             onPlayNext={onPlayNext}
+            onAddLast={onAddLast}
+            onRemove={onRemove}
           />
         ))}
       </View>
 
       <ChipRow>
-        <Chip label="Shuffle" disabled={!ready} onPress={onShuffle} />
-        <Chip label="Undo shuffle" disabled={!ready} onPress={onUnshuffle} />
         <Chip label="Clear" tone="danger" disabled={!ready} onPress={onClear} />
       </ChipRow>
       <Detail>
-        Shuffle moves the playing entry too — mpv keeps the *entry* current, not
-        the index, so the music does not stop but the cursor jumps. Undo is one
-        level deep. Clear keeps whatever is playing.
+        ⤴ inserts after the current entry (one atomic mpv insert-next), ⤵
+        appends, ✕ removes — removing the playing row starts the next one.
+        Clear keeps whatever is playing.
       </Detail>
     </Section>
   )
@@ -109,19 +120,25 @@ const Row = React.memo(function Row({
   current,
   playing,
   ready,
+  first,
   onJump,
   onPlayNext,
+  onAddLast,
+  onRemove,
 }: {
   track: Track
   position: number
   current: boolean
   playing: boolean
   ready: boolean
+  first: boolean
   onJump: (index: number) => void
   onPlayNext: (track: Track) => void
+  onAddLast: (track: Track) => void
+  onRemove: (index: number) => void
 }): React.JSX.Element {
   return (
-    <View style={[styles.row, current && styles.rowCurrent]}>
+    <View style={[styles.row, !first && styles.rowRule]}>
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ selected: current }}
@@ -138,38 +155,76 @@ const Row = React.memo(function Row({
         )}
 
         <View style={styles.rowText}>
-          <Text numberOfLines={1} style={[styles.rowTitle, current && styles.rowTitleCurrent]}>
-            {current ? (playing ? '▶ ' : '❚❚ ') : `${position + 1}. `}
+          <Text
+            numberOfLines={1}
+            style={[styles.rowTitle, current && styles.rowTitleCurrent]}
+          >
+            {current ? (playing ? '▶ ' : '❚❚ ') : ''}
             {track.title}
           </Text>
           <Text numberOfLines={1} style={styles.rowMeta}>
+            {/* The live badge, as type: red inline caps instead of a pill. */}
+            {track.isLive === true ? (
+              <Text style={styles.rowLive}>LIVE </Text>
+            ) : null}
             {track.album ?? track.artist}
           </Text>
         </View>
-
-        {track.live === true ? (
-          <View style={styles.liveTag}>
-            <Text style={styles.liveTagLabel}>LIVE</Text>
-          </View>
-        ) : null}
       </Pressable>
 
-      {/* Atomic insert-next. Deliberately its own hit target so a fat thumb
-          cannot start the track it meant to queue. */}
-      <Pressable
-        accessibilityRole="button"
+      {/* Row actions: insert-next, append, remove. Separate hit targets from
+          the row itself, so queueing never accidentally jumps. */}
+      <RowAction
+        glyph="⤴"
         accessibilityLabel={`Play ${track.title} next`}
         disabled={!ready}
         onPress={() => onPlayNext(track)}
-        style={({ pressed }) => [styles.nextButton, pressed && styles.pressed]}
-      >
-        <Text style={styles.nextLabel}>Next</Text>
-      </Pressable>
+      />
+      <RowAction
+        glyph="⤵"
+        accessibilityLabel={`Add ${track.title} to the end`}
+        disabled={!ready}
+        onPress={() => onAddLast(track)}
+      />
+      <RowAction
+        glyph="✕"
+        accessibilityLabel={`Remove ${track.title}`}
+        disabled={!ready}
+        onPress={() => onRemove(position)}
+      />
     </View>
   )
 })
 
-const THUMB = 44
+function RowAction({
+  glyph,
+  accessibilityLabel,
+  disabled,
+  onPress,
+}: {
+  glyph: string
+  accessibilityLabel: string
+  disabled: boolean
+  onPress: () => void
+}): React.JSX.Element {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.action,
+        disabled && styles.dim,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={styles.actionGlyph}>{glyph}</Text>
+    </Pressable>
+  )
+}
+
+const THUMB = 40
 
 const styles = StyleSheet.create({
   counter: {
@@ -177,21 +232,20 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     color: COLORS.muted,
   },
-  rows: { gap: SPACE.xs },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: RADIUS.md,
-    backgroundColor: COLORS.surfaceSunken,
-    overflow: 'hidden',
   },
-  rowCurrent: { backgroundColor: COLORS.surfaceActive },
+  rowRule: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.borderSoft,
+  },
   rowMain: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACE.md,
-    padding: SPACE.sm,
+    paddingVertical: SPACE.sm + 2,
   },
   thumb: { width: THUMB, height: THUMB, borderRadius: RADIUS.sm },
   thumbEmpty: {
@@ -199,30 +253,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: COLORS.surface,
   },
-  thumbGlyph: { fontSize: 18, color: COLORS.border },
+  thumbGlyph: { fontSize: 16, color: COLORS.border },
   rowText: { flex: 1, gap: 1 },
   rowTitle: { fontSize: TYPE.body, fontWeight: '500', color: COLORS.text },
   rowTitleCurrent: { color: COLORS.accentBright, fontWeight: '700' },
   rowMeta: { fontSize: TYPE.micro, color: COLORS.muted },
-  liveTag: {
+  rowLive: { color: COLORS.live, fontWeight: '800', letterSpacing: 0.8 },
+  action: {
     paddingHorizontal: SPACE.sm,
-    paddingVertical: 2,
-    borderRadius: RADIUS.pill,
-    backgroundColor: COLORS.live,
+    paddingVertical: SPACE.md,
   },
-  liveTagLabel: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    color: COLORS.onAccent,
-  },
-  nextButton: {
-    alignSelf: 'stretch',
-    justifyContent: 'center',
-    paddingHorizontal: SPACE.md,
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: COLORS.borderSoft,
-  },
-  nextLabel: { fontSize: TYPE.micro, fontWeight: '600', color: COLORS.muted },
+  actionGlyph: { fontSize: TYPE.body, color: COLORS.muted },
+  dim: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
 })

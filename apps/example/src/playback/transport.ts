@@ -11,7 +11,7 @@
  * unit — the media handler calls exactly these methods — so there is one
  * implementation of "play" in the app, not one per surface.
  */
-import type { Player } from '@rn-media/player'
+import type { LoopMode, Player } from '@rn-media/player'
 import { AudioSession } from '@rn-media/audio-session'
 
 export interface TransportHooks {
@@ -120,6 +120,19 @@ export class Transport {
 
   setRate(rate: number): void {
     this.#hooks.player()?.setRate(rate)
+  }
+
+  /**
+   * Repeat, in mpv's vocabulary (`off`/`track`/`playlist`).
+   *
+   * Not a sound-starting call, so no focus gate. `loop` is an observed
+   * property, so the confirmation comes back through the state snapshot — the
+   * session bridge re-broadcasts it as `repeatMode`, which is what flips the
+   * repeat icon on every remote surface *and* the in-app toggle. One write,
+   * every reader.
+   */
+  setLoop(mode: LoopMode): void {
+    this.#hooks.player()?.setLoop(mode)
   }
 
   /**
