@@ -5,6 +5,7 @@ import com.margelo.nitro.rnmediamediasession.MediaCapability
 import com.margelo.nitro.rnmediamediasession.MediaControl
 import com.margelo.nitro.rnmediamediasession.MediaCustomAction
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
+import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import com.margelo.nitro.rnmediamediasession.NativePlaybackState
 import com.margelo.nitro.rnmediamediasession.PositionAnchor
@@ -93,6 +94,10 @@ internal data class Snapshot(
   /** Index into [queue], or `-1` when playback is not queue-backed. */
   val queueIndex: Int,
   val errorMessage: String?,
+  /** Repeat mode as last broadcast. Drives `State.Builder.setRepeatMode`. */
+  val repeatMode: MediaRepeatMode,
+  /** Shuffle state as last broadcast. Drives `State.Builder.setShuffleModeEnabled`. */
+  val shuffleEnabled: Boolean,
   val item: NativeMediaItem?,
   val queue: List<NativeMediaItem>,
 ) {
@@ -174,7 +179,61 @@ internal data class Snapshot(
     }
 
   val isSeekable: Boolean
+    // Capability-only, and deliberately still snapshot-wide: whether a *given*
+    // entry is seekable additionally depends on that entry's own
+    // [effectiveDurationMs], which `BroadcastPlayer.mediaItemData` applies
+    // per-entry. Folding the current item's liveness in here would make one live
+    // track in a queue un-seek every other track in it.
     get() = MediaCapability.SEEK in capabilities
+
+  /** The entry the timeline is currently on, already enriched. */
+  val currentItem: NativeMediaItem?
+    get() = timeline.getOrNull(timelineIndex)
+
+  /**
+   * Milliseconds until the current item ends, or `null` when that is not
+   * computable from what has been broadcast.
+   *
+   * The whole of the end-of-track sleep timer's arithmetic, kept pure so it can
+   * be unit-tested on a plain JVM: given a snapshot and a monotonic `now`, when
+   * does the thing that is playing run out?
+   *
+   * `null` — "armed, deadline unknown" rather than "fire now" — in three cases,
+   * each of which is a real state and none of which is an error:
+   * - **no duration**: a live stream, or a track whose duration the app has not
+   *   broadcast yet (which is the normal window right after a track change);
+   * - **explicitly live**: `isLive` says there is no end to wait for;
+   * - **not advancing**: the anchor's rate is `0` (paused, buffering, stopped),
+   *   so the end is not approaching and any number would be a guess about when
+   *   the user presses play.
+   *
+   * Never negative: a projection that has already run past the duration means
+   * the end is due now, and `0` is how that is said.
+   */
+  fun trackEndDelayMs(now: Long): Long? {
+    if (anchor.rate <= 0f) return null
+    val item = currentItem ?: return null
+    val durationMs = item.effectiveDurationMs ?: return null
+    if (durationMs <= 0L) return null
+    val remaining = durationMs - anchor.projectMs(now)
+    // Divided by the rate: at 2× a minute of audio arrives in thirty seconds,
+    // and a sleep timer that ignores that fires a minute late.
+    return (remaining / anchor.rate).toLong().coerceAtLeast(0L)
+  }
+
+  /**
+   * A stable identity for "the item the end-of-track timer was armed against".
+   *
+   * Index *and* id, because either alone is wrong: ids legitimately repeat
+   * within a queue (see `NativeMediaItem.id`), and the index alone changes under
+   * a queue edit that did not change what is playing. The pair changes exactly
+   * when the thing playing changes, which is the event the timer is waiting for.
+   */
+  val currentItemKey: String?
+    get() = currentItem?.let { "$timelineIndex:${it.id}" }
+
+  /** Convenience for [trackEndDelayMs] on the process's monotonic clock. */
+  fun trackEndDelayMs(): Long? = trackEndDelayMs(SystemClock.elapsedRealtime())
 
   companion object {
     val EMPTY = Snapshot(
@@ -188,11 +247,78 @@ internal data class Snapshot(
       compactControlIndices = emptyList(),
       queueIndex = -1,
       errorMessage = null,
+      repeatMode = MediaRepeatMode.OFF,
+      shuffleEnabled = false,
       item = null,
       queue = emptyList(),
     )
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/*                        End-of-track timer: the policy                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a broadcast should do to an **armed** end-of-track sleep timer.
+ *
+ * Extracted from [MediaSessionController] so the decision — the only part of the
+ * feature with any branching in it — is a pure function of two nullable strings
+ * and can be unit-tested on a plain JVM. What is left behind in the controller
+ * is a `Handler` post and a `when`, which is exactly the part that needs a
+ * device.
+ */
+internal sealed interface TrackEndAction {
+  /**
+   * The item the timer was waiting on is gone — it finished and the app
+   * advanced, or the user skipped, or the media item was cleared. "After this
+   * one" has happened; fire.
+   */
+  object Fire : TrackEndAction
+
+  /**
+   * Keep waiting, and re-aim the deadline.
+   *
+   * @param latchTo non-null when this broadcast is the first to name an item
+   * since the timer was armed — arming over silence latches onto whatever turns
+   * up rather than firing because "the item changed" from nothing to something.
+   */
+  data class Wait(val latchTo: String?) : TrackEndAction
+}
+
+/**
+ * The end-of-track timer's whole decision, as a pure function.
+ *
+ * @param latchedKey the [Snapshot.currentItemKey] the timer is waiting on, or
+ * `null` for "armed, nothing latched yet". A single nullable field rather than a
+ * key plus a `latched` boolean, deliberately: the two-field form let the pair
+ * drift out of step — a fired timer used to leave `latched = true` with a stale
+ * key behind it, so the *next* arm could see "the item changed" against an item
+ * from a previous session and pause playback at the instant of arming. One field
+ * cannot be half-reset.
+ * @param currentKey the key of what is playing now, or `null` for nothing.
+ */
+internal fun trackEndAction(latchedKey: String?, currentKey: String?): TrackEndAction = when {
+  // Armed over silence (or before the first broadcast): latch onto the first
+  // item to appear, and keep waiting when there still is none.
+  latchedKey == null -> TrackEndAction.Wait(latchTo = currentKey)
+  // Same item, including "same item, new duration/position/rate" — the ordinary
+  // case, and the one that happens on every broadcast of a track playing out.
+  currentKey == latchedKey -> TrackEndAction.Wait(latchTo = null)
+  else -> TrackEndAction.Fire
+}
+
+/**
+ * The duration to act on, in milliseconds, or `null` when there is none.
+ *
+ * `isLive` wins over a duration the app also sent. Until it existed, "no
+ * duration" was the only way to say live — which conflated "this is live" with
+ * "I don't know it yet" — so an app that knows both facts can now state them
+ * both, and everything downstream (timeline `isDynamic`, seekability, the
+ * end-of-track sleep timer) reads this one property rather than re-deciding.
+ */
+internal val NativeMediaItem.effectiveDurationMs: Long?
+  get() = if (isLive == true) null else duration?.toLong()
 
 /**
  * Overlay the `setMediaItem` channel onto the queue entry describing the same
@@ -235,6 +361,21 @@ internal fun NativeMediaItem.enrichedWith(item: NativeMediaItem): NativeMediaIte
     artworkUri = item.artworkUri ?: artworkUri,
     duration = item.duration ?: duration,
     genre = item.genre ?: genre,
+    // Same field-by-field rule for every extended tag: what the item carries
+    // wins, what it omits falls back. Listed explicitly rather than reflected
+    // over so that adding a field to the struct is a compile error here — this
+    // merge silently dropping a new field is exactly the defect the merge was
+    // introduced to fix.
+    albumArtist = item.albumArtist ?: albumArtist,
+    trackNumber = item.trackNumber ?: trackNumber,
+    discNumber = item.discNumber ?: discNumber,
+    year = item.year ?: year,
+    subtitle = item.subtitle ?: subtitle,
+    isLive = item.isLive ?: isLive,
+    // Replaced wholesale, not merged key-by-key: `extras` is one opaque payload
+    // belonging to the app, and half of an old payload mixed with half of a new
+    // one is a value the app never wrote.
+    extras = item.extras ?: extras,
   )
 
 /**
@@ -261,6 +402,8 @@ internal fun Snapshot.withPlaybackState(
       ?: state.controls.indices.take(MAX_COMPACT_CONTROLS),
   queueIndex = state.queueIndex?.toInt() ?: -1,
   errorMessage = state.errorMessage,
+  repeatMode = state.repeatMode,
+  shuffleEnabled = state.shuffleEnabled,
 )
 
 internal const val MAX_COMPACT_CONTROLS = 3

@@ -377,10 +377,20 @@ loudness-aware fade points recorded as the only worthwhile revisit).
 4. **Quick wins**: `setLoudnessNormalization()` (loudnorm is already
    compiled in), LRC lyrics utilities + `useLyrics` (pure TS over position
    projection), `usePrefetchStatus` hook.
-5. **Investigations**: pitch control via an LGPL filter path (rubberband is
-   GPL — banned; needs asetrate/atempo flags = a cheap workshop flags
-   release; ship only if quality is honest), and output-device routing
-   (Android AudioDeviceInfo/iOS route picker). Casting is DEFERRED WITH
+5. **Investigations**: ~~pitch control via an LGPL filter path~~ — **CLOSED,
+   the premise was stale.** mpv gained a first-class `--pitch` option in 0.40
+   and we ship 0.41.0, so this needed no filter, no engine flag and no GPL
+   exposure: it is one property write in `0.01 … 100` that "does not affect
+   playback speed" and drives mpv's own `scaletempo2`, already in the chain for
+   speed. Shipped as `player.setPitch(ratio)` + `state.pitch`; on-device
+   quality was the honest gate and is verified. Still open: output-device
+   routing (Android AudioDeviceInfo/iOS route picker), and **embedded cover-art
+   extraction** — the decoders are compiled, but `audio-display=no` means mpv
+   never selects the attached-picture track (`player/loadfile.c:617`) and
+   `screenshot-raw` needs a video output this core never creates, so there is
+   no client-API path at all. Native work (decode the attachment ourselves, or
+   a fork-side property), and the README formats claim is softened until it
+   lands. Casting is DEFERRED WITH
    REASON: media3 CastPlayer abandons our engine and AirPlay-from-mpv does
    not exist — fails the parity gate; revisit only if a documented
    platform-shaped feature becomes acceptable.

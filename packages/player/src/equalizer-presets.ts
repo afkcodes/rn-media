@@ -153,7 +153,9 @@ const CURVES = {
   // Lift the presence band and pull back the low-mids that mask it — a cut
   // where the competition is does more for a vocal than a boost on the vocal.
   vocalBoost: ['Vocal Boost', [-2, -2, -1, 0, 1.5, 3, 3, 2, 0.5, -0.5]],
-} as const satisfies Readonly<Record<string, readonly [string, readonly number[]]>>
+} as const satisfies Readonly<
+  Record<string, readonly [string, readonly number[]]>
+>
 
 /** Identifier of a built-in preset. */
 export type EqualizerPresetId = keyof typeof CURVES
@@ -377,7 +379,10 @@ export function equalizerPresetChain(
   const preampDb = options.preampDb ?? 0
   const bandwidthOctaves = options.bandwidthOctaves ?? 1
   const bands = gainsDb
-    .map((gain, index) => ({ gain, frequency: EQUALIZER_BANDS[index] as number }))
+    .map((gain, index) => ({
+      gain,
+      frequency: EQUALIZER_BANDS[index] as number,
+    }))
     .filter((band) => band.gain !== 0)
 
   if (bands.length === 0 && preampDb === 0) return []

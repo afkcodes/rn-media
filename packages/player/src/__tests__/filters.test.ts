@@ -68,9 +68,7 @@ describe('compileAudioFilters', () => {
       AudioFilters.equalizer({ frequency: 5000, width: 2, gain: -12 }),
       AudioFilters.crossfeed({ strength: 0.4 }),
     ])
-    expect(af).toBe(
-      'equalizer=f=5000:t=q:w=2:g=-12,crossfeed=strength=%3%0.4'
-    )
+    expect(af).toBe('equalizer=f=5000:t=q:w=2:g=-12,crossfeed=strength=%3%0.4')
   })
 
   it('emits mpv label and disable markers', () => {
@@ -200,10 +198,7 @@ describe('validation', () => {
       () => AudioFilters.loudnorm({ integrated: -100 }),
       'invalid-state'
     )
-    expectPlayerError(
-      () => AudioFilters.limiter({ limit: 2 }),
-      'invalid-state'
-    )
+    expectPlayerError(() => AudioFilters.limiter({ limit: 2 }), 'invalid-state')
   })
 
   it('rejects non-finite numbers', () => {
@@ -233,7 +228,7 @@ describe('validation', () => {
         AudioFilters.equalizer({
           frequency: 1000,
           gain: 3,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
           widthType: 'z' as any,
         }),
       'invalid-state'
@@ -256,7 +251,6 @@ describe('validation', () => {
     expectPlayerError(
       () =>
         assertValidAudioFilters([
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           { name: 'crossfeed', options: [['strength'] as any] },
         ]),
       'invalid-state'
@@ -275,9 +269,7 @@ describe('AudioFilters.custom', () => {
         gain_entry: 'entry(100,-3);entry(1000,0)',
       }),
     ])
-    expect(af).toBe(
-      'firequalizer=gain_entry=%27%entry(100,-3);entry(1000,0)'
-    )
+    expect(af).toBe('firequalizer=gain_entry=%27%entry(100,-3);entry(1000,0)')
   })
 
   it('stringifies numbers and booleans the way ffmpeg parses them', () => {

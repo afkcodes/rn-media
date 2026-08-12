@@ -3,9 +3,16 @@ import type {
   MediaSessionHandlers,
   NativeMediaItem,
   NativePlaybackState,
+  NativeSleepTimerState,
   RnMediaMediaSession,
+  SleepTimerMode,
 } from '../specs/media-session.nitro'
-import type { MediaHandler, MediaItem, PlaybackState } from '../types'
+import type {
+  MediaHandler,
+  MediaItem,
+  MediaRepeatMode,
+  PlaybackState,
+} from '../types'
 
 /**
  * In-memory stand-in for the Kotlin/Swift hybrid object.
@@ -46,8 +53,8 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
     this.playbackStates.push(state)
   }
 
-  setMediaItem(item?: NativeMediaItem): void {
-    this.mediaItems.push(item)
+  setMediaItem(mediaItem?: NativeMediaItem): void {
+    this.mediaItems.push(mediaItem)
   }
 
   setQueue(items: NativeMediaItem[]): void {
@@ -65,27 +72,52 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
 
   /** Every `setSleepTimer` argument, in order. */
   readonly sleepTimers: number[] = []
+  setSleepTimerToTrackEndCalls = 0
   cancelSleepTimerCalls = 0
   /** What `getSleepTimerRemaining()` reports. Armed by `setSleepTimer`. */
   private remaining: number | undefined
+  private mode: SleepTimerMode | undefined
 
   setSleepTimer(seconds: number): void {
     this.sleepTimers.push(seconds)
     this.remaining = seconds
+    this.mode = 'duration'
   }
+
+  /**
+   * The fake stands in for a native timer that computes its own deadline from
+   * the broadcasts, so it arms with *no* remaining — which is also the case the
+   * structured `getSleepTimer()` exists to make expressible. Tests that want a
+   * deadline set {@link trackEndRemaining}.
+   */
+  setSleepTimerToTrackEnd(): void {
+    this.setSleepTimerToTrackEndCalls += 1
+    this.remaining = this.trackEndRemaining
+    this.mode = 'trackEnd'
+  }
+
+  /** What a `trackEnd` timer reports as remaining, if anything. */
+  trackEndRemaining: number | undefined
 
   cancelSleepTimer(): void {
     this.cancelSleepTimerCalls += 1
     this.remaining = undefined
+    this.mode = undefined
   }
 
   getSleepTimerRemaining(): number | undefined {
     return this.remaining
   }
 
+  getSleepTimer(): NativeSleepTimerState | undefined {
+    if (this.mode === undefined) return undefined
+    return { mode: this.mode, remainingSeconds: this.remaining }
+  }
+
   /** Test driver: "the platform timer elapsed". Mirrors the native ordering. */
   fireSleepTimer(): void {
     this.remaining = undefined
+    this.mode = undefined
     this.emit().onSleepTimer()
   }
 
@@ -173,6 +205,12 @@ export class RecordingHandler implements MediaHandler {
   setRate(rate: number) {
     return this.record(`setRate(${rate})`)
   }
+  onSetRepeatMode(mode: MediaRepeatMode) {
+    return this.record(`onSetRepeatMode(${mode})`)
+  }
+  onSetShuffle(enabled: boolean) {
+    return this.record(`onSetShuffle(${enabled})`)
+  }
   onTaskRemoved() {
     return this.record('onTaskRemoved')
   }
@@ -183,7 +221,9 @@ export class RecordingHandler implements MediaHandler {
     return this.record('onPlaybackResumption')
   }
   customAction(name: string, extras?: Record<string, unknown>) {
-    return this.record(`customAction(${name},${JSON.stringify(extras) ?? 'undefined'})`)
+    return this.record(
+      `customAction(${name},${JSON.stringify(extras) ?? 'undefined'})`
+    )
   }
   getChildren(parentId: string): Promise<MediaItem[]> {
     this.calls.push(`getChildren(${parentId})`)
@@ -196,7 +236,10 @@ export class RecordingHandler implements MediaHandler {
 }
 
 /** A valid minimal media item. */
-export function item(id: string, overrides: Partial<MediaItem> = {}): MediaItem {
+export function item(
+  id: string,
+  overrides: Partial<MediaItem> = {}
+): MediaItem {
   return { id, title: `Title ${id}`, ...overrides }
 }
 

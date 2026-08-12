@@ -20,7 +20,10 @@ import java.util.Objects
 data class IosMediaSessionConfig(
   @DoNotStrip
   @Keep
-  val artworkCacheSize: Double?
+  val artworkCacheSize: Double?,
+  @DoNotStrip
+  @Keep
+  val supportedPlaybackRates: DoubleArray?
 ) {
   /* primary constructor */
 
@@ -28,11 +31,13 @@ data class IosMediaSessionConfig(
     if (this === other) return true
     if (other !is IosMediaSessionConfig) return false
     return Objects.deepEquals(this.artworkCacheSize, other.artworkCacheSize)
+      && Objects.deepEquals(this.supportedPlaybackRates, other.supportedPlaybackRates)
   }
 
   override fun hashCode(): Int {
     return arrayOf<Any?>(
-      artworkCacheSize
+      artworkCacheSize,
+      supportedPlaybackRates
     ).contentDeepHashCode()
   }
 
@@ -44,8 +49,8 @@ data class IosMediaSessionConfig(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(artworkCacheSize: Double?): IosMediaSessionConfig {
-      return IosMediaSessionConfig(artworkCacheSize)
+    private fun fromCpp(artworkCacheSize: Double?, supportedPlaybackRates: DoubleArray?): IosMediaSessionConfig {
+      return IosMediaSessionConfig(artworkCacheSize, supportedPlaybackRates)
     }
   }
 }

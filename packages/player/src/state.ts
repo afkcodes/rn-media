@@ -124,8 +124,36 @@ export interface PlayerState {
    * and {@link projectPosition} is what moves smoothly.
    */
   readonly bufferedPosition?: number
+  /**
+   * How full the network cache is on its way back to playing, in percent —
+   * mpv's `cache-buffering-state`, and **present only while
+   * `status === 'buffering'`**.
+   *
+   * @remarks
+   * **What it measures, exactly.** mpv 0.41.0 `input.rst`: "The percentage
+   * (0-100) of the cache fill status *until the player will unpause*". It is a
+   * progress bar for the current stall, not a gauge of how much audio is
+   * buffered ahead — that is {@link bufferedPosition}. Once playback resumes
+   * the number stops meaning anything, which is why this field is dropped the
+   * moment the status leaves `'buffering'` rather than left at a stale `100`.
+   *
+   * **Quantised, deliberately**, exactly like {@link bufferedPosition}: mpv
+   * republishes the value continuously while a stall fills, and each accepted
+   * change is a fresh snapshot and a full listener fan-out. Only movements of
+   * at least {@link BUFFERING_PERCENT_STEP} are adopted, so a spinner label
+   * updates a handful of times per stall instead of dozens of times per second.
+   */
+  readonly bufferingPercent?: number
   /** Playback rate multiplier (mpv's `speed`; mpv accepts 0.01–100). */
   readonly rate: number
+  /**
+   * Pitch multiplier (mpv's `pitch`); `1` is the file's own pitch.
+   *
+   * Independent of {@link rate} — see {@link Player.setPitch} for the ratio ↔
+   * semitone conversion and for why mpv's own `scaletempo2` bounds the useful
+   * range.
+   */
+  readonly pitch: number
   /** Volume normalised to `0..1`; `1` is mpv's `volume=100` (unattenuated). */
   readonly volume: number
   /** Whether output is muted (mpv's `mute`). */
@@ -136,6 +164,50 @@ export interface PlayerState {
   readonly loopRaw: LoopRaw
   /** Playlist cursor. */
   readonly playlist: PlaylistPosition
+  /**
+   * Whether {@link PlaylistApi.next} would move to another entry.
+   *
+   * @remarks
+   * **Loop-aware, and computed here so it cannot be got wrong per screen.**
+   * The rules, each read off mpv's own behaviour rather than guessed:
+   *
+   * - `loop: 'playlist'` — mpv's `mp_next_file` consults `--loop-playlist` and
+   *   wraps, so this is `true` for any non-empty queue, including a queue of
+   *   one (which re-plays that entry).
+   * - `loop: 'track'` — `loop-file` does **not** affect `playlist-next`, so
+   *   this follows the plain rule below. Repeat-one does not remove the next
+   *   button.
+   * - otherwise — `true` while the cursor is before the last entry.
+   *
+   * It travels in the snapshot with {@link hasPrevious} so the pair is always
+   * one coherent reading; deriving them separately in a component is how a UI
+   * ends up briefly offering a skip that does nothing.
+   */
+  readonly hasNext: boolean
+  /**
+   * Whether {@link PlaylistApi.previous} would move to another entry.
+   *
+   * Same loop rules as {@link hasNext}, mirrored. Note this describes the
+   * *queue*, not the restart-or-previous behaviour: with the default
+   * `restartThreshold`, `previous()` is still useful at the head of a queue
+   * because it restarts the current entry. See {@link PlaylistApi.previous}.
+   */
+  readonly hasPrevious: boolean
+  /**
+   * 0-based index of the chapter the position is inside — mpv's `chapter`.
+   *
+   * @remarks
+   * `undefined` when the current entry has no chapters at all (mpv reports the
+   * property unavailable), which is the common case and is how a UI should
+   * decide whether to draw chapter controls. mpv also uses `-1` for "the
+   * position is before the start of the first chapter", and that value is
+   * passed through as-is rather than smoothed to `0`, because they are
+   * genuinely different positions.
+   *
+   * Read the chapters themselves with {@link Player.getChapters}; this is the
+   * cursor, exactly as {@link playlist} is the cursor for the queue.
+   */
+  readonly chapter?: number
   /**
    * The failure that produced `status: 'error'`. Present iff status is
    * `'error'`.
@@ -330,11 +402,14 @@ export function createInitialState(now: number): PlayerState {
     playing: false,
     positionAnchor: { position: 0, timestamp: now, rate: 1 },
     rate: 1,
+    pitch: 1,
     volume: 1,
     muted: false,
     loop: 'off',
     loopRaw: { file: 'no', playlist: 'no' },
     playlist: { index: -1, count: 0 },
+    hasNext: false,
+    hasPrevious: false,
     seeking: false,
     isLive: false,
     coreIdle: true,
@@ -364,6 +439,24 @@ export function createInitialState(now: number): PlayerState {
 export const BUFFERED_POSITION_STEP = 1
 
 /**
+ * How far {@link PlayerState.bufferingPercent} must move before the reducer
+ * publishes it, in percentage points.
+ *
+ * @remarks
+ * Same problem as {@link BUFFERED_POSITION_STEP} and the same answer: mpv
+ * republishes `cache-buffering-state` continuously while a stall is filling, and
+ * an unquantised feed would turn a stall into a state ticker — the one thing
+ * this library's event contract promises not to be.
+ *
+ * `5` is chosen against what the number is *for*: a "buffering… 45%" label or a
+ * ring, on a stall that typically lasts a second or two. Twenty updates is more
+ * than a human can read; two hundred is a re-render storm. `0` and `100` are
+ * never quantised away — the first is the start of a stall and the second is
+ * the end of one, and both are states rather than samples.
+ */
+export const BUFFERING_PERCENT_STEP = 5
+
+/**
  * Whether `next` is the moment the buffer reached the end of a finite entry.
  *
  * The one update that must never be quantised away: "fully buffered" is a
@@ -387,6 +480,13 @@ function crossesEndOfBuffer(state: PlayerState, next: number): boolean {
  */
 function isAdvancing(state: PlayerState): boolean {
   return state.playing && state.status === 'ready' && !state.seeking
+}
+
+/** mpv's documented `0-100` domain for `cache-buffering-state`, enforced here. */
+function clampPercent(value: number): number {
+  if (Number.isNaN(value)) return 0
+  if (value < 0) return 0
+  return value > 100 ? 100 : value
 }
 
 function clampPosition(position: number, duration: number | undefined): number {
@@ -512,6 +612,48 @@ function clearError(state: PlayerState): PlayerState {
  * there, but a stale `false` must never be readable as "the idle core is a
  * live stream".
  */
+/**
+ * Re-derive {@link PlayerState.hasNext} / {@link PlayerState.hasPrevious} from
+ * the cursor and the loop mode.
+ *
+ * Applied to the output of every reduction, exactly like {@link withLiveness},
+ * so the pair can never disagree with the `playlist`/`loop` it was computed
+ * from — which is the whole reason it is state rather than a helper an app
+ * calls. Returns the same object identity when nothing changes.
+ */
+function withSkipCapability(state: PlayerState): PlayerState {
+  const { index, count } = state.playlist
+  const loaded = index >= 0 && count > 0
+  // `loop-playlist` wraps in both directions (mpv's `mp_next_file` consults it
+  // for either sign of the step), so any non-empty queue can skip both ways.
+  // `loop-file` is deliberately not consulted: it repeats the *file* and does
+  // not change what `playlist-next` does.
+  const wraps = loaded && state.loop === 'playlist'
+  const hasNext = wraps || (loaded && index + 1 < count)
+  const hasPrevious = wraps || (loaded && index > 0)
+  if (hasNext === state.hasNext && hasPrevious === state.hasPrevious) {
+    return state
+  }
+  return { ...state, hasNext, hasPrevious }
+}
+
+/**
+ * Drop {@link PlayerState.bufferingPercent} whenever the player is not stalled.
+ *
+ * The value only means something while `status === 'buffering'` (mpv: "until
+ * the player will unpause"), and a stall ends by *resuming*, which is a status
+ * change and not a further `cache-buffering-state` event — so without this pass
+ * a snapshot would keep reporting the last fill percentage of a stall that is
+ * already over.
+ */
+function withBufferingPercent(state: PlayerState): PlayerState {
+  if (state.bufferingPercent === undefined) return state
+  if (state.status === 'buffering') return state
+  const next = { ...state }
+  delete (next as { bufferingPercent?: number }).bufferingPercent
+  return next
+}
+
 function withLiveness(state: PlayerState): PlayerState {
   const isLive = state.seekable === false && !state.idleActive
   if (isLive === state.isLive) return state
@@ -544,6 +686,49 @@ function reduceProperty(
       if (rate === undefined || rate === state.rate) return state
       // Rebase with the OLD rate first, then adopt the new one.
       return withStatus({ ...rebase(state, context.now, rate), rate })
+    }
+
+    case MpvProperty.pitch: {
+      const pitch = asNumber(value)
+      if (pitch === undefined || pitch === state.pitch) return state
+      // Pitch does not move the clock: mpv's own manual is explicit that it
+      // "does not affect playback speed", so the position anchor is untouched.
+      return { ...state, pitch }
+    }
+
+    case MpvProperty.chapter: {
+      const chapter = asNumber(value)
+      const next = chapter === undefined ? undefined : Math.trunc(chapter)
+      if (next === state.chapter) return state
+      if (next === undefined) {
+        const dropped = { ...state }
+        delete (dropped as { chapter?: number }).chapter
+        return dropped
+      }
+      return { ...state, chapter: next }
+    }
+
+    case MpvProperty.cacheBufferingState: {
+      // Only meaningful while the player is actually stalled — mpv's own
+      // wording is "until the player will unpause". Outside a stall the value
+      // is not published at all (and `withBufferingPercent` drops any that
+      // survived a status change), which is what keeps this from becoming a
+      // second, worse buffered-position feed.
+      if (state.status !== 'buffering') return state
+      const percent = asNumber(value)
+      if (percent === undefined) {
+        if (state.bufferingPercent === undefined) return state
+        const dropped = { ...state }
+        delete (dropped as { bufferingPercent?: number }).bufferingPercent
+        return dropped
+      }
+      const clamped = clampPercent(percent)
+      const previous = state.bufferingPercent
+      if (previous !== undefined && clamped !== 0 && clamped !== 100) {
+        if (Math.abs(clamped - previous) < BUFFERING_PERCENT_STEP) return state
+      }
+      if (clamped === previous) return state
+      return { ...state, bufferingPercent: clamped }
     }
 
     case MpvProperty.duration: {
@@ -620,11 +805,19 @@ function reduceProperty(
       const fileScoped = changed as {
         duration?: number
         bufferedPosition?: number
+        bufferingPercent?: number
+        chapter?: number
         title?: string
         seekable?: boolean
       }
       const reads = context.trackChange
       delete fileScoped.bufferedPosition
+      delete fileScoped.bufferingPercent
+      // The new entry's chapters are its own: mpv republishes `chapter` for it
+      // (`none` → `0` compares unequal, and so does `0` → `none`), but until it
+      // does, "the previous entry's chapter" is the one answer that is
+      // certainly wrong.
+      delete fileScoped.chapter
       if (reads?.duration !== undefined) fileScoped.duration = reads.duration
       else delete fileScoped.duration
       if (reads?.title !== undefined) fileScoped.title = reads.title
@@ -729,9 +922,14 @@ export function reducePlayerState(
   event: PlayerEvent,
   context: ReducerContext
 ): PlayerState {
-  // Liveness is derived, not reduced: every path funnels through one place so
-  // that `isLive` and the `duration` suppression can never be forgotten.
-  return withLiveness(reduceEvent(state, event, context))
+  // Everything derived funnels through one place, so no individual case has to
+  // remember it: liveness (and the `duration` suppression it implies), the
+  // skip-capability pair, and dropping a buffering percentage that outlived its
+  // stall. Each returns the same object identity when it changes nothing, so
+  // the reducer's no-op contract survives the chain.
+  return withBufferingPercent(
+    withSkipCapability(withLiveness(reduceEvent(state, event, context)))
+  )
 }
 
 /** The event-by-event half of {@link reducePlayerState}. */
@@ -757,11 +955,17 @@ function reduceEvent(
           rate: state.rate,
         },
         rate: state.rate,
+        // Global, not file-scoped: mpv's `--reset-on-next-file` resets nothing
+        // by default, so `speed`, `pitch` and `volume` genuinely survive a
+        // queue advance.
+        pitch: state.pitch,
         volume: state.volume,
         muted: state.muted,
         loop: state.loop,
         loopRaw: state.loopRaw,
         playlist: state.playlist,
+        hasNext: state.hasNext,
+        hasPrevious: state.hasPrevious,
         seeking: false,
         isLive: false,
         coreIdle: state.coreIdle,

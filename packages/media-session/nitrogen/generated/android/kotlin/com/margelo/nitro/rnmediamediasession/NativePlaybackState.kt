@@ -44,7 +44,13 @@ data class NativePlaybackState(
   val queueIndex: Double?,
   @DoNotStrip
   @Keep
-  val errorMessage: String?
+  val errorMessage: String?,
+  @DoNotStrip
+  @Keep
+  val repeatMode: MediaRepeatMode,
+  @DoNotStrip
+  @Keep
+  val shuffleEnabled: Boolean
 ) {
   /* primary constructor */
 
@@ -60,6 +66,8 @@ data class NativePlaybackState(
       && Objects.deepEquals(this.compactControlIndices, other.compactControlIndices)
       && Objects.deepEquals(this.queueIndex, other.queueIndex)
       && Objects.deepEquals(this.errorMessage, other.errorMessage)
+      && Objects.deepEquals(this.repeatMode, other.repeatMode)
+      && Objects.deepEquals(this.shuffleEnabled, other.shuffleEnabled)
   }
 
   override fun hashCode(): Int {
@@ -72,7 +80,9 @@ data class NativePlaybackState(
       customActions,
       compactControlIndices,
       queueIndex,
-      errorMessage
+      errorMessage,
+      repeatMode,
+      shuffleEnabled
     ).contentDeepHashCode()
   }
 
@@ -84,8 +94,8 @@ data class NativePlaybackState(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(status: MediaPlaybackStatus, position: PositionAnchor, bufferedPosition: Double?, controls: Array<MediaControl>, capabilities: Array<MediaCapability>, customActions: Array<MediaCustomAction>, compactControlIndices: DoubleArray?, queueIndex: Double?, errorMessage: String?): NativePlaybackState {
-      return NativePlaybackState(status, position, bufferedPosition, controls, capabilities, customActions, compactControlIndices, queueIndex, errorMessage)
+    private fun fromCpp(status: MediaPlaybackStatus, position: PositionAnchor, bufferedPosition: Double?, controls: Array<MediaControl>, capabilities: Array<MediaCapability>, customActions: Array<MediaCustomAction>, compactControlIndices: DoubleArray?, queueIndex: Double?, errorMessage: String?, repeatMode: MediaRepeatMode, shuffleEnabled: Boolean): NativePlaybackState {
+      return NativePlaybackState(status, position, bufferedPosition, controls, capabilities, customActions, compactControlIndices, queueIndex, errorMessage, repeatMode, shuffleEnabled)
     }
   }
 }

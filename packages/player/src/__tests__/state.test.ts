@@ -985,3 +985,209 @@ describe('PlayerState.error — the three automatic clears', () => {
     expect(state.error?.code).toBe('network')
   })
 })
+
+describe('pitch', () => {
+  it('adopts mpv’s pitch and starts at 1', () => {
+    expect(createInitialState(T0).pitch).toBe(1)
+    const state = run(createInitialState(T0), [
+      propertyEvent(MpvProperty.pitch, 1.5),
+    ])
+    expect(state.pitch).toBe(1.5)
+  })
+
+  it('does not move the position clock', () => {
+    // mpv is explicit that `pitch` "does not affect playback speed", so the
+    // anchor must not be rebased — a pitch change mid-track would otherwise
+    // freeze and re-time the projection for no reason.
+    const playing = run(createInitialState(T0), [
+      propertyEvent(MpvProperty.pause, false),
+      playbackRestartEvent(),
+    ])
+    const after = run(playing, [propertyEvent(MpvProperty.pitch, 2)], {
+      now: T0 + 5_000,
+    })
+    expect(after.positionAnchor).toBe(playing.positionAnchor)
+  })
+
+  it('survives a track change, like speed and volume do', () => {
+    // mpv's `--reset-on-next-file` resets nothing by default.
+    const pitched = run(createInitialState(T0), [
+      propertyEvent(MpvProperty.pitch, 1.2),
+    ])
+    expect(run(pitched, [startFileEvent()]).pitch).toBe(1.2)
+    expect(
+      run(pitched, [propertyEvent(MpvProperty.playlistPos, 1)]).pitch
+    ).toBe(1.2)
+  })
+
+  it('ignores an unavailable value rather than resetting', () => {
+    const pitched = run(createInitialState(T0), [
+      propertyEvent(MpvProperty.pitch, 1.2),
+    ])
+    expect(run(pitched, [propertyEvent(MpvProperty.pitch)]).pitch).toBe(1.2)
+  })
+})
+
+describe('hasNext / hasPrevious', () => {
+  /** A loaded queue with the cursor at `index` of `count`. */
+  function queue(index: number, count: number, loop = 'off'): PlayerState {
+    return run(createInitialState(T0), [
+      propertyEvent(MpvProperty.playlistCount, count),
+      propertyEvent(MpvProperty.playlistPos, index),
+      ...(loop === 'track'
+        ? [propertyEvent(MpvProperty.loopFile, 'inf')]
+        : loop === 'playlist'
+          ? [propertyEvent(MpvProperty.loopPlaylist, 'inf')]
+          : []),
+    ])
+  }
+
+  it('is false on an empty player', () => {
+    const state = createInitialState(T0)
+    expect(state.hasNext).toBe(false)
+    expect(state.hasPrevious).toBe(false)
+  })
+
+  it('follows the cursor with loop off', () => {
+    expect(queue(0, 3)).toMatchObject({ hasNext: true, hasPrevious: false })
+    expect(queue(1, 3)).toMatchObject({ hasNext: true, hasPrevious: true })
+    expect(queue(2, 3)).toMatchObject({ hasNext: false, hasPrevious: true })
+    expect(queue(0, 1)).toMatchObject({ hasNext: false, hasPrevious: false })
+  })
+
+  it('wraps in both directions when the playlist repeats', () => {
+    expect(queue(2, 3, 'playlist')).toMatchObject({
+      hasNext: true,
+      hasPrevious: true,
+    })
+    expect(queue(0, 3, 'playlist')).toMatchObject({
+      hasNext: true,
+      hasPrevious: true,
+    })
+    // A one-entry repeating queue still skips — to itself, which is what mpv
+    // does and what a UI should offer.
+    expect(queue(0, 1, 'playlist')).toMatchObject({
+      hasNext: true,
+      hasPrevious: true,
+    })
+  })
+
+  it('is unchanged by repeat-one', () => {
+    // `loop-file` repeats the file; it does not change what `playlist-next`
+    // does, so the skip buttons must not change either.
+    expect(queue(2, 3, 'track')).toMatchObject({
+      hasNext: false,
+      hasPrevious: true,
+    })
+    expect(queue(1, 3, 'track')).toMatchObject({
+      hasNext: true,
+      hasPrevious: true,
+    })
+  })
+
+  it('updates when the loop mode changes, without a cursor move', () => {
+    const last = queue(2, 3)
+    expect(last.hasNext).toBe(false)
+    const repeating = run(last, [
+      propertyEvent(MpvProperty.loopPlaylist, 'inf'),
+    ])
+    expect(repeating.hasNext).toBe(true)
+  })
+
+  it('keeps snapshot identity when nothing about the pair changed', () => {
+    const state = queue(1, 3)
+    expect(run(state, [propertyEvent(MpvProperty.volume, 50)])).not.toBe(state)
+    expect(run(state, [propertyEvent(MpvProperty.playlistPos, 1)])).toBe(state)
+  })
+})
+
+describe('bufferingPercent', () => {
+  /** A player stalled mid-playback: playing, core idle, not at EOF. */
+  function stalled(): PlayerState {
+    return run(createInitialState(T0), [
+      startFileEvent(),
+      playbackRestartEvent(),
+      propertyEvent(MpvProperty.pause, false),
+      propertyEvent(MpvProperty.coreIdle, true),
+    ])
+  }
+
+  it('is absent until the player actually stalls', () => {
+    const ready = run(createInitialState(T0), [
+      startFileEvent(),
+      playbackRestartEvent(),
+      propertyEvent(MpvProperty.pause, false),
+      propertyEvent(MpvProperty.coreIdle, false),
+      propertyEvent(MpvProperty.cacheBufferingState, 40),
+    ])
+    expect(ready.status).toBe('ready')
+    expect(ready.bufferingPercent).toBeUndefined()
+  })
+
+  it('publishes the fill percentage while buffering', () => {
+    const state = run(stalled(), [
+      propertyEvent(MpvProperty.cacheBufferingState, 40),
+    ])
+    expect(state.status).toBe('buffering')
+    expect(state.bufferingPercent).toBe(40)
+  })
+
+  it('quantises so a stall does not become a ticker', () => {
+    let state = run(stalled(), [
+      propertyEvent(MpvProperty.cacheBufferingState, 40),
+    ])
+    for (const value of [41, 42, 43, 44]) {
+      const next = run(state, [
+        propertyEvent(MpvProperty.cacheBufferingState, value),
+      ])
+      // Identity, not just equality: no fan-out happened at all.
+      expect(next).toBe(state)
+      state = next
+    }
+    state = run(state, [propertyEvent(MpvProperty.cacheBufferingState, 45)])
+    expect(state.bufferingPercent).toBe(45)
+  })
+
+  it('never quantises away the ends of a stall', () => {
+    const state = run(stalled(), [
+      propertyEvent(MpvProperty.cacheBufferingState, 98),
+    ])
+    expect(
+      run(state, [propertyEvent(MpvProperty.cacheBufferingState, 100)])
+        .bufferingPercent
+    ).toBe(100)
+    expect(
+      run(state, [propertyEvent(MpvProperty.cacheBufferingState, 0)])
+        .bufferingPercent
+    ).toBe(0)
+  })
+
+  it('clamps to mpv’s documented 0-100', () => {
+    expect(
+      run(stalled(), [propertyEvent(MpvProperty.cacheBufferingState, 140)])
+        .bufferingPercent
+    ).toBe(100)
+  })
+
+  it('is dropped the moment the stall ends', () => {
+    const buffering = run(stalled(), [
+      propertyEvent(MpvProperty.cacheBufferingState, 60),
+    ])
+    expect(buffering.bufferingPercent).toBe(60)
+    // Resuming is a status change, not another `cache-buffering-state` event —
+    // so without the derived drop this would report 60 % forever.
+    const resumed = run(buffering, [propertyEvent(MpvProperty.coreIdle, false)])
+    expect(resumed.status).toBe('ready')
+    expect(resumed.bufferingPercent).toBeUndefined()
+  })
+
+  it('is dropped when the queue moves on', () => {
+    const buffering = run(stalled(), [
+      propertyEvent(MpvProperty.cacheBufferingState, 60),
+    ])
+    expect(
+      run(buffering, [propertyEvent(MpvProperty.playlistPos, 1)])
+        .bufferingPercent
+    ).toBeUndefined()
+  })
+})

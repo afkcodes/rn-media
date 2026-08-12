@@ -7,7 +7,11 @@ import {
 } from '../audio-session'
 import { AudioSessionPresets } from '../presets'
 import type { AudioSessionApi } from '../types'
-import { beginInterruption, endInterruption, FakeNativeAudioSession } from './fakes'
+import {
+  beginInterruption,
+  endInterruption,
+  FakeNativeAudioSession,
+} from './fakes'
 
 let native: FakeNativeAudioSession
 let session: AudioSessionApi

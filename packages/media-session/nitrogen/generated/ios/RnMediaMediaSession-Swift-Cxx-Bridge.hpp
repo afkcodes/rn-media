@@ -20,8 +20,14 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaCapability; }
 namespace margelo::nitro::rnmediamediasession { enum class MediaControl; }
 // Forward declaration of `MediaCustomAction` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
+// Forward declaration of `MediaRepeatMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
+// Forward declaration of `NativeSleepTimerState` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
+// Forward declaration of `SleepTimerMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 
 // Forward declarations of Swift defined types
 // Forward declaration of `HybridRnMediaMediaSessionSpec_cxx` to properly resolve imports.
@@ -34,7 +40,10 @@ namespace RnMediaMediaSession { class HybridRnMediaMediaSessionSpec_cxx; }
 #include "MediaCapability.hpp"
 #include "MediaControl.hpp"
 #include "MediaCustomAction.hpp"
+#include "MediaRepeatMode.hpp"
 #include "NativeMediaItem.hpp"
+#include "NativeSleepTimerState.hpp"
+#include "SleepTimerMode.hpp"
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/PromiseHolder.hpp>
 #include <NitroModules/Result.hpp>
@@ -43,6 +52,7 @@ namespace RnMediaMediaSession { class HybridRnMediaMediaSessionSpec_cxx; }
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 /**
@@ -152,6 +162,32 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     return optional.value();
   }
   
+  // pragma MARK: std::vector<double>
+  /**
+   * Specialized version of `std::vector<double>`.
+   */
+  using std__vector_double_ = std::vector<double>;
+  inline std::vector<double> create_std__vector_double_(size_t size) noexcept {
+    std::vector<double> vector;
+    vector.reserve(size);
+    return vector;
+  }
+  
+  // pragma MARK: std::optional<std::vector<double>>
+  /**
+   * Specialized version of `std::optional<std::vector<double>>`.
+   */
+  using std__optional_std__vector_double__ = std::optional<std::vector<double>>;
+  inline std::optional<std::vector<double>> create_std__optional_std__vector_double__(const std::vector<double>& value) noexcept {
+    return std::optional<std::vector<double>>(value);
+  }
+  inline bool has_value_std__optional_std__vector_double__(const std::optional<std::vector<double>>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline std::vector<double> get_std__optional_std__vector_double__(const std::optional<std::vector<double>>& optional) noexcept {
+    return optional.value();
+  }
+  
   // pragma MARK: std::optional<IosMediaSessionConfig>
   /**
    * Specialized version of `std::optional<IosMediaSessionConfig>`.
@@ -187,6 +223,50 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
   Func_void_double create_Func_void_double(void* NON_NULL swiftClosureWrapper) noexcept;
   inline Func_void_double_Wrapper wrap_Func_void_double(Func_void_double value) noexcept {
     return Func_void_double_Wrapper(std::move(value));
+  }
+  
+  // pragma MARK: std::function<void(MediaRepeatMode /* mode */)>
+  /**
+   * Specialized version of `std::function<void(MediaRepeatMode)>`.
+   */
+  using Func_void_MediaRepeatMode = std::function<void(MediaRepeatMode /* mode */)>;
+  /**
+   * Wrapper class for a `std::function<void(MediaRepeatMode / * mode * /)>`, this can be used from Swift.
+   */
+  class Func_void_MediaRepeatMode_Wrapper final {
+  public:
+    explicit Func_void_MediaRepeatMode_Wrapper(std::function<void(MediaRepeatMode /* mode */)>&& func): _function(std::make_unique<std::function<void(MediaRepeatMode /* mode */)>>(std::move(func))) {}
+    inline void call(int mode) const noexcept {
+      _function->operator()(static_cast<MediaRepeatMode>(mode));
+    }
+  private:
+    std::unique_ptr<std::function<void(MediaRepeatMode /* mode */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_void_MediaRepeatMode create_Func_void_MediaRepeatMode(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_void_MediaRepeatMode_Wrapper wrap_Func_void_MediaRepeatMode(Func_void_MediaRepeatMode value) noexcept {
+    return Func_void_MediaRepeatMode_Wrapper(std::move(value));
+  }
+  
+  // pragma MARK: std::function<void(bool /* enabled */)>
+  /**
+   * Specialized version of `std::function<void(bool)>`.
+   */
+  using Func_void_bool = std::function<void(bool /* enabled */)>;
+  /**
+   * Wrapper class for a `std::function<void(bool / * enabled * /)>`, this can be used from Swift.
+   */
+  class Func_void_bool_Wrapper final {
+  public:
+    explicit Func_void_bool_Wrapper(std::function<void(bool /* enabled */)>&& func): _function(std::make_unique<std::function<void(bool /* enabled */)>>(std::move(func))) {}
+    inline void call(bool enabled) const noexcept {
+      _function->operator()(enabled);
+    }
+  private:
+    std::unique_ptr<std::function<void(bool /* enabled */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_void_bool create_Func_void_bool(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_void_bool_Wrapper wrap_Func_void_bool(Func_void_bool value) noexcept {
+    return Func_void_bool_Wrapper(std::move(value));
   }
   
   // pragma MARK: std::function<void(const std::string& /* name */, const std::string& /* extras */)>
@@ -244,29 +324,58 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     return vector;
   }
   
-  // pragma MARK: std::vector<double>
+  // pragma MARK: std::optional<bool>
   /**
-   * Specialized version of `std::vector<double>`.
+   * Specialized version of `std::optional<bool>`.
    */
-  using std__vector_double_ = std::vector<double>;
-  inline std::vector<double> create_std__vector_double_(size_t size) noexcept {
-    std::vector<double> vector;
-    vector.reserve(size);
-    return vector;
+  using std__optional_bool_ = std::optional<bool>;
+  inline std::optional<bool> create_std__optional_bool_(const bool& value) noexcept {
+    return std::optional<bool>(value);
   }
-  
-  // pragma MARK: std::optional<std::vector<double>>
-  /**
-   * Specialized version of `std::optional<std::vector<double>>`.
-   */
-  using std__optional_std__vector_double__ = std::optional<std::vector<double>>;
-  inline std::optional<std::vector<double>> create_std__optional_std__vector_double__(const std::vector<double>& value) noexcept {
-    return std::optional<std::vector<double>>(value);
-  }
-  inline bool has_value_std__optional_std__vector_double__(const std::optional<std::vector<double>>& optional) noexcept {
+  inline bool has_value_std__optional_bool_(const std::optional<bool>& optional) noexcept {
     return optional.has_value();
   }
-  inline std::vector<double> get_std__optional_std__vector_double__(const std::optional<std::vector<double>>& optional) noexcept {
+  inline bool get_std__optional_bool_(const std::optional<bool>& optional) noexcept {
+    return optional.value();
+  }
+  
+  // pragma MARK: std::unordered_map<std::string, std::string>
+  /**
+   * Specialized version of `std::unordered_map<std::string, std::string>`.
+   */
+  using std__unordered_map_std__string__std__string_ = std::unordered_map<std::string, std::string>;
+  inline std::unordered_map<std::string, std::string> create_std__unordered_map_std__string__std__string_(size_t size) noexcept {
+    std::unordered_map<std::string, std::string> map;
+    map.reserve(size);
+    return map;
+  }
+  inline std::vector<std::string> get_std__unordered_map_std__string__std__string__keys(const std__unordered_map_std__string__std__string_& map) noexcept {
+    std::vector<std::string> keys;
+    keys.reserve(map.size());
+    for (const auto& entry : map) {
+      keys.push_back(entry.first);
+    }
+    return keys;
+  }
+  inline std::string get_std__unordered_map_std__string__std__string__value(const std__unordered_map_std__string__std__string_& map, const std::string& key) noexcept {
+    return map.find(key)->second;
+  }
+  inline void emplace_std__unordered_map_std__string__std__string_(std__unordered_map_std__string__std__string_& map, const std::string& key, const std::string& value) noexcept {
+    map.emplace(key, value);
+  }
+  
+  // pragma MARK: std::optional<std::unordered_map<std::string, std::string>>
+  /**
+   * Specialized version of `std::optional<std::unordered_map<std::string, std::string>>`.
+   */
+  using std__optional_std__unordered_map_std__string__std__string__ = std::optional<std::unordered_map<std::string, std::string>>;
+  inline std::optional<std::unordered_map<std::string, std::string>> create_std__optional_std__unordered_map_std__string__std__string__(const std::unordered_map<std::string, std::string>& value) noexcept {
+    return std::optional<std::unordered_map<std::string, std::string>>(value);
+  }
+  inline bool has_value_std__optional_std__unordered_map_std__string__std__string__(const std::optional<std::unordered_map<std::string, std::string>>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline std::unordered_map<std::string, std::string> get_std__optional_std__unordered_map_std__string__std__string__(const std::optional<std::unordered_map<std::string, std::string>>& optional) noexcept {
     return optional.value();
   }
   
@@ -294,6 +403,21 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     std::vector<NativeMediaItem> vector;
     vector.reserve(size);
     return vector;
+  }
+  
+  // pragma MARK: std::optional<NativeSleepTimerState>
+  /**
+   * Specialized version of `std::optional<NativeSleepTimerState>`.
+   */
+  using std__optional_NativeSleepTimerState_ = std::optional<NativeSleepTimerState>;
+  inline std::optional<NativeSleepTimerState> create_std__optional_NativeSleepTimerState_(const NativeSleepTimerState& value) noexcept {
+    return std::optional<NativeSleepTimerState>(value);
+  }
+  inline bool has_value_std__optional_NativeSleepTimerState_(const std::optional<NativeSleepTimerState>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline NativeSleepTimerState get_std__optional_NativeSleepTimerState_(const std::optional<NativeSleepTimerState>& optional) noexcept {
+    return optional.value();
   }
   
   // pragma MARK: std::shared_ptr<HybridRnMediaMediaSessionSpec>
@@ -333,6 +457,15 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
   }
   inline Result_std__optional_double__ create_Result_std__optional_double__(const std::exception_ptr& error) noexcept {
     return Result<std::optional<double>>::withError(error);
+  }
+  
+  // pragma MARK: Result<std::optional<NativeSleepTimerState>>
+  using Result_std__optional_NativeSleepTimerState__ = Result<std::optional<NativeSleepTimerState>>;
+  inline Result_std__optional_NativeSleepTimerState__ create_Result_std__optional_NativeSleepTimerState__(const std::optional<NativeSleepTimerState>& value) noexcept {
+    return Result<std::optional<NativeSleepTimerState>>::withValue(value);
+  }
+  inline Result_std__optional_NativeSleepTimerState__ create_Result_std__optional_NativeSleepTimerState__(const std::exception_ptr& error) noexcept {
+    return Result<std::optional<NativeSleepTimerState>>::withError(error);
   }
 
 } // namespace margelo::nitro::rnmediamediasession::bridge::swift

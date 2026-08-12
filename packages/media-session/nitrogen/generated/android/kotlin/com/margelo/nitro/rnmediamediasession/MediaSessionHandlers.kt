@@ -44,6 +44,12 @@ data class MediaSessionHandlers(
   val setRate: Func_void_double,
   @DoNotStrip
   @Keep
+  val setRepeatMode: Func_void_MediaRepeatMode,
+  @DoNotStrip
+  @Keep
+  val setShuffle: Func_void_bool,
+  @DoNotStrip
+  @Keep
   val onTaskRemoved: Func_void,
   @DoNotStrip
   @Keep
@@ -58,8 +64,8 @@ data class MediaSessionHandlers(
   /**
    * Create a new instance of MediaSessionHandlers from Kotlin
    */
-  constructor(play: () -> Unit, pause: () -> Unit, stop: () -> Unit, seekTo: (position: Double) -> Unit, skipToNext: () -> Unit, skipToPrevious: () -> Unit, skipToQueueItem: (index: Double) -> Unit, setRate: (rate: Double) -> Unit, onTaskRemoved: () -> Unit, customAction: (name: String, extras: String) -> Unit, onSleepTimer: () -> Unit, onPlaybackResumption: () -> Unit):
-         this(Func_void_java(play), Func_void_java(pause), Func_void_java(stop), Func_void_double_java(seekTo), Func_void_java(skipToNext), Func_void_java(skipToPrevious), Func_void_double_java(skipToQueueItem), Func_void_double_java(setRate), Func_void_java(onTaskRemoved), Func_void_std__string_std__string_java(customAction), Func_void_java(onSleepTimer), Func_void_java(onPlaybackResumption))
+  constructor(play: () -> Unit, pause: () -> Unit, stop: () -> Unit, seekTo: (position: Double) -> Unit, skipToNext: () -> Unit, skipToPrevious: () -> Unit, skipToQueueItem: (index: Double) -> Unit, setRate: (rate: Double) -> Unit, setRepeatMode: (mode: MediaRepeatMode) -> Unit, setShuffle: (enabled: Boolean) -> Unit, onTaskRemoved: () -> Unit, customAction: (name: String, extras: String) -> Unit, onSleepTimer: () -> Unit, onPlaybackResumption: () -> Unit):
+         this(Func_void_java(play), Func_void_java(pause), Func_void_java(stop), Func_void_double_java(seekTo), Func_void_java(skipToNext), Func_void_java(skipToPrevious), Func_void_double_java(skipToQueueItem), Func_void_double_java(setRate), Func_void_MediaRepeatMode_java(setRepeatMode), Func_void_bool_java(setShuffle), Func_void_java(onTaskRemoved), Func_void_std__string_std__string_java(customAction), Func_void_java(onSleepTimer), Func_void_java(onPlaybackResumption))
 
   override fun equals(other: Any?): Boolean {
     if (this === other) return true
@@ -72,6 +78,8 @@ data class MediaSessionHandlers(
       && Objects.deepEquals(this.skipToPrevious, other.skipToPrevious)
       && Objects.deepEquals(this.skipToQueueItem, other.skipToQueueItem)
       && Objects.deepEquals(this.setRate, other.setRate)
+      && Objects.deepEquals(this.setRepeatMode, other.setRepeatMode)
+      && Objects.deepEquals(this.setShuffle, other.setShuffle)
       && Objects.deepEquals(this.onTaskRemoved, other.onTaskRemoved)
       && Objects.deepEquals(this.customAction, other.customAction)
       && Objects.deepEquals(this.onSleepTimer, other.onSleepTimer)
@@ -88,6 +96,8 @@ data class MediaSessionHandlers(
       skipToPrevious,
       skipToQueueItem,
       setRate,
+      setRepeatMode,
+      setShuffle,
       onTaskRemoved,
       customAction,
       onSleepTimer,
@@ -103,8 +113,8 @@ data class MediaSessionHandlers(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(play: Func_void, pause: Func_void, stop: Func_void, seekTo: Func_void_double, skipToNext: Func_void, skipToPrevious: Func_void, skipToQueueItem: Func_void_double, setRate: Func_void_double, onTaskRemoved: Func_void, customAction: Func_void_std__string_std__string, onSleepTimer: Func_void, onPlaybackResumption: Func_void): MediaSessionHandlers {
-      return MediaSessionHandlers(play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption)
+    private fun fromCpp(play: Func_void, pause: Func_void, stop: Func_void, seekTo: Func_void_double, skipToNext: Func_void, skipToPrevious: Func_void, skipToQueueItem: Func_void_double, setRate: Func_void_double, setRepeatMode: Func_void_MediaRepeatMode, setShuffle: Func_void_bool, onTaskRemoved: Func_void, customAction: Func_void_std__string_std__string, onSleepTimer: Func_void, onPlaybackResumption: Func_void): MediaSessionHandlers {
+      return MediaSessionHandlers(play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, setRepeatMode, setShuffle, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption)
     }
   }
 }

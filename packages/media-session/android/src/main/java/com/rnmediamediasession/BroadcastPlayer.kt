@@ -1,6 +1,7 @@
 package com.rnmediamediasession
 
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -17,6 +18,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
+import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
 import com.margelo.nitro.rnmediamediasession.MediaSessionHandlers
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 
@@ -78,12 +80,59 @@ internal fun NativeMediaItem.toMediaItem(): MediaItem =
         .setGenre(genre)
         .setArtworkUri(artworkUri?.let(Uri::parse))
         .setDurationMs(duration?.toLong())
+        .setAlbumArtist(albumArtist)
+        // `setSubtitle` is the field media3's own notification reads through
+        // `DefaultMediaNotificationProvider.getNotificationContentText`, which is
+        // why the extended-metadata field is named `subtitle` rather than
+        // `description` — `setDescription` exists too and is not rendered there.
+        .setSubtitle(subtitle)
+        // Integer setters; the bridge carries every number as a Double.
+        .setTrackNumber(trackNumber?.toInt())
+        .setDiscNumber(discNumber?.toInt())
+        // `setReleaseYear`, not `setRecordingYear`: tag formats mostly carry one
+        // year and "the year on the cover" is the release year. Filling both
+        // from one number would invent a recording date we were never told.
+        .setReleaseYear(year?.toInt())
+        .setExtras(extras?.toBundle())
         .setIsBrowsable(false)
         .setIsPlayable(true)
         .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
         .build()
     )
     .build()
+
+/**
+ * `extras` as the `Bundle` `MediaMetadata` wants.
+ *
+ * String values only, which is the contract the TS layer enforces
+ * (`NativeMediaItem.extras`): this `Bundle` crosses a binder to third-party
+ * `MediaController`s and is the same payload `withPersistence` puts through
+ * JSON, and a string map is what survives both unchanged.
+ */
+private fun Map<String, String>.toBundle(): Bundle =
+  Bundle(size).also { bundle -> forEach { (key, value) -> bundle.putString(key, value) } }
+
+/**
+ * The broadcast repeat mode as media3's `@Player.RepeatMode` constant.
+ *
+ * The two vocabularies line up exactly — `REPEAT_MODE_OFF/_ONE/_ALL` are 0/1/2
+ * (`javap` on media3-common 1.11.0) and so are our three members — but the
+ * mapping is written out rather than done by ordinal, because an ordinal
+ * coincidence is not a contract and a member added to either side would turn it
+ * into a silent mis-mapping.
+ */
+internal fun MediaRepeatMode.toMedia3(): @Player.RepeatMode Int = when (this) {
+  MediaRepeatMode.OFF -> Player.REPEAT_MODE_OFF
+  MediaRepeatMode.ONE -> Player.REPEAT_MODE_ONE
+  MediaRepeatMode.ALL -> Player.REPEAT_MODE_ALL
+}
+
+/** The inverse of [toMedia3]. Unknown constants fold to `OFF` — see `handleSetRepeatMode`. */
+internal fun Int.toRepeatMode(): MediaRepeatMode = when (this) {
+  Player.REPEAT_MODE_ONE -> MediaRepeatMode.ONE
+  Player.REPEAT_MODE_ALL -> MediaRepeatMode.ALL
+  else -> MediaRepeatMode.OFF
+}
 
 /**
  * Where a transport command goes once media3 has resolved it.
@@ -112,9 +161,37 @@ internal fun interface CommandDispatcher {
 @OptIn(UnstableApi::class)
 internal class BroadcastPlayer(
   private val commands: CommandDispatcher,
+  seekForwardIncrementMs: Long,
+  seekBackIncrementMs: Long,
 ) : SimpleBasePlayer(Looper.getMainLooper()) {
 
   private val mainHandler = Handler(Looper.getMainLooper())
+
+  /**
+   * What `COMMAND_SEEK_FORWARD` / `COMMAND_SEEK_BACK` resolve against before
+   * media3 hands us an absolute position in [handleSeek].
+   *
+   * Held here rather than captured from the config at construction because the
+   * player outlives a single `initialize` — in a playback resumption it is built
+   * by the service and re-used when JavaScript arrives with the app's real
+   * configuration (see `MediaSessionController.initialize`). Main-thread
+   * confined like everything else in this class.
+   *
+   * Setting them at all is the fix for a parity defect: media3 defaults to
+   * `C.DEFAULT_SEEK_BACK_INCREMENT_MS` (5 s) and
+   * `C.DEFAULT_SEEK_FORWARD_INCREMENT_MS` (15 s), while iOS pinned 15 s both
+   * ways — the same JS call, two behaviours.
+   */
+  private var seekForwardIncrementMs: Long = seekForwardIncrementMs
+  private var seekBackIncrementMs: Long = seekBackIncrementMs
+
+  /** Main thread only. Re-publishes so a controller sees the new increments. */
+  fun setSeekIncrements(forwardMs: Long, backMs: Long) {
+    if (forwardMs == seekForwardIncrementMs && backMs == seekBackIncrementMs) return
+    seekForwardIncrementMs = forwardMs
+    seekBackIncrementMs = backMs
+    invalidateState()
+  }
 
   @Volatile
   private var snapshot: Snapshot = Snapshot.EMPTY
@@ -193,7 +270,14 @@ internal class BroadcastPlayer(
   override fun getState(): State {
     val current = snapshot
     val derived = renderedFor(current)
-    val builder = State.Builder().setAvailableCommands(derived.commands)
+    val builder = State.Builder()
+      .setAvailableCommands(derived.commands)
+      // Applied before the empty-timeline branch below, because a controller
+      // reads them from the state regardless of whether anything is queued.
+      .setSeekForwardIncrementMs(seekForwardIncrementMs)
+      .setSeekBackIncrementMs(seekBackIncrementMs)
+      .setRepeatMode(current.repeatMode.toMedia3())
+      .setShuffleModeEnabled(current.shuffleEnabled)
 
     warnOnce(current.itemQueueMismatch)
 
@@ -296,7 +380,10 @@ internal class BroadcastPlayer(
   }
 
   private fun mediaItemData(item: NativeMediaItem, index: Int, snapshot: Snapshot): MediaItemData {
-    val durationMs = item.duration?.toLong()
+    // Per entry, not per snapshot: `effectiveDurationMs` folds in that entry's
+    // own `isLive`, so one live track in a queue does not make the rest of the
+    // queue un-seekable.
+    val durationMs = item.effectiveDurationMs
 
     return MediaItemData.Builder(
       // media3 rejects duplicate uids in a playlist, and the same track legitimately
@@ -339,6 +426,27 @@ internal class BroadcastPlayer(
   override fun handleSetPlaybackParameters(
     playbackParameters: PlaybackParameters
   ): ListenableFuture<*> = dispatch { it.setRate(playbackParameters.speed.toDouble()) }
+
+  /**
+   * The notification's repeat button.
+   *
+   * Reached only when `COMMAND_SET_REPEAT_MODE` is in `State.availableCommands`
+   * — `SimpleBasePlayer` returns from `setRepeatMode()` before dispatching
+   * otherwise (see [MediaButtons]). Like every other command here it is
+   * forwarded and *not* applied locally: the mode changes when the app says it
+   * changed, and that broadcast is what completes the returned future.
+   *
+   * An unknown constant is folded to `off` rather than dropped. media3's
+   * `@RepeatMode` IntDef has exactly three members today; if a fourth ever
+   * arrives, telling the app "off" is a state it can render, whereas silently
+   * ignoring the press is a dead button.
+   */
+  override fun handleSetRepeatMode(repeatMode: Int): ListenableFuture<*> =
+    dispatch { it.setRepeatMode(repeatMode.toRepeatMode()) }
+
+  /** The notification's shuffle button. Same contract as [handleSetRepeatMode]. */
+  override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> =
+    dispatch { it.setShuffle(shuffleModeEnabled) }
 
   /**
    * Every seek-shaped command funnels here; `seekCommand` says which one.

@@ -25,6 +25,8 @@ class MyHandler extends BaseMediaHandler {
   async skipToNext() { /* your queue logic, may resolve URLs lazily */ }
   async skipToPrevious() { /* ... */ }
   async setRate(rate: number) { player.rate = rate }
+  async onSetRepeatMode(mode: 'off' | 'one' | 'all') { /* then broadcast it */ }
+  async onSetShuffle(enabled: boolean) { /* then broadcast it */ }
   async customAction(name: string, extras?: Record<string, unknown>) { /* ... */ }
 }
 
@@ -34,22 +36,50 @@ const service = await MediaService.init(() => new MyHandler(), {
     notificationChannelName: 'Playback',
     notificationIcon: 'ic_notification', // drawable name in YOUR app
     stopForegroundOnPause: true,
+    notificationColor: 0xff1db954,       // ARGB — include the alpha byte
   },
+  ios: {
+    // What the lock-screen rate control offers. iOS only; media3 takes an
+    // arbitrary float and draws no rate control, so there is no list to hand it.
+    supportedPlaybackRates: [1, 1.25, 1.5, 1.75, 2],
+  },
+  // How far the fastForward/rewind buttons jump, BOTH platforms. Default 15/15.
+  jumpForwardSeconds: 30,
+  jumpBackwardSeconds: 15,
 })
 ```
 
 **Fan-out** — three broadcast channels are the only state source:
 
 ```ts
-service.setMediaItem({ id: '1', title: 'Track', artist: 'Someone', duration: 214_000 })
+service.setMediaItem({
+  id: '1',
+  title: 'Track',
+  artist: 'Someone',
+  duration: 214_000,
+  // Optional extended tags — see "Metadata fields" below for what each
+  // platform can actually render.
+  albumArtist: 'Various Artists',
+  trackNumber: 7,
+  discNumber: 1,
+  year: 1997,
+  subtitle: 'Episode 12',
+  isLive: false,
+  extras: { source: 'library' }, // opaque, app-owned, string values
+})
 
 service.setQueue([{ id: '1', title: 'Track' }, { id: '2', title: 'Next' }])
 
 service.setPlaybackState({
   status: 'playing',
   position: { value: 0, at: Date.now(), rate: 1 }, // ANCHOR, see below
-  controls: ['skipToPrevious', 'pause', 'skipToNext'],
-  capabilities: ['play', 'pause', 'seek', 'skipToNext', 'skipToPrevious'],
+  controls: ['skipToPrevious', 'pause', 'skipToNext', 'shuffle', 'repeatMode'],
+  capabilities: [
+    'play', 'pause', 'seek', 'skipToNext', 'skipToPrevious',
+    'setRepeatMode', 'setShuffle',
+  ],
+  repeatMode: 'off',      // default 'off'
+  shuffleEnabled: false,  // default false
   queueIndex: 0,
 })
 
@@ -123,6 +153,100 @@ instant the broadcast arrives, so an NTP step cannot corrupt the projection.
 
 Declare a capability for every button you ask for; the package is generous and
 adds the command anyway, but the handler still has to do the work.
+
+## Repeat and shuffle
+
+Two halves, and you almost always want both:
+
+```ts
+service.setPlaybackState({
+  // …
+  capabilities: [/* … */ 'setRepeatMode', 'setShuffle'], // accept the commands
+  controls: [/* … */ 'shuffle', 'repeatMode'],           // draw the buttons
+  repeatMode: 'all',
+  shuffleEnabled: true,
+})
+```
+
+`repeatMode` / `shuffleEnabled` are **additive and optional**; omitted they are
+`'off'` and `false`, which is what every surface showed before they existed.
+
+**Pressing a toggle does not change anything by itself.** It calls
+`onSetRepeatMode(mode)` / `onSetShuffle(enabled)` on your handler, and the state
+(and the icon) move only when you broadcast the new `setPlaybackState` — the same
+acknowledge-by-broadcast contract `play`/`pause` follow. Both handler methods are
+optional, so adding them was not a breaking change for anyone implementing
+`MediaHandler` structurally.
+
+The **capability alone** lights up Android Auto, Wear and third-party
+controllers, which read `Player.repeatMode` / `shuffleModeEnabled` directly. The
+phone's notification needs the **control** as well: media3's
+`DefaultMediaNotificationProvider` draws previous / play-pause / next and nothing
+else, so without the control there is no button in the shade. The icon follows
+the state (`ICON_REPEAT_OFF` / `_ONE` / `_ALL`, `ICON_SHUFFLE_ON` / `_OFF`), and
+the two toggles take the secondary notification slots — never the central or
+back/forward ones, which belong to transport.
+
+The control is spelled `'repeatMode'`, not `'repeat'`, because every union member
+becomes a native enumerator verbatim and `repeat` is a Swift keyword.
+
+On iOS both map to `MPRemoteCommandCenter.changeRepeatModeCommand` /
+`changeShuffleModeCommand`, and the current state is pushed onto
+`currentRepeatType` / `currentShuffleType` on every broadcast. iOS's
+`MPShuffleType.collections` (shuffle albums, keep tracks in order) has no
+cross-platform twin and is read as "shuffle on" rather than dropped.
+
+## Jump intervals
+
+```ts
+await MediaService.init(() => new MyHandler(), {
+  jumpForwardSeconds: 30,   // default 15
+  jumpBackwardSeconds: 15,  // default 15
+})
+```
+
+These drive the `fastForward` / `rewind` controls and apply **identically on both
+platforms** — Android through
+`SimpleBasePlayer.State.Builder.setSeekForwardIncrementMs`, iOS through
+`MPSkipIntervalCommand.preferredIntervals`. Both platforms resolve the increment
+natively and deliver an absolute `seekTo` to your handler, so there is no
+`fastForward` handler method to implement and no way for the two to disagree.
+
+They exist because the two platforms *did* disagree: iOS pinned 15 s in both
+directions while Android set no increment and inherited media3's
+`C.DEFAULT_SEEK_BACK_INCREMENT_MS` (5 s) and `..._FORWARD_...` (15 s), so the same
+JS call skipped back 5 s on Android and 15 s on iOS. The shared default is 15/15
+— matching RNTP V4/V5 — and podcast and audiobook apps set 30 explicitly.
+
+## Metadata fields
+
+`MediaItem` carries `id`, `title`, `artist`, `album`, `artworkUri`, `duration`,
+`genre`, plus these. **What each platform can render differs, and the table says
+so rather than pretending:**
+
+| Field | Android (media3 `MediaMetadata`) | iOS (`MPNowPlayingInfoCenter`) |
+|---|---|---|
+| `albumArtist` | `setAlbumArtist` | `MPMediaItemPropertyAlbumArtist` — sent, but **not** on Apple's documented supported-key list, so it may be ignored |
+| `trackNumber` | `setTrackNumber` | `MPMediaItemPropertyAlbumTrackNumber` |
+| `discNumber` | `setDiscNumber` | `MPMediaItemPropertyDiscNumber` |
+| `year` | `setReleaseYear` | **no key exists** — MediaPlayer has no year, and `MPMediaItemPropertyReleaseDate` is an `NSDate` and unsupported here |
+| `subtitle` | `setSubtitle` (media3's notification content text) | **no third line exists** |
+| `isLive` | drops the duration + seekability, `isDynamic` timeline | `MPNowPlayingInfoPropertyIsLiveStream` |
+| `extras` | `MediaMetadata` `Bundle` (reaches third-party controllers) | **no key exists** |
+
+Fields with no iOS key are still carried through the session and through
+`withPersistence`, so your app gets them back — they are simply not published to
+a key that means something else. `year`, `subtitle` and `extras` are the three.
+
+`isLive` is worth calling out: before it, the *absence of a duration* was the
+only way to say "live", which conflated it with "I don't know the duration yet".
+Setting `isLive: true` drops the scrubber even when a duration is also present.
+Omitting it keeps the old rule exactly.
+
+`extras` is **string → string**. It crosses an Android `Bundle` to third-party
+controllers and a JSON round trip through persistence; a string map survives both
+unchanged, and anything richer would come back as `unknown` anyway. Stringify at
+the edge.
 
 ## Handler composition
 
@@ -421,13 +545,51 @@ Honest edges:
 
 ```ts
 service.setSleepTimer(30 * 60)      // pause in 30 minutes
-service.getSleepTimerRemaining()    // seconds, or undefined
+service.setSleepTimerToTrackEnd()   // pause when THIS track finishes
 service.cancelSleepTimer()
+
+service.getSleepTimerRemaining()    // seconds, or undefined
+service.getSleepTimer()             // { mode, remainingSeconds? } | undefined
 
 class MyHandler extends BaseMediaHandler {
   override onSleepTimer() { /* already paused — clear your badge */ }
 }
 ```
+
+### End of current track
+
+The mode most sleep-timer users actually want, and the one a JS timer cannot
+express even in the foreground: "30 minutes" cuts a track in half, "end of this
+track" does not.
+
+A package with no playback engine still knows when a track ends, because the
+broadcast channels already carry both numbers: the deadline is
+`(duration − projectedPosition) / rate`, computed **natively** and re-armed on
+every broadcast. A seek, a pause, a rate change or a duration that arrives late
+all move it — and since broadcasts are discontinuity-only by design, that is
+exactly the update rate this needs. Nothing polls, and nothing new crosses the
+bridge.
+
+Two cases it handles with no duration at all:
+
+- **the current item changes** (the track ended and you advanced, or the user
+  skipped) → it fires immediately, which is the honest reading of "stop after
+  this one";
+- **no duration was ever broadcast** (a live stream, or it has not arrived yet)
+  → armed with no deadline, waiting for that item change.
+
+Which is why `getSleepTimer()` exists alongside `getSleepTimerRemaining()`:
+
+```ts
+const timer = service.getSleepTimer()
+if (timer?.mode === 'trackEnd') {
+  badge(timer.remainingSeconds ?? 'end of track')  // may legitimately have none
+}
+```
+
+`getSleepTimerRemaining()` returns `undefined` for an armed end-of-track timer
+with no computable deadline, which a UI cannot tell apart from "not armed" —
+`getSleepTimer()` can. A `'duration'` timer always has a number.
 
 **Do not build this on `setTimeout`.** React Native's `JavaTimerManager` gates
 JS timers on the Activity lifecycle plus headless tasks, so with the Activity
@@ -449,8 +611,9 @@ an app that just wants "stop after 30 minutes" writes no handler code at all.
 
 Details worth knowing:
 
-- Re-arming **replaces**; it never stacks. `cancelSleepTimer()` on nothing is a
-  no-op.
+- Re-arming **replaces**; it never stacks, and that is true across modes —
+  `setSleepTimerToTrackEnd()` after `setSleepTimer(600)` leaves exactly one
+  timer. `cancelSleepTimer()` on nothing is a no-op.
 - `setSleepTimer` rejects `0`, negatives, `NaN` and `Infinity` with
   `MediaSessionError('invalidArgument')` — "cancel" and "pause now" both already
   have names.
@@ -504,6 +667,29 @@ Details worth knowing:
   `isForeground=true` right after pausing — measured on Android 16, media3
   1.11. That is media3's behaviour on every API level, and it is what keeps a
   resume-from-notification working.
+
+- `notificationColor` sets the notification's accent, as an **ARGB integer**:
+
+  ```ts
+  android: { …, notificationColor: 0xff1db954 }
+  ```
+
+  Include the alpha byte — `0x1db954` is transparent black. Both signed
+  (`-16777216`) and unsigned (`0xff000000`) spellings are accepted; they are the
+  same 32 bits.
+
+  Applied to `Notification.color` through a thin `MediaNotification.Provider`
+  decorator, because `DefaultMediaNotificationProvider.createNotification` is
+  `final` in media3 1.11 and its `Builder` exposes channel id, channel name,
+  notification id and small icon — but no colour. Setting the field after media3
+  has finished building is the only public lever, and it means nothing media3
+  does can overwrite it.
+
+  **It is a hint, not a guarantee**, and that is the platform's doing: pre-12
+  shades tint the small icon and action text with it, while Android 12+ media
+  notifications derive their own palette from the artwork and may ignore it
+  entirely. Ignored on iOS, which has no colour surface at all — the lock
+  screen's palette comes from the artwork, which is not ours to tint.
 
 - `stopForegroundTimeoutMs` sets that grace period.
 

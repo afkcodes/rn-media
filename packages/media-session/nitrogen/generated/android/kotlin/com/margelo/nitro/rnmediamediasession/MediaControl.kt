@@ -22,7 +22,9 @@ enum class MediaControl(@DoNotStrip @Keep val value: Int) {
   SKIPTONEXT(3),
   SKIPTOPREVIOUS(4),
   FASTFORWARD(5),
-  REWIND(6);
+  REWIND(6),
+  REPEATMODE(7),
+  SHUFFLE(8);
 
   companion object
 }

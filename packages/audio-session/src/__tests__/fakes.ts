@@ -167,6 +167,8 @@ export function beginInterruption(
 }
 
 /** `begin: false` interruption fixture. */
-export function endInterruption(shouldResume: boolean): NativeInterruptionEvent {
+export function endInterruption(
+  shouldResume: boolean
+): NativeInterruptionEvent {
   return { begin: false, type: 'pause', shouldResume, permanent: false }
 }

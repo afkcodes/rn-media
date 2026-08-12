@@ -48,6 +48,7 @@
  */
 
 import { PlayerErrorException } from './errors'
+import { escapeSubparam } from './subparam'
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -93,40 +94,24 @@ export interface AudioFilter {
 // ---------------------------------------------------------------------------
 
 /**
- * The character set mpv treats as "needs no escaping" in a filter sub-option.
- *
- * Verbatim from `options/m_option.c`:
- * `#define NAMECH "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"`.
- * Note it excludes `.`, so every decimal number gets escaped — that is mpv's
- * own behaviour, not ours.
- */
-const NAMECH = /^[a-zA-Z0-9_-]*$/
-
-/** UTF-8 byte length. mpv's `%N%` prefix counts *bytes*, not code units. */
-function utf8Length(value: string): number {
-  let bytes = 0
-  for (const codePoint of value) {
-    const code = codePoint.codePointAt(0) as number
-    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4
-  }
-  return bytes
-}
-
-/**
  * Escape one filter sub-option key or value the way mpv itself does.
  *
  * mpv's serialiser (`options/m_option.c: append_param`) writes a parameter
- * verbatim when every character is in {@link NAMECH}, and otherwise as
+ * verbatim when every character is in mpv's `NAMECH` alphabet, and otherwise as
  * `%<bytecount>%<string>`. Its parser accepts exactly that form
  * (`read_subparam`, the `bstr_eatstart0(&p, "%")` branch), so applying the same
  * rule here makes the compiled string byte-identical to what reading the `af`
  * property back returns — which is what the round-trip test asserts.
  *
+ * The rule itself lives in `subparam.ts` because `loadfile`'s per-file option
+ * list is read back by the *same* mpv function and needs the identical
+ * treatment; this name is kept as the filter-facing spelling of it.
+ *
  * @param value - Raw key or value.
  * @returns The escaped form, safe to place in an `af` string.
  */
 export function escapeAfParam(value: string): string {
-  return NAMECH.test(value) ? value : `%${utf8Length(value)}%${value}`
+  return escapeSubparam(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -163,12 +148,7 @@ function num(value: number, what: string): string {
 }
 
 /** Range-check a number and format it. */
-function range(
-  value: number,
-  min: number,
-  max: number,
-  what: string
-): string {
+function range(value: number, min: number, max: number, what: string): string {
   const text = num(value, what)
   if (value < min || value > max) {
     invalid(`${what} must be between ${min} and ${max}, got ${text}.`)
@@ -187,9 +167,7 @@ function range(
  * @param filters - The chain to check.
  * @throws {@link PlayerErrorException} with code `invalid-state`.
  */
-export function assertValidAudioFilters(
-  filters: readonly AudioFilter[]
-): void {
+export function assertValidAudioFilters(filters: readonly AudioFilter[]): void {
   if (!Array.isArray(filters)) {
     invalid('Audio filters must be an array.')
   }
@@ -251,9 +229,7 @@ export function assertValidAudioFilters(
  * @throws {@link PlayerErrorException} with code `invalid-state` if the chain
  * is malformed (see {@link assertValidAudioFilters}).
  */
-export function compileAudioFilters(
-  filters: readonly AudioFilter[]
-): string {
+export function compileAudioFilters(filters: readonly AudioFilter[]): string {
   assertValidAudioFilters(filters)
   return filters
     .map((filter) => {
@@ -608,7 +584,14 @@ export const AudioFilters = {
   /** Dynamic-range compressor (ffmpeg `acompressor`). */
   compressor(options: CompressorOptions = {}): AudioFilter {
     const out: AudioFilterOption[] = []
-    optional(out, 'level_in', options.levelIn, 0.015625, 64, 'compressor.levelIn')
+    optional(
+      out,
+      'level_in',
+      options.levelIn,
+      0.015625,
+      64,
+      'compressor.levelIn'
+    )
     if (options.mode !== undefined) {
       if (options.mode !== 'downward' && options.mode !== 'upward') {
         invalid(
@@ -659,7 +642,14 @@ export const AudioFilters = {
   limiter(options: LimiterOptions = {}): AudioFilter {
     const out: AudioFilterOption[] = []
     optional(out, 'level_in', options.levelIn, 0.015625, 64, 'limiter.levelIn')
-    optional(out, 'level_out', options.levelOut, 0.015625, 64, 'limiter.levelOut')
+    optional(
+      out,
+      'level_out',
+      options.levelOut,
+      0.015625,
+      64,
+      'limiter.levelOut'
+    )
     optional(out, 'limit', options.limit, 0.0625, 1, 'limiter.limit')
     optional(out, 'attack', options.attack, 0.1, 80, 'limiter.attack')
     optional(out, 'release', options.release, 1, 8000, 'limiter.release')
@@ -809,10 +799,7 @@ function shelf(name: 'bass' | 'treble', options: ShelfOptions): AudioFilter {
   return { name, options: out }
 }
 
-function pass(
-  name: 'lowpass' | 'highpass',
-  options: PassOptions
-): AudioFilter {
+function pass(name: 'lowpass' | 'highpass', options: PassOptions): AudioFilter {
   const out: AudioFilterOption[] = [
     ['f', range(options.frequency, 0, 999999, `${name}.frequency`)],
     ['t', widthType(options.widthType, `${name}.widthType`)],

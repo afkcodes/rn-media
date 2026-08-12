@@ -1,6 +1,7 @@
 import type { HybridObject, UInt64 } from 'react-native-nitro-modules'
 import { MpvProperty } from '../properties'
 import type {
+  ChapterEntry,
   MpvClient,
   MpvEndFileReason,
   MpvEvent,
@@ -102,7 +103,12 @@ export class FakeMpvClient implements MpvClient {
    * leave a matched pair, and nothing running afterwards.
    */
   readonly visualizerCalls: (
-    | { readonly kind: 'start'; readonly fftSize: number; readonly fps: number; readonly waveform: boolean }
+    | {
+        readonly kind: 'start'
+        readonly fftSize: number
+        readonly fps: number
+        readonly waveform: boolean
+      }
     | { readonly kind: 'stop' }
   )[] = []
 
@@ -197,6 +203,26 @@ export class FakeMpvClient implements MpvClient {
     return this.readableMaps.get(name)
   }
 
+  /**
+   * What `getChapters()` should return — mpv's `chapter-list` node, modelled.
+   *
+   * Independent of {@link readable} for the same reason {@link playlist} is: a
+   * node read is a different mpv format, not another rendering of the `chapter`
+   * cursor, and keeping them apart is what lets a test set up a cursor and a
+   * list that disagree.
+   */
+  chapters: ChapterEntry[] = []
+
+  /** How many `getChapters()` calls were issued — the read budget. */
+  chapterReads = 0
+
+  getChapters(): ChapterEntry[] {
+    this.chapterReads += 1
+    const failure = this.readErrors.get(MpvProperty.chapterList)
+    if (failure !== undefined) throw new Error(failure)
+    return this.chapters.map((entry) => ({ ...entry }))
+  }
+
   getPlaylistEntries(): PlaylistEntry[] {
     this.playlistReads += 1
     const failure = this.readErrors.get(MpvProperty.playlist)
@@ -241,7 +267,9 @@ export class FakeMpvClient implements MpvClient {
     this.visualizerCalls.push({ kind: 'stop' })
   }
 
-  setVisualizerListener(onCapture: (capture: VisualizerCapture) => boolean): void {
+  setVisualizerListener(
+    onCapture: (capture: VisualizerCapture) => boolean
+  ): void {
     this.#visualizerListener = onCapture
   }
 
@@ -481,7 +509,11 @@ export function visualizerCapture(options: {
 export function toneCapture(
   bin: number,
   amplitude: number,
-  options: { readonly bins?: number; readonly sampleRate?: number; readonly seq?: number } = {}
+  options: {
+    readonly bins?: number
+    readonly sampleRate?: number
+    readonly seq?: number
+  } = {}
 ): VisualizerCapture {
   const bins = options.bins ?? 1025
   const magnitudes = new Array<number>(bins).fill(0)

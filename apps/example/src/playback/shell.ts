@@ -35,8 +35,29 @@ export interface ShellState extends TrackFacts {
   readonly index: number
   readonly count: number
   readonly rate: number
+  /** mpv's `pitch`, a frequency ratio where `1` is the recording's own pitch. */
+  readonly pitch: number
   readonly volume: number
   readonly muted: boolean
+  /**
+   * Whether ⏭ / ⏮ would move — computed by the library from the cursor and the
+   * loop mode, as an atomic pair.
+   *
+   * Worth copying rather than re-deriving: `index + 1 < count` is wrong under
+   * `loop: 'playlist'` (which wraps) and right under `loop: 'track'` (which
+   * does not affect `playlist-next` at all), and a screen that recomputes it
+   * from two separately-read fields can render a torn answer.
+   */
+  readonly hasNext: boolean
+  readonly hasPrevious: boolean
+  /**
+   * How full the network cache is on its way back to playing, `0…100` — present
+   * **only** while `status === 'buffering'`, which is exactly when a spinner is
+   * on screen.
+   */
+  readonly bufferingPercent: number | undefined
+  /** 0-based chapter cursor; `undefined` when the entry has no chapters. */
+  readonly chapter: number | undefined
   /** mpv's raw duration in seconds; see {@link durationMs} before drawing it. */
   readonly duration: number | undefined
   readonly isLive: boolean
@@ -52,8 +73,13 @@ export function selectShell(state: PlayerState): ShellState {
     index: state.playlist.index,
     count: state.playlist.count,
     rate: state.rate,
+    pitch: state.pitch,
     volume: state.volume,
     muted: state.muted,
+    hasNext: state.hasNext,
+    hasPrevious: state.hasPrevious,
+    bufferingPercent: state.bufferingPercent,
+    chapter: state.chapter,
     duration: state.duration,
     isLive: state.isLive,
     title: state.title,

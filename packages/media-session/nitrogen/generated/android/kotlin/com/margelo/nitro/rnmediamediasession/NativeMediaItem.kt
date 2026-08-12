@@ -38,7 +38,28 @@ data class NativeMediaItem(
   val duration: Double?,
   @DoNotStrip
   @Keep
-  val genre: String?
+  val genre: String?,
+  @DoNotStrip
+  @Keep
+  val albumArtist: String?,
+  @DoNotStrip
+  @Keep
+  val trackNumber: Double?,
+  @DoNotStrip
+  @Keep
+  val discNumber: Double?,
+  @DoNotStrip
+  @Keep
+  val year: Double?,
+  @DoNotStrip
+  @Keep
+  val subtitle: String?,
+  @DoNotStrip
+  @Keep
+  val isLive: Boolean?,
+  @DoNotStrip
+  @Keep
+  val extras: Map<String, String>?
 ) {
   /* primary constructor */
 
@@ -52,6 +73,13 @@ data class NativeMediaItem(
       && Objects.deepEquals(this.artworkUri, other.artworkUri)
       && Objects.deepEquals(this.duration, other.duration)
       && Objects.deepEquals(this.genre, other.genre)
+      && Objects.deepEquals(this.albumArtist, other.albumArtist)
+      && Objects.deepEquals(this.trackNumber, other.trackNumber)
+      && Objects.deepEquals(this.discNumber, other.discNumber)
+      && Objects.deepEquals(this.year, other.year)
+      && Objects.deepEquals(this.subtitle, other.subtitle)
+      && Objects.deepEquals(this.isLive, other.isLive)
+      && Objects.deepEquals(this.extras, other.extras)
   }
 
   override fun hashCode(): Int {
@@ -62,7 +90,14 @@ data class NativeMediaItem(
       album,
       artworkUri,
       duration,
-      genre
+      genre,
+      albumArtist,
+      trackNumber,
+      discNumber,
+      year,
+      subtitle,
+      isLive,
+      extras
     ).contentDeepHashCode()
   }
 
@@ -74,8 +109,8 @@ data class NativeMediaItem(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(id: String, title: String, artist: String?, album: String?, artworkUri: String?, duration: Double?, genre: String?): NativeMediaItem {
-      return NativeMediaItem(id, title, artist, album, artworkUri, duration, genre)
+    private fun fromCpp(id: String, title: String, artist: String?, album: String?, artworkUri: String?, duration: Double?, genre: String?, albumArtist: String?, trackNumber: Double?, discNumber: Double?, year: Double?, subtitle: String?, isLive: Boolean?, extras: Map<String, String>?): NativeMediaItem {
+      return NativeMediaItem(id, title, artist, album, artworkUri, duration, genre, albumArtist, trackNumber, discNumber, year, subtitle, isLive, extras)
     }
   }
 }

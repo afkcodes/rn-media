@@ -42,6 +42,55 @@ export const MpvProperty = {
   demuxerCacheTime: 'demuxer-cache-time',
   /** `speed` — double, playback rate multiplier. */
   speed: 'speed',
+  /**
+   * `pitch` — double, `M_RANGE(0.01, 100.0)` (`options/options.c`, mpv 0.41.0).
+   *
+   * mpv 0.41.0 `options.rst`: "Raise or lower the audio's pitch by the factor
+   * given as parameter. Does not affect playback speed. Playing with an altered
+   * pitch automatically inserts the `scaletempo2` audio filter." Added upstream
+   * in mpv 0.40, i.e. it exists on every binary this library pins.
+   *
+   * An option, therefore also a property ("Most options can be set at runtime
+   * via properties as well. Just remove the leading `--`", `input.rst`), which
+   * is what makes it observable.
+   */
+  pitch: 'pitch',
+  /**
+   * `audio-channels` — the output channel layout, `UPDATE_AUDIO`
+   * (`options/options.c`, mpv 0.41.0) so it applies without a reload.
+   *
+   * mpv 0.41.0 `options.rst`: "`--audio-channels=<stereo|mono>` — Force a
+   * downmix to stereo or mono."
+   */
+  audioChannels: 'audio-channels',
+  /**
+   * `cache-buffering-state` — int, "The percentage (0-100) of the cache fill
+   * status until the player will unpause (related to `paused-for-cache`)"
+   * (mpv 0.41.0 `input.rst`).
+   *
+   * Read that sentence literally: it is **not** a general buffer gauge, it is
+   * how close mpv is to resuming from a stall. See
+   * `PlayerState.bufferingPercent`, which publishes it only while the player is
+   * actually stalled.
+   */
+  cacheBufferingState: 'cache-buffering-state',
+  /**
+   * `chapter` — int64, RW. mpv 0.41.0 `input.rst`: "Current chapter number. The
+   * number of the first chapter is 0. A value of -1 indicates that the current
+   * playback position is before the start of the first chapter."
+   *
+   * "Setting this property results in an absolute seek to the start of the
+   * chapter." Unavailable while nothing is loaded.
+   */
+  chapter: 'chapter',
+  /** `chapters` — int64, "Number of chapters" (`input.rst`). */
+  chapters: 'chapters',
+  /**
+   * `chapter-list` — node, read as one `MPV_FORMAT_NODE` array of maps
+   * (`MpvClient.getChapters`). mpv 0.41.0 `input.rst` documents the node shape
+   * verbatim: `"title" MPV_FORMAT_STRING`, `"time" MPV_FORMAT_DOUBLE`.
+   */
+  chapterList: 'chapter-list',
   /** `volume` — double, mpv's 0–100 scale (see {@link MPV_VOLUME_SCALE}). */
   volume: 'volume',
   /** `mute` — flag. */
@@ -282,6 +331,15 @@ export const MPV_VOLUME_SCALE = 100
  * Together with `media-title` (which mpv invalidates on the same
  * `MP_EVENT_METADATA_UPDATE`, `player/command.c`) it is what drives the
  * `metadataChanged` event.
+ *
+ * Three of these are observed for state fields that only ever move when
+ * something asks them to, so each costs one event at startup and nothing
+ * afterwards: `pitch` and `chapter` change on an app call or a chapter
+ * boundary, and `chapter` is simply unavailable on a file with no chapters.
+ * `cache-buffering-state` is the exception — mpv republishes it while a stall
+ * is filling — which is why the reducer quantises it and publishes it only
+ * while the player is actually stalled (`PlayerState.bufferingPercent`), the
+ * same treatment `demuxer-cache-time` gets and for the same reason.
  */
 export const OBSERVED_PROPERTIES: readonly ObservedProperty[] = [
   { name: MpvProperty.pause, format: 'bool' },
@@ -294,7 +352,10 @@ export const OBSERVED_PROPERTIES: readonly ObservedProperty[] = [
   { name: MpvProperty.playlistPos, format: 'number' },
   { name: MpvProperty.playlistCount, format: 'number' },
   { name: MpvProperty.demuxerCacheTime, format: 'number' },
+  { name: MpvProperty.cacheBufferingState, format: 'number' },
   { name: MpvProperty.speed, format: 'number' },
+  { name: MpvProperty.pitch, format: 'number' },
+  { name: MpvProperty.chapter, format: 'number' },
   { name: MpvProperty.volume, format: 'number' },
   { name: MpvProperty.mute, format: 'bool' },
   { name: MpvProperty.loopFile, format: 'string' },

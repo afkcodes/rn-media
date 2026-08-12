@@ -35,7 +35,10 @@ data class AndroidMediaSessionConfig(
   val stopForegroundTimeoutMs: Double?,
   @DoNotStrip
   @Keep
-  val playbackResumption: Boolean
+  val playbackResumption: Boolean,
+  @DoNotStrip
+  @Keep
+  val notificationColor: Double?
 ) {
   /* primary constructor */
 
@@ -48,6 +51,7 @@ data class AndroidMediaSessionConfig(
       && Objects.deepEquals(this.stopForegroundOnPause, other.stopForegroundOnPause)
       && Objects.deepEquals(this.stopForegroundTimeoutMs, other.stopForegroundTimeoutMs)
       && Objects.deepEquals(this.playbackResumption, other.playbackResumption)
+      && Objects.deepEquals(this.notificationColor, other.notificationColor)
   }
 
   override fun hashCode(): Int {
@@ -57,7 +61,8 @@ data class AndroidMediaSessionConfig(
       notificationIcon,
       stopForegroundOnPause,
       stopForegroundTimeoutMs,
-      playbackResumption
+      playbackResumption,
+      notificationColor
     ).contentDeepHashCode()
   }
 
@@ -69,8 +74,8 @@ data class AndroidMediaSessionConfig(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Boolean, stopForegroundTimeoutMs: Double?, playbackResumption: Boolean): AndroidMediaSessionConfig {
-      return AndroidMediaSessionConfig(notificationChannelId, notificationChannelName, notificationIcon, stopForegroundOnPause, stopForegroundTimeoutMs, playbackResumption)
+    private fun fromCpp(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Boolean, stopForegroundTimeoutMs: Double?, playbackResumption: Boolean, notificationColor: Double?): AndroidMediaSessionConfig {
+      return AndroidMediaSessionConfig(notificationChannelId, notificationChannelName, notificationIcon, stopForegroundOnPause, stopForegroundTimeoutMs, playbackResumption, notificationColor)
     }
   }
 }

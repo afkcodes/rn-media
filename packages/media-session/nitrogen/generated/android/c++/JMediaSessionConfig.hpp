@@ -16,6 +16,7 @@
 #include "JIosMediaSessionConfig.hpp"
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -40,9 +41,15 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<JAndroidMediaSessionConfig> android = this->getFieldValue(fieldAndroid);
       static const auto fieldIos = clazz->getField<JIosMediaSessionConfig>("ios");
       jni::local_ref<JIosMediaSessionConfig> ios = this->getFieldValue(fieldIos);
+      static const auto fieldJumpForwardSeconds = clazz->getField<double>("jumpForwardSeconds");
+      double jumpForwardSeconds = this->getFieldValue(fieldJumpForwardSeconds);
+      static const auto fieldJumpBackwardSeconds = clazz->getField<double>("jumpBackwardSeconds");
+      double jumpBackwardSeconds = this->getFieldValue(fieldJumpBackwardSeconds);
       return MediaSessionConfig(
         android != nullptr ? std::make_optional(android->toCpp()) : std::nullopt,
-        ios != nullptr ? std::make_optional(ios->toCpp()) : std::nullopt
+        ios != nullptr ? std::make_optional(ios->toCpp()) : std::nullopt,
+        jumpForwardSeconds,
+        jumpBackwardSeconds
       );
     }
 
@@ -52,13 +59,15 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JMediaSessionConfig::javaobject> fromCpp(const MediaSessionConfig& value) {
-      using JSignature = JMediaSessionConfig(jni::alias_ref<JAndroidMediaSessionConfig>, jni::alias_ref<JIosMediaSessionConfig>);
+      using JSignature = JMediaSessionConfig(jni::alias_ref<JAndroidMediaSessionConfig>, jni::alias_ref<JIosMediaSessionConfig>, double, double);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
         clazz,
         value.android.has_value() ? JAndroidMediaSessionConfig::fromCpp(value.android.value()) : nullptr,
-        value.ios.has_value() ? JIosMediaSessionConfig::fromCpp(value.ios.value()) : nullptr
+        value.ios.has_value() ? JIosMediaSessionConfig::fromCpp(value.ios.value()) : nullptr,
+        value.jumpForwardSeconds,
+        value.jumpBackwardSeconds
       );
     }
   };

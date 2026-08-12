@@ -315,38 +315,38 @@ export class SourceResolverController {
     // added after its own removal and stay there forever, so that URI could
     // never be resolved again for the life of the player. (Regression test:
     // "retries on the next queue movement after a failure".)
-    const pending = Promise.resolve().then(async (): Promise<
-      string | undefined
-    > => {
-      try {
-        const resolved = await resolver(request)
-        if (typeof resolved !== 'string' || resolved === '') {
-          throw new Error(
-            `the resolver returned ${resolved === '' ? 'an empty string' : String(resolved)} instead of a URL`
-          )
+    const pending = Promise.resolve().then(
+      async (): Promise<string | undefined> => {
+        try {
+          const resolved = await resolver(request)
+          if (typeof resolved !== 'string' || resolved === '') {
+            throw new Error(
+              `the resolver returned ${resolved === '' ? 'an empty string' : String(resolved)} instead of a URL`
+            )
+          }
+          return resolved
+        } catch (thrown) {
+          // Not swallowed and not cached: the caller hears about it on the typed
+          // `error` channel, and mpv is left to open the logical URI and fail on
+          // its own terms rather than being handed a URL we do not trust.
+          const raw = messageOf(thrown)
+          this.#options.onError({
+            code: 'load-failed',
+            message: `Could not resolve \`${uri}\`: ${raw}`,
+            raw,
+            uri,
+            // The one `load-failed` with a real URI to judge by: a signing
+            // endpoint or transcode API that failed over the network is worth
+            // asking again, a local path that could not be turned into one is
+            // not. See `Retryable` in `errors.ts`.
+            retryable: isNetworkUri(uri),
+          })
+          return undefined
+        } finally {
+          this.#inFlight.delete(uri)
         }
-        return resolved
-      } catch (thrown) {
-        // Not swallowed and not cached: the caller hears about it on the typed
-        // `error` channel, and mpv is left to open the logical URI and fail on
-        // its own terms rather than being handed a URL we do not trust.
-        const raw = messageOf(thrown)
-        this.#options.onError({
-          code: 'load-failed',
-          message: `Could not resolve \`${uri}\`: ${raw}`,
-          raw,
-          uri,
-          // The one `load-failed` with a real URI to judge by: a signing
-          // endpoint or transcode API that failed over the network is worth
-          // asking again, a local path that could not be turned into one is
-          // not. See `Retryable` in `errors.ts`.
-          retryable: isNetworkUri(uri),
-        })
-        return undefined
-      } finally {
-        this.#inFlight.delete(uri)
       }
-    })
+    )
 
     this.#inFlight.set(uri, pending)
     return pending

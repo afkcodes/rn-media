@@ -18,7 +18,7 @@ public extension MediaSessionHandlers {
   /**
    * Create a new instance of `MediaSessionHandlers`.
    */
-  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void) {
+  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void) {
     self.init({ () -> bridge.Func_void in
       let __closureWrapper = Func_void(play)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
@@ -43,6 +43,12 @@ public extension MediaSessionHandlers {
     }(), { () -> bridge.Func_void_double in
       let __closureWrapper = Func_void_double(setRate)
       return bridge.create_Func_void_double(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_MediaRepeatMode in
+      let __closureWrapper = Func_void_MediaRepeatMode(setRepeatMode)
+      return bridge.create_Func_void_MediaRepeatMode(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_bool in
+      let __closureWrapper = Func_void_bool(setShuffle)
+      return bridge.create_Func_void_bool(__closureWrapper.toUnsafe())
     }(), { () -> bridge.Func_void in
       let __closureWrapper = Func_void(onTaskRemoved)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
@@ -134,6 +140,26 @@ public extension MediaSessionHandlers {
       let __wrappedFunction = bridge.wrap_Func_void_double(self.__setRate)
       return { (__rate: Double) -> Void in
         __wrappedFunction.call(__rate)
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var setRepeatMode: (_ mode: MediaRepeatMode) -> Void {
+    return { () -> (MediaRepeatMode) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_MediaRepeatMode(self.__setRepeatMode)
+      return { (__mode: MediaRepeatMode) -> Void in
+        __wrappedFunction.call(__mode.rawValue)
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var setShuffle: (_ enabled: Bool) -> Void {
+    return { () -> (Bool) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_bool(self.__setShuffle)
+      return { (__enabled: Bool) -> Void in
+        __wrappedFunction.call(__enabled)
       }
     }()
   }

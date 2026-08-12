@@ -40,7 +40,7 @@ class HybridRnMediaMediaSession : HybridRnMediaMediaSessionSpec() {
     handlers: MediaSessionHandlers,
   ): Promise<Unit> {
     val promise = Promise<Unit>()
-    MediaSessionController.initialize(appContext, config.android, handlers) {
+    MediaSessionController.initialize(appContext, config, handlers) {
       promise.resolve(Unit)
     }
     return promise
@@ -72,10 +72,17 @@ class HybridRnMediaMediaSession : HybridRnMediaMediaSessionSpec() {
     MediaSessionController.setSleepTimer(seconds)
   }
 
+  override fun setSleepTimerToTrackEnd() {
+    MediaSessionController.setSleepTimerToTrackEnd()
+  }
+
   override fun cancelSleepTimer() {
     MediaSessionController.cancelSleepTimer()
   }
 
   override fun getSleepTimerRemaining(): Double? =
     MediaSessionController.sleepTimerRemaining()
+
+  override fun getSleepTimer(): NativeSleepTimerState? =
+    MediaSessionController.sleepTimerState()
 }

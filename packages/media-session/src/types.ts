@@ -3,8 +3,10 @@ import type {
   MediaControl,
   MediaCustomAction,
   MediaPlaybackStatus,
+  MediaRepeatMode,
   NativeMediaItem,
   PositionAnchor,
+  SleepTimerMode,
 } from './specs/media-session.nitro'
 
 /**
@@ -47,7 +49,40 @@ export interface PlaybackState {
   queueIndex?: number
   /** Only meaningful when `status === 'error'`. */
   errorMessage?: string
+  /**
+   * Current repeat mode for the remote surfaces' repeat button.
+   *
+   * Additive and optional so every existing call site keeps compiling and keeps
+   * behaving identically. @default 'off'
+   *
+   * The button only *appears* if `capabilities` also contains `'setRepeatMode'`;
+   * presses arrive at {@link MediaHandler.onSetRepeatMode}.
+   */
+  repeatMode?: MediaRepeatMode
+  /** Current shuffle state. Same rules as {@link repeatMode}. @default false */
+  shuffleEnabled?: boolean
 }
+
+/**
+ * What the native sleep timer is doing, as {@link MediaServiceApi.getSleepTimer}
+ * reports it.
+ *
+ * A discriminated union rather than `{ mode, remainingSeconds? }` so the one
+ * case that has no number — a `trackEnd` timer whose deadline is not computable
+ * yet — cannot be confused with "not armed" by an optional-chaining accident.
+ */
+export type SleepTimerState =
+  /** {@link MediaServiceApi.setSleepTimer}: a countdown, always with a number. */
+  | { readonly mode: 'duration'; readonly remainingSeconds: number }
+  /**
+   * {@link MediaServiceApi.setSleepTimerToTrackEnd}.
+   *
+   * `remainingSeconds` is present while the current item has a duration and
+   * playback is advancing, and absent otherwise — a live stream, a paused
+   * player, or a track whose duration the app has not broadcast yet. Absent
+   * means "armed, deadline unknown", never "not armed".
+   */
+  | { readonly mode: 'trackEnd'; readonly remainingSeconds?: number }
 
 /**
  * The fan-in interface. Every remote surface — notification, lock screen,
@@ -70,6 +105,27 @@ export interface MediaHandler {
   /** @param index index into the last broadcast queue */
   skipToQueueItem(index: number): void | Promise<void>
   setRate(rate: number): void | Promise<void>
+  /**
+   * A remote surface asked for a different repeat mode.
+   *
+   * **A request, not a fact.** Nothing has changed until the app changes it and
+   * broadcasts a `setPlaybackState` carrying the new `repeatMode` — the same
+   * acknowledgement contract `play`/`pause` follow, and on Android it is
+   * literally what completes media3's pending-operation future.
+   *
+   * Only reachable when the app advertises the `setRepeatMode` capability.
+   *
+   * Optional for the reason {@link onSleepTimer} is: this interface is the
+   * player-agnostic contract, and a method added after v1 must not break
+   * structural implementors. `BaseMediaHandler` supplies a no-op.
+   */
+  onSetRepeatMode?(mode: MediaRepeatMode): void | Promise<void>
+  /**
+   * A remote surface asked to turn shuffle on or off. See
+   * {@link onSetRepeatMode} — same request/acknowledge contract, gated on the
+   * `setShuffle` capability, optional for the same reason.
+   */
+  onSetShuffle?(enabled: boolean): void | Promise<void>
   /**
    * Android only: the app's task was swiped out of Recents.
    *
@@ -207,10 +263,35 @@ export interface MediaServiceConfig {
      * purpose, not by accident.
      */
     playbackResumption?: boolean
+    /**
+     * Notification accent colour as an **ARGB integer** — `0xFF1DB954`.
+     *
+     * Include the alpha byte: `0x1DB954` is transparent black. Applied to
+     * `Notification.color` after media3 has built the notification. Android 12+
+     * media shades often derive their own palette from the artwork and may
+     * ignore it, so it is a hint rather than a guarantee. Ignored on iOS, which
+     * has no colour surface — the lock screen's palette comes from the artwork.
+     */
+    notificationColor?: number
   }
   ios?: {
     /** Decoded-artwork cache capacity. @default 8 */
     artworkCacheSize?: number
+    /**
+     * Playback rates the lock-screen rate control offers, ascending.
+     *
+     * `MPChangePlaybackRateCommand.supportedPlaybackRates` is a fixed list and
+     * iOS snaps the user's choice to a member of it, so an audiobook app that
+     * offers 1.0/1.25/1.5/1.75/2.0/3.0 cannot say so without this.
+     *
+     * @default [0.5, 0.75, 1, 1.25, 1.5, 2]
+     *
+     * Namespaced under `ios` because there is genuinely no Android twin: media3
+     * takes an arbitrary float through `COMMAND_SET_SPEED_AND_PITCH` and its
+     * notification draws no rate control at all, so there is no list to hand it.
+     * Setting it on Android is harmless and does nothing.
+     */
+    supportedPlaybackRates?: number[]
     /**
      * There is deliberately no `playbackResumption` here — see
      * {@link MediaServiceConfig.android}. iOS cannot restart a terminated app to
@@ -218,6 +299,28 @@ export interface MediaServiceConfig {
      * the next manual launch.
      */
   }
+  /**
+   * How far the `fastForward` control jumps, in seconds. @default 15
+   *
+   * Cross-platform, and top-level rather than per-platform because that is
+   * exactly the point of it: before this option existed the two platforms
+   * disagreed from the same JS call — iOS pinned 15 s in both directions while
+   * Android set no increment and inherited media3's 5 s back / 15 s forward.
+   *
+   * Android: `SimpleBasePlayer.State.Builder.setSeekForwardIncrementMs`.
+   * iOS: `MPSkipIntervalCommand.preferredIntervals`.
+   */
+  jumpForwardSeconds?: number
+  /**
+   * How far the `rewind` control jumps, in seconds. @default 15
+   *
+   * 15 — not media3's 5 — is the deliberate shared default: it matches RNTP V4
+   * (`backwardJumpInterval`) and V5 (`backwardInterval`), it is what this
+   * package already did on iOS, and a symmetric pair cannot surprise someone who
+   * sets one and forgets the other. Podcast and audiobook apps set 30 here
+   * explicitly, which is the whole reason the knob exists.
+   */
+  jumpBackwardSeconds?: number
   /**
    * Called when a handler method throws or rejects. Defaults to `console.error`.
    * There is no other place for the error to go — handler invocations are
@@ -302,6 +405,35 @@ export interface MediaServiceApi {
    * `Infinity` or a non-number.
    */
   setSleepTimer(seconds: number): void
+  /**
+   * Pause when the **current item finishes**, on the same native timer.
+   * Replaces any timer already armed.
+   *
+   * A separate method rather than an option object on {@link setSleepTimer}:
+   * the two modes take different arguments (one takes seconds, this takes
+   * nothing), and a `setSleepTimer(number | {atTrackEnd:true})` union would make
+   * every call site read like a discriminated parse of its own argument.
+   *
+   * ## How this works without owning a player
+   * From the broadcasts the app already sends. The deadline is
+   * `(duration - projectedPosition) / rate` — both halves are already on the
+   * `playbackState` and `mediaItem` channels — computed natively and re-armed on
+   * every broadcast, so a seek, a pause, a rate change or a late-arriving
+   * duration all move it. Nothing polls and nothing new crosses the bridge.
+   *
+   * Two cases handled without a duration at all:
+   * - **the current item changes** (the track ended and the app advanced, or the
+   *   user skipped) → it fires immediately, which is the honest reading of
+   *   "stop after this one";
+   * - **no duration was ever broadcast** (a live stream, or it has not arrived
+   *   yet) → armed with no deadline, waiting for that item change.
+   *   {@link getSleepTimer} reports `trackEnd` with no `remainingSeconds`
+   *   rather than inventing one.
+   *
+   * When it fires, everything is identical to {@link setSleepTimer}: playback is
+   * paused natively first, then {@link MediaHandler.onSleepTimer}.
+   */
+  setSleepTimerToTrackEnd(): void
   /** Disarm the sleep timer. A no-op when none is armed. */
   cancelSleepTimer(): void
   /**
@@ -310,8 +442,23 @@ export interface MediaServiceApi {
    * Synchronous and cheap — meant to be polled by a visible UI, which is the
    * one place JS timers do work. Read from the platform's own timer clock, so
    * it cannot disagree with when the pause will actually happen.
+   *
+   * Cannot describe an end-of-track timer with no computable deadline, and
+   * returns `undefined` for one — use {@link getSleepTimer} when the difference
+   * between "not armed" and "armed, deadline unknown" matters, which for a UI
+   * that renders a timer badge it always does.
    */
   getSleepTimerRemaining(): number | undefined
+  /**
+   * The armed timer's mode, and its remaining seconds when those are knowable —
+   * or `undefined` when nothing is armed.
+   *
+   * ```ts
+   * const timer = service.getSleepTimer()
+   * if (timer?.mode === 'trackEnd') badge(timer.remainingSeconds ?? 'end of track')
+   * ```
+   */
+  getSleepTimer(): SleepTimerState | undefined
 }
 
 export type {
@@ -319,5 +466,7 @@ export type {
   MediaControl,
   MediaCustomAction,
   MediaPlaybackStatus,
+  MediaRepeatMode,
   PositionAnchor,
+  SleepTimerMode,
 }

@@ -37,6 +37,8 @@ namespace margelo::nitro::rnmediamediasession {
     SEEK      SWIFT_NAME(seek) = 5,
     SKIPTOQUEUEITEM      SWIFT_NAME(skiptoqueueitem) = 6,
     SETRATE      SWIFT_NAME(setrate) = 7,
+    SETREPEATMODE      SWIFT_NAME(setrepeatmode) = 8,
+    SETSHUFFLE      SWIFT_NAME(setshuffle) = 9,
   } CLOSED_ENUM;
 
 } // namespace margelo::nitro::rnmediamediasession
@@ -57,6 +59,8 @@ namespace margelo::nitro {
         case hashString("seek"): return margelo::nitro::rnmediamediasession::MediaCapability::SEEK;
         case hashString("skipToQueueItem"): return margelo::nitro::rnmediamediasession::MediaCapability::SKIPTOQUEUEITEM;
         case hashString("setRate"): return margelo::nitro::rnmediamediasession::MediaCapability::SETRATE;
+        case hashString("setRepeatMode"): return margelo::nitro::rnmediamediasession::MediaCapability::SETREPEATMODE;
+        case hashString("setShuffle"): return margelo::nitro::rnmediamediasession::MediaCapability::SETSHUFFLE;
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert \"" + unionValue + "\" to enum MediaCapability - invalid value!");
       }
@@ -71,6 +75,8 @@ namespace margelo::nitro {
         case margelo::nitro::rnmediamediasession::MediaCapability::SEEK: return JSIConverter<std::string>::toJSI(runtime, "seek");
         case margelo::nitro::rnmediamediasession::MediaCapability::SKIPTOQUEUEITEM: return JSIConverter<std::string>::toJSI(runtime, "skipToQueueItem");
         case margelo::nitro::rnmediamediasession::MediaCapability::SETRATE: return JSIConverter<std::string>::toJSI(runtime, "setRate");
+        case margelo::nitro::rnmediamediasession::MediaCapability::SETREPEATMODE: return JSIConverter<std::string>::toJSI(runtime, "setRepeatMode");
+        case margelo::nitro::rnmediamediasession::MediaCapability::SETSHUFFLE: return JSIConverter<std::string>::toJSI(runtime, "setShuffle");
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert MediaCapability to JS - invalid value: "
                                     + std::to_string(static_cast<int>(arg)) + "!");
@@ -90,6 +96,8 @@ namespace margelo::nitro {
         case hashString("seek"):
         case hashString("skipToQueueItem"):
         case hashString("setRate"):
+        case hashString("setRepeatMode"):
+        case hashString("setShuffle"):
           return true;
         default:
           return false;

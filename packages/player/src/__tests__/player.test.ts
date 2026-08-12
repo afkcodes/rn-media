@@ -394,7 +394,14 @@ describe('Player — gapless track transitions', () => {
     ])
     expect(numbers.mock.calls).toEqual([[MpvProperty.duration]])
     expect(bools.mock.calls).toEqual([[MpvProperty.seekable]])
-    expect(strings.mock.calls).toEqual([[MpvProperty.mediaTitle]])
+    // Four reads per cursor change, not three: `media-title` for the state, and
+    // `playlist/<new index>/filename` for the URI error classification is keyed
+    // on. Both are one-shot, both ride the same already-paid boundary, and the
+    // duplicate `playlist-pos` in this batch still buys only one of each.
+    expect(strings.mock.calls).toEqual([
+      [MpvProperty.mediaTitle],
+      ['playlist/1/filename'],
+    ])
     expect(player.state.duration).toBe(137)
   })
 
@@ -783,7 +790,7 @@ describe('Player — m3u8 playlist-demuxer guard', () => {
   it('respects a caller-supplied demuxer across a whole playlist', async () => {
     const player = await createPlayer()
     await player.loadPlaylist(['a.mp3', HLS], {
-      mpvOptions: { demuxer: 'lavf', 'cache-pause': 'no' },
+      mpvOptions: { 'demuxer': 'lavf', 'cache-pause': 'no' },
     })
     expect(client.commands.slice(1, 3)).toEqual([
       ['loadfile', 'a.mp3', 'append', '-1', 'demuxer=lavf,cache-pause=no'],
@@ -948,9 +955,9 @@ describe('Player — playlist.add positions', () => {
     const player = await createPlayer()
     queueOf(5)
     for (const position of [1.5, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      await expect(
-        player.playlist.add('x.mp3', { position })
-      ).rejects.toThrow(/non-negative integer playlist index/u)
+      await expect(player.playlist.add('x.mp3', { position })).rejects.toThrow(
+        /non-negative integer playlist index/u
+      )
     }
     expect(client.commands).toEqual([])
   })
@@ -1141,7 +1148,7 @@ describe('Player — ReplayGain', () => {
 
   it('emits only the fields that were given', async () => {
     await createPlayer({ replayGain: { mode: 'track' } })
-    expect(client.initOptions?.['replaygain']).toBe('track')
+    expect(client.initOptions?.replaygain).toBe('track')
     expect(client.initOptions).not.toHaveProperty('replaygain-preamp')
     expect(client.initOptions).not.toHaveProperty('replaygain-clip')
     expect(client.initOptions).not.toHaveProperty('replaygain-fallback')
@@ -1184,13 +1191,16 @@ describe('Player — ReplayGain', () => {
     ['non-finite preamp', { mode: 'track' as const, preamp: Number.NaN }],
     ['fallback above mpv’s range', { mode: 'track' as const, fallback: 61 }],
     ['fallback below mpv’s range', { mode: 'track' as const, fallback: -201 }],
-  ])('rejects %s at create time, before a core exists', async (_label, gain) => {
-    await expect(createPlayer({ replayGain: gain })).rejects.toMatchObject({
-      playerError: { code: 'invalid-state' },
-    })
-    expect(client.initialized).toBe(false)
-    expect(client.destroyCount).toBe(0)
-  })
+  ])(
+    'rejects %s at create time, before a core exists',
+    async (_label, gain) => {
+      await expect(createPlayer({ replayGain: gain })).rejects.toMatchObject({
+        playerError: { code: 'invalid-state' },
+      })
+      expect(client.initialized).toBe(false)
+      expect(client.destroyCount).toBe(0)
+    }
+  )
 
   it.each([
     ['bad mode', { mode: 'loud' as never }],
@@ -1202,17 +1212,23 @@ describe('Player — ReplayGain', () => {
     expect(client.written.has('replaygain')).toBe(false)
   })
 
-  it.each([-150, 150, 0])('accepts preamp %s (mpv’s boundary)', async (preamp) => {
-    const player = await createPlayer()
-    player.setReplayGain({ mode: 'track', preamp })
-    expect(client.written.get('replaygain-preamp')).toBe(preamp)
-  })
+  it.each([-150, 150, 0])(
+    'accepts preamp %s (mpv’s boundary)',
+    async (preamp) => {
+      const player = await createPlayer()
+      player.setReplayGain({ mode: 'track', preamp })
+      expect(client.written.get('replaygain-preamp')).toBe(preamp)
+    }
+  )
 
-  it.each([-200, 60])('accepts fallback %s (mpv’s boundary)', async (fallback) => {
-    const player = await createPlayer()
-    player.setReplayGain({ mode: 'track', fallback })
-    expect(client.written.get('replaygain-fallback')).toBe(fallback)
-  })
+  it.each([-200, 60])(
+    'accepts fallback %s (mpv’s boundary)',
+    async (fallback) => {
+      const player = await createPlayer()
+      player.setReplayGain({ mode: 'track', fallback })
+      expect(client.written.get('replaygain-fallback')).toBe(fallback)
+    }
+  )
 })
 
 describe('Player — prefetch and cache options', () => {
@@ -1634,7 +1650,9 @@ describe('Player — visualizer wiring', () => {
     )
     const player = await createPlayer()
     expect(player.visualizer.capabilities.fft).toBe(false)
-    expect(() => player.visualizer.subscribe(() => {})).toThrow(/rn-media forks/)
+    expect(() => player.visualizer.subscribe(() => {})).toThrow(
+      /rn-media forks/
+    )
   })
 
   it('never asks mpv for an Android audio session', async () => {
@@ -1668,7 +1686,9 @@ describe('Player — visualizer wiring', () => {
     expect(client.visualizerRunning).toBe(true)
     player.destroy()
     expect(client.visualizerRunning).toBe(false)
-    expect(client.visualizerCalls.filter((c) => c.kind === 'stop')).toHaveLength(1)
+    expect(
+      client.visualizerCalls.filter((c) => c.kind === 'stop')
+    ).toHaveLength(1)
   })
 
   it('costs nothing until something subscribes', async () => {
@@ -1681,9 +1701,11 @@ describe('Player — visualizer wiring', () => {
 
 describe('Player — queue contents (playlist.entries)', () => {
   /** mpv's `playlist` node, as the fake will hand it back. */
-  function queue(
-    ...uris: readonly string[]
-  ): { readonly uri: string; readonly entryId: number; readonly current: boolean }[] {
+  function queue(...uris: readonly string[]): {
+    readonly uri: string
+    readonly entryId: number
+    readonly current: boolean
+  }[] {
     return uris.map((uri, index) => ({
       uri,
       entryId: 100 + index,
@@ -1745,7 +1767,9 @@ describe('Player — queue contents (playlist.entries)', () => {
     client.readErrors.set(MpvProperty.playlist, '[mpv:-11] property error')
     const player = await createPlayer()
     expect(() => player.playlist.entries()).toThrowError(
-      expect.objectContaining({ playerError: expect.objectContaining({ code: 'mpv' }) })
+      expect.objectContaining({
+        playerError: expect.objectContaining({ code: 'mpv' }),
+      })
     )
   })
 
@@ -1840,9 +1864,9 @@ describe('Player — setPrefetchPlaylist', () => {
   it('rejects a non-boolean with a typed invalid-state error', async () => {
     const player = await createPlayer()
     expect(() =>
-      (player as unknown as { setPrefetchPlaylist: (v: unknown) => void }).setPrefetchPlaylist(
-        'yes'
-      )
+      (
+        player as unknown as { setPrefetchPlaylist: (v: unknown) => void }
+      ).setPrefetchPlaylist('yes')
     ).toThrowError(
       expect.objectContaining({
         playerError: expect.objectContaining({ code: 'invalid-state' }),
@@ -2063,6 +2087,9 @@ describe('Player — retry before skip', () => {
     ['playlist.move', (p: Player) => p.playlist.move(0, 1)],
     ['playlist.shuffle', (p: Player) => p.playlist.shuffle()],
     ['playlist.unshuffle', (p: Player) => p.playlist.unshuffle()],
+    // Both stop flavours: the retry reset is stop's own, not keep-playlist's.
+    ['stop', (p: Player) => p.stop()],
+    ['stop({clearPlaylist})', (p: Player) => p.stop({ clearPlaylist: true })],
     // Network URIs on purpose: a non-network source classifies as
     // `load-failed`, which is not retryable, and the test would pass for the
     // wrong reason.
@@ -2464,5 +2491,461 @@ describe('Player — clearError', () => {
     const player = await createPlayer()
     player.destroy()
     expect(() => player.clearError()).toThrow(PlayerErrorException)
+  })
+})
+
+describe('Player — current-entry URI tracking (filed defect)', () => {
+  const LOCAL = '/sdcard/Music/local.flac'
+  const REMOTE = 'https://cdn.example.com/remote.mp3'
+
+  /** Move the cursor, with mpv answering the one-shot reads for that entry. */
+  function moveTo(index: number, uri: string, seekable = true): void {
+    client.readable.set(`playlist/${index}/filename`, uri)
+    client.readable.set(MpvProperty.seekable, seekable)
+    client.emit([propertyEvent(MpvProperty.playlistPos, index)])
+  }
+
+  it('classifies against the entry that is playing, not the one that was loaded', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    const errors: PlayerError[] = []
+    player.on('error', (error) => errors.push(error))
+
+    // A mixed queue: entry 0 local, entry 1 remote. `loadPlaylist` remembers
+    // entry 0 — which used to be the URI every later failure was judged by.
+    await player.loadPlaylist([LOCAL, REMOTE])
+    moveTo(0, LOCAL)
+    moveTo(1, REMOTE)
+
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+
+    expect(errors[0]).toMatchObject({ code: 'network', uri: REMOTE })
+    // …and it is retryable *because* it is a network entry, which is the whole
+    // point: the retry layer reads this flag.
+    expect(errors[0]?.retryable).toBe(true)
+  })
+
+  it('follows the cursor back to a local entry', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    const errors: PlayerError[] = []
+    player.on('error', (error) => errors.push(error))
+
+    await player.loadPlaylist([REMOTE, LOCAL])
+    moveTo(0, REMOTE)
+    moveTo(1, LOCAL)
+
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+    expect(errors[0]?.code).toBe('load-failed')
+    expect(errors[0]?.retryable).toBe(false)
+  })
+
+  it('classifies an end-file in the same batch as the entry that ended', async () => {
+    // The ordering trap: a batch can carry the previous entry's failure and the
+    // next entry's cursor move together. The failure belongs to the old URI.
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    const errors: PlayerError[] = []
+    player.on('error', (error) => errors.push(error))
+
+    await player.loadPlaylist([REMOTE, LOCAL])
+    moveTo(0, REMOTE)
+
+    client.readable.set('playlist/1/filename', LOCAL)
+    client.emit([
+      endFileEvent('error', 'loading failed'),
+      propertyEvent(MpvProperty.playlistPos, 1),
+    ])
+    expect(errors[0]).toMatchObject({ code: 'network', uri: REMOTE })
+  })
+
+  it('keeps the last known URI when mpv cannot answer the read', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    const errors: PlayerError[] = []
+    player.on('error', (error) => errors.push(error))
+
+    await player.load(REMOTE)
+    // No `playlist/1/filename` seeded: a failed/unavailable read must not
+    // downgrade classification to "unknown".
+    client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+    expect(errors[0]).toMatchObject({ uri: REMOTE })
+  })
+
+  it('reads the new entry’s filename once per cursor change', async () => {
+    const player = await createPlayer()
+    await player.load(REMOTE)
+    const reads = vi.spyOn(client, 'getPropertyString')
+    moveTo(2, LOCAL)
+    expect(
+      reads.mock.calls.filter(([name]) => name.startsWith('playlist/'))
+    ).toEqual([['playlist/2/filename']])
+    expect(player.state.playlist.index).toBe(2)
+  })
+})
+
+describe('Player — stop', () => {
+  it('keeps the queue by default — the transport button, not mpv’s clear', async () => {
+    const player = await createPlayer()
+    await player.stop()
+    expect(client.commands).toEqual([['stop', 'keep-playlist']])
+  })
+
+  it('clears the queue only when asked', async () => {
+    const player = await createPlayer()
+    await player.stop({ clearPlaylist: true })
+    expect(client.commands).toEqual([['stop']])
+  })
+
+  it('leaves the kept queue with no current entry and no skip either way', async () => {
+    const player = await createPlayer()
+    await player.load(URI)
+    client.emit([
+      startFileEvent(),
+      propertyEvent(MpvProperty.playlistPos, 1),
+      propertyEvent(MpvProperty.playlistCount, 3),
+      playbackRestartEvent(),
+    ])
+    expect(player.state.hasNext).toBe(true)
+    expect(player.state.hasPrevious).toBe(true)
+
+    await player.stop()
+    // mpv ends the entry with reason `stop` and leaves no entry "current":
+    // `playlist-pos` reads -1 while the playlist itself survives.
+    client.emit([
+      endFileEvent('stop'),
+      propertyEvent(MpvProperty.playlistPos, -1),
+    ])
+
+    expect(player.state.status).toBe('idle')
+    expect(player.state.playlist).toEqual({ index: -1, count: 3 })
+    // Nothing is loaded, so there is nothing relative to skip from — the way
+    // back into the queue is `playlist.jumpTo(i)`, not `play()`.
+    expect(player.state.hasNext).toBe(false)
+    expect(player.state.hasPrevious).toBe(false)
+  })
+
+  it('settles to idle and leaves the player usable', async () => {
+    const player = await createPlayer()
+    await player.load(URI)
+    client.emit([startFileEvent(), playbackRestartEvent()])
+    await player.stop()
+    client.emit([endFileEvent('stop')])
+    expect(player.state.status).toBe('idle')
+    expect(player.destroyed).toBe(false)
+
+    await player.load(URI)
+    expect(client.commands.at(-1)?.[0]).toBe('loadfile')
+  })
+
+  it('throws once destroyed', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    await expect(player.stop()).rejects.toThrow(PlayerErrorException)
+  })
+})
+
+describe('Player — seekBy', () => {
+  it('issues a relative exact seek', async () => {
+    const player = await createPlayer()
+    await player.seekBy(15)
+    await player.seekBy(-15)
+    expect(client.commands).toEqual([
+      ['seek', '15', 'relative+exact'],
+      ['seek', '-15', 'relative+exact'],
+    ])
+  })
+
+  it('rejects a non-finite delta rather than sending garbage to mpv', async () => {
+    const player = await createPlayer()
+    await expect(player.seekBy(Number.NaN)).rejects.toThrow(
+      PlayerErrorException
+    )
+    expect(client.commands).toEqual([])
+  })
+})
+
+describe('Player — pitch', () => {
+  it('writes mpv’s pitch property', async () => {
+    const player = await createPlayer()
+    player.setPitch(1.5)
+    expect(client.written.get(MpvProperty.pitch)).toBe(1.5)
+  })
+
+  it('takes a ratio, so semitones are a caller-side power of two', async () => {
+    const player = await createPlayer()
+    const semitones = (n: number): number => 2 ** (n / 12)
+    player.setPitch(semitones(7))
+    // mpv's own worked example for a perfect fifth.
+    expect(client.written.get(MpvProperty.pitch)).toBeCloseTo(1.498307, 5)
+  })
+
+  it('validates against mpv’s range instead of clamping', async () => {
+    const player = await createPlayer()
+    // Clamping `0` to `0.01` would hide a caller bug behind an inaudible
+    // sub-sonic pitch; mpv's own domain is the contract.
+    expect(() => player.setPitch(0)).toThrow(PlayerErrorException)
+    expect(() => player.setPitch(101)).toThrow(PlayerErrorException)
+    expect(() => player.setPitch(Number.NaN)).toThrow(PlayerErrorException)
+    expect(client.written.has(MpvProperty.pitch)).toBe(false)
+  })
+
+  it('does not touch speed — the two are independent', async () => {
+    const player = await createPlayer()
+    player.setRate(1.5)
+    player.setPitch(2)
+    expect(client.written.get(MpvProperty.speed)).toBe(1.5)
+    expect(client.written.get(MpvProperty.pitch)).toBe(2)
+  })
+
+  it('publishes the observed value in state', async () => {
+    const player = await createPlayer()
+    expect(player.state.pitch).toBe(1)
+    client.emit([propertyEvent(MpvProperty.pitch, 0.5)])
+    expect(player.state.pitch).toBe(0.5)
+  })
+})
+
+describe('Player — audio channels', () => {
+  it('forces a mono downmix through mpv’s own channel negotiation', async () => {
+    const player = await createPlayer()
+    player.setAudioChannels('mono')
+    // No filter chain involved: `pan` is not compiled into these binaries and
+    // is not needed for this.
+    expect(client.written.get(MpvProperty.audioChannels)).toBe('mono')
+    expect(client.written.has(MpvProperty.audioFilters)).toBe(false)
+  })
+
+  it('accepts every documented mode and rejects anything else', async () => {
+    const player = await createPlayer()
+    for (const mode of ['auto-safe', 'auto', 'stereo', 'mono'] as const) {
+      player.setAudioChannels(mode)
+      expect(client.written.get(MpvProperty.audioChannels)).toBe(mode)
+    }
+    expect(() => player.setAudioChannels('5.1' as 'mono')).toThrow(
+      PlayerErrorException
+    )
+  })
+})
+
+describe('Player — restart-or-previous', () => {
+  /** A player playing `index` of a 3-entry queue, `seconds` in. */
+  async function playingAt(seconds: number, index = 1): Promise<Player> {
+    const player = await createPlayer()
+    await player.loadPlaylist(['a.mp3', 'b.mp3', 'c.mp3'])
+    client.readable.set(MpvProperty.timePos, seconds)
+    client.readable.set(MpvProperty.seekable, true)
+    client.emit([
+      propertyEvent(MpvProperty.playlistCount, 3),
+      propertyEvent(MpvProperty.playlistPos, index),
+      propertyEvent(MpvProperty.pause, false),
+      playbackRestartEvent(),
+    ])
+    client.commands.length = 0
+    return player
+  }
+
+  it('goes back when barely into the entry', async () => {
+    const player = await playingAt(1)
+    await player.playlist.previous()
+    expect(client.commands).toEqual([['playlist-prev', 'weak']])
+  })
+
+  it('restarts when past the threshold', async () => {
+    const player = await playingAt(10)
+    await player.playlist.previous()
+    expect(client.commands).toEqual([['seek', '0', 'absolute+exact']])
+  })
+
+  it('honours a custom threshold', async () => {
+    const player = await playingAt(10)
+    await player.playlist.previous({ restartThreshold: 30 })
+    expect(client.commands).toEqual([['playlist-prev', 'weak']])
+  })
+
+  it('always moves at threshold 0', async () => {
+    const player = await playingAt(600)
+    await player.playlist.previous({ restartThreshold: 0 })
+    expect(client.commands).toEqual([['playlist-prev', 'weak']])
+  })
+
+  it('always moves on a live stream, which has no 0 to return to', async () => {
+    const player = await createPlayer()
+    client.readable.set(MpvProperty.timePos, 600)
+    client.emit([
+      propertyEvent(MpvProperty.playlistCount, 2),
+      propertyEvent(MpvProperty.playlistPos, 1),
+      propertyEvent(MpvProperty.seekable, false),
+      propertyEvent(MpvProperty.pause, false),
+      playbackRestartEvent(),
+    ])
+    expect(player.state.isLive).toBe(true)
+    client.commands.length = 0
+    await player.playlist.previous()
+    expect(client.commands).toEqual([['playlist-prev', 'weak']])
+  })
+
+  it('rejects a nonsensical threshold', async () => {
+    const player = await createPlayer()
+    await expect(
+      player.playlist.previous({ restartThreshold: -1 })
+    ).rejects.toThrow(PlayerErrorException)
+  })
+})
+
+describe('Player — queueEnded', () => {
+  /** Play the entry at `index` of a `count`-entry queue and end it cleanly. */
+  async function endEntry(
+    index: number,
+    count: number,
+    loop?: 'track' | 'playlist'
+  ): Promise<{ ended: number; queueEnded: number }> {
+    const player = await createPlayer()
+    let ended = 0
+    let queueEnded = 0
+    player.on('trackEnded', () => (ended += 1))
+    player.on('queueEnded', () => (queueEnded += 1))
+    client.emit([
+      propertyEvent(MpvProperty.playlistCount, count),
+      propertyEvent(MpvProperty.playlistPos, index),
+      ...(loop === 'playlist'
+        ? [propertyEvent(MpvProperty.loopPlaylist, 'inf')]
+        : loop === 'track'
+          ? [propertyEvent(MpvProperty.loopFile, 'inf')]
+          : []),
+      startFileEvent(),
+      playbackRestartEvent(),
+    ])
+    client.emit([endFileEvent('endOfFile')])
+    return { ended, queueEnded }
+  }
+
+  it('fires after the last entry ends', async () => {
+    expect(await endEntry(2, 3)).toEqual({ ended: 1, queueEnded: 1 })
+  })
+
+  it('does not fire mid-queue', async () => {
+    expect(await endEntry(0, 3)).toEqual({ ended: 1, queueEnded: 0 })
+  })
+
+  it('does not fire when the queue is about to repeat', async () => {
+    expect(await endEntry(2, 3, 'playlist')).toEqual({
+      ended: 1,
+      queueEnded: 0,
+    })
+  })
+
+  it('fires for a single-entry queue', async () => {
+    expect(await endEntry(0, 1)).toEqual({ ended: 1, queueEnded: 1 })
+  })
+
+  it('does not fire when the last entry failed', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    let queueEnded = 0
+    player.on('queueEnded', () => (queueEnded += 1))
+    await player.load(URI)
+    client.emit([
+      propertyEvent(MpvProperty.playlistCount, 1),
+      propertyEvent(MpvProperty.playlistPos, 0),
+      startFileEvent(),
+    ])
+    client.emit([endFileEvent('error', 'loading failed')])
+    // "The queue finished" and "the queue gave up" are different facts.
+    expect(queueEnded).toBe(0)
+    expect(player.state.status).toBe('error')
+  })
+})
+
+describe('Player — seek discontinuity events', () => {
+  it('pairs a seek with its completion, carrying before and after', async () => {
+    const player = await createPlayer()
+    const started: unknown[] = []
+    const completed: unknown[] = []
+    player.on('seekStarted', (event) => started.push(event))
+    player.on('seekCompleted', (event) => completed.push(event))
+
+    client.readable.set(MpvProperty.timePos, 30)
+    client.emit([
+      startFileEvent(),
+      propertyEvent(MpvProperty.pause, false),
+      playbackRestartEvent(),
+    ])
+    started.length = 0
+    completed.length = 0
+
+    client.readable.set(MpvProperty.timePos, 90)
+    client.emit([seekEvent()])
+    expect(started).toEqual([{ reason: 'seek', from: 30 }])
+    expect(completed).toEqual([])
+
+    client.emit([playbackRestartEvent()])
+    expect(completed).toEqual([{ reason: 'seek', position: 90 }])
+  })
+
+  it('reports a queue advance as auto-advance', async () => {
+    const player = await createPlayer()
+    const events: string[] = []
+    player.on('seekStarted', (event) => events.push(`start:${event.reason}`))
+    player.on('seekCompleted', (event) =>
+      events.push(`done:${event.reason}@${String(event.position)}`)
+    )
+
+    client.readable.set(MpvProperty.timePos, 0)
+    client.emit([
+      propertyEvent(MpvProperty.playlistCount, 2),
+      propertyEvent(MpvProperty.playlistPos, 1),
+      playbackRestartEvent(),
+    ])
+    expect(events).toEqual(['start:auto-advance', 'done:auto-advance@0'])
+  })
+
+  it('does not glue a seek that never landed onto the next entry', async () => {
+    const player = await createPlayer()
+    const completed: unknown[] = []
+    player.on('seekCompleted', (event) => completed.push(event))
+
+    client.emit([startFileEvent(), playbackRestartEvent()])
+    completed.length = 0
+    client.emit([seekEvent()])
+    // The entry failed instead of restarting.
+    client.emit([endFileEvent('error', 'loading failed')])
+    client.emit([playbackRestartEvent()])
+    expect(completed).toEqual([])
+  })
+
+  it('says nothing for a restart nobody announced', async () => {
+    const player = await createPlayer()
+    const completed: unknown[] = []
+    player.on('seekCompleted', (event) => completed.push(event))
+    client.emit([playbackRestartEvent()])
+    expect(completed).toEqual([])
+  })
+})
+
+describe('Player — getCommonMetadata', () => {
+  it('normalises the same single node read getMetadata uses', async () => {
+    const player = await createPlayer()
+    client.readableMaps.set(MpvProperty.metadata, {
+      TITLE: 'Ghosts',
+      ARTIST: 'Japan',
+      TRACKNUMBER: '4/9',
+      DATE: '1981-03-27',
+    })
+    expect(player.getCommonMetadata()).toEqual({
+      title: 'Ghosts',
+      artist: 'Japan',
+      trackNumber: 4,
+      trackCount: 9,
+      year: 1981,
+    })
+    expect(client.mapReads).toEqual([MpvProperty.metadata])
+  })
+
+  it('is empty when nothing is loaded', async () => {
+    const player = await createPlayer()
+    expect(player.getCommonMetadata()).toEqual({})
+  })
+
+  it('throws once destroyed', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    expect(() => player.getCommonMetadata()).toThrow(PlayerErrorException)
   })
 })

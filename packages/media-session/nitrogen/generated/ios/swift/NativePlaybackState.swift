@@ -18,7 +18,7 @@ public extension NativePlaybackState {
   /**
    * Create a new instance of `NativePlaybackState`.
    */
-  init(status: MediaPlaybackStatus, position: PositionAnchor, bufferedPosition: Double?, controls: [MediaControl], capabilities: [MediaCapability], customActions: [MediaCustomAction], compactControlIndices: [Double]?, queueIndex: Double?, errorMessage: String?) {
+  init(status: MediaPlaybackStatus, position: PositionAnchor, bufferedPosition: Double?, controls: [MediaControl], capabilities: [MediaCapability], customActions: [MediaCustomAction], compactControlIndices: [Double]?, queueIndex: Double?, errorMessage: String?, repeatMode: MediaRepeatMode, shuffleEnabled: Bool) {
     self.init(status, position, { () -> bridge.std__optional_double_ in
       if let __unwrappedValue = bufferedPosition {
         return bridge.create_std__optional_double_(__unwrappedValue)
@@ -67,7 +67,7 @@ public extension NativePlaybackState {
       } else {
         return .init()
       }
-    }())
+    }(), repeatMode, shuffleEnabled)
   }
 
   @inline(__always)
@@ -141,5 +141,15 @@ public extension NativePlaybackState {
         return nil
       }
     }()
+  }
+  
+  @inline(__always)
+  var repeatMode: MediaRepeatMode {
+    return self.__repeatMode
+  }
+  
+  @inline(__always)
+  var shuffleEnabled: Bool {
+    return self.__shuffleEnabled
   }
 }

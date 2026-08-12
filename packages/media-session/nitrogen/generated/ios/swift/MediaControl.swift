@@ -31,6 +31,10 @@ public extension MediaControl {
         self = .fastforward
       case "rewind":
         self = .rewind
+      case "repeatMode":
+        self = .repeatmode
+      case "shuffle":
+        self = .shuffle
       default:
         return nil
     }
@@ -55,6 +59,10 @@ public extension MediaControl {
         return "fastForward"
       case .rewind:
         return "rewind"
+      case .repeatmode:
+        return "repeatMode"
+      case .shuffle:
+        return "shuffle"
     }
   }
 }

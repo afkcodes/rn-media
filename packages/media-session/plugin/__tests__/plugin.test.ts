@@ -333,8 +333,9 @@ describe('withMediaButtonReceiver (android.manifest)', () => {
       withMods(withRnMediaMediaSession(baseConfig())).mods?.android?.manifest
     ).toBeUndefined()
     expect(
-      withMods(withRnMediaMediaSession(baseConfig(), { playbackResumption: false }))
-        .mods?.android?.manifest
+      withMods(
+        withRnMediaMediaSession(baseConfig(), { playbackResumption: false })
+      ).mods?.android?.manifest
     ).toBeUndefined()
     // …and an unrelated option does not drag it in either.
     expect(
@@ -355,7 +356,7 @@ describe('withMediaButtonReceiver (android.manifest)', () => {
     // plugin is that copy-paste, not a variation on it.
     expect(receiversOf(manifest)).toEqual([
       {
-        $: { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
+        '$': { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
         'intent-filter': [
           { action: [{ $: { 'android:name': MEDIA_BUTTON_ACTION } }] },
         ],
@@ -377,7 +378,7 @@ describe('withMediaButtonReceiver (android.manifest)', () => {
 
   it('leaves a receiver the app already declared exactly as it is', async () => {
     const handWritten: ManifestReceiver = {
-      $: {
+      '$': {
         'android:name': RECEIVER_NAME,
         'android:exported': 'true',
         'android:enabled': 'true',
@@ -403,9 +404,11 @@ describe('withMediaButtonReceiver (android.manifest)', () => {
       withRnMediaMediaSession(baseConfig(), { playbackResumption: true }),
       baseManifest([
         {
-          $: { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
+          '$': { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
           'intent-filter': [
-            { action: [{ $: { 'android:name': 'com.example.SOMETHING_ELSE' } }] },
+            {
+              action: [{ $: { 'android:name': 'com.example.SOMETHING_ELSE' } }],
+            },
           ],
         },
       ])

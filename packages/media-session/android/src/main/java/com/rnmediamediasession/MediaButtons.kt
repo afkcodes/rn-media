@@ -12,6 +12,7 @@ import androidx.media3.session.SessionCommand
 import com.google.common.collect.ImmutableList
 import com.margelo.nitro.rnmediamediasession.MediaCapability
 import com.margelo.nitro.rnmediamediasession.MediaControl
+import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
 
 /**
  * Translation of the broadcast `capabilities` / `controls` / `customActions`
@@ -95,6 +96,16 @@ internal object MediaButtons {
 
         MediaCapability.SETRATE ->
           builder.add(Player.COMMAND_SET_SPEED_AND_PITCH)
+
+        // Load-bearing, not decorative: `DefaultMediaNotificationProvider`
+        // decides whether to draw the repeat/shuffle buttons from the player's
+        // available commands, and `SimpleBasePlayer` refuses to dispatch
+        // `handleSetRepeatMode`/`handleSetShuffleModeEnabled` without them.
+        MediaCapability.SETREPEATMODE ->
+          builder.add(Player.COMMAND_SET_REPEAT_MODE)
+
+        MediaCapability.SETSHUFFLE ->
+          builder.add(Player.COMMAND_SET_SHUFFLE_MODE)
       }
     }
 
@@ -119,6 +130,12 @@ internal object MediaButtons {
 
         MediaControl.REWIND ->
           builder.add(Player.COMMAND_SEEK_BACK)
+
+        MediaControl.REPEATMODE ->
+          builder.add(Player.COMMAND_SET_REPEAT_MODE)
+
+        MediaControl.SHUFFLE ->
+          builder.add(Player.COMMAND_SET_SHUFFLE_MODE)
       }
     }
 
@@ -156,7 +173,7 @@ internal object MediaButtons {
       if (isPlayPause && emittedPlayPause) return@forEachIndexed
       if (isPlayPause) emittedPlayPause = true
 
-      val button = CommandButton.Builder(iconOf(control))
+      val button = CommandButton.Builder(iconOf(control, snapshot))
         .setPlayerCommand(playerCommandOf(control))
         // NOT optional, despite `CommandButton` defaulting it to "".
         // `MediaSessionLegacyStub.createPlaybackStateCompat` re-derives a custom
@@ -215,15 +232,33 @@ internal object MediaButtons {
       .takeIf { it != 0 }
       ?: context.resources.getIdentifier(name, "mipmap", context.packageName)
 
-  private fun iconOf(control: MediaControl): @CommandButton.Icon Int = when (control) {
-    MediaControl.PLAY -> CommandButton.ICON_PLAY
-    MediaControl.PAUSE -> CommandButton.ICON_PAUSE
-    MediaControl.STOP -> CommandButton.ICON_STOP
-    MediaControl.SKIPTONEXT -> CommandButton.ICON_NEXT
-    MediaControl.SKIPTOPREVIOUS -> CommandButton.ICON_PREVIOUS
-    MediaControl.FASTFORWARD -> CommandButton.ICON_FAST_FORWARD
-    MediaControl.REWIND -> CommandButton.ICON_REWIND
-  }
+  /**
+   * The icon for a control.
+   *
+   * Takes the snapshot because the two toggles are drawn from *state*: media3
+   * ships a distinct icon per repeat mode (`ICON_REPEAT_OFF/_ONE/_ALL`) and per
+   * shuffle state, and a toggle whose icon does not track its state is worse
+   * than no toggle. Everything else ignores the snapshot — play/pause is a
+   * single button whose face media3 picks itself via `Util.shouldShowPlayButton`.
+   */
+  private fun iconOf(control: MediaControl, snapshot: Snapshot): @CommandButton.Icon Int =
+    when (control) {
+      MediaControl.PLAY -> CommandButton.ICON_PLAY
+      MediaControl.PAUSE -> CommandButton.ICON_PAUSE
+      MediaControl.STOP -> CommandButton.ICON_STOP
+      MediaControl.SKIPTONEXT -> CommandButton.ICON_NEXT
+      MediaControl.SKIPTOPREVIOUS -> CommandButton.ICON_PREVIOUS
+      MediaControl.FASTFORWARD -> CommandButton.ICON_FAST_FORWARD
+      MediaControl.REWIND -> CommandButton.ICON_REWIND
+      MediaControl.REPEATMODE -> when (snapshot.repeatMode) {
+        MediaRepeatMode.OFF -> CommandButton.ICON_REPEAT_OFF
+        MediaRepeatMode.ONE -> CommandButton.ICON_REPEAT_ONE
+        MediaRepeatMode.ALL -> CommandButton.ICON_REPEAT_ALL
+      }
+      MediaControl.SHUFFLE ->
+        if (snapshot.shuffleEnabled) CommandButton.ICON_SHUFFLE_ON
+        else CommandButton.ICON_SHUFFLE_OFF
+    }
 
   /**
    * Accessibility label / legacy custom-action name for a transport button.
@@ -245,6 +280,15 @@ internal object MediaButtons {
       context.getString(R.string.media3_controls_seek_forward_description)
     MediaControl.REWIND -> context.getString(R.string.media3_controls_seek_back_description)
     MediaControl.STOP -> context.getString(android.R.string.cancel)
+    // media3 ships localised strings only for the controls it draws itself
+    // (play, pause, next, previous, seek forward, seek back — verified against
+    // the shipped 1.11.0 AAR's res/values). It has repeat/shuffle *icons* but no
+    // repeat/shuffle strings, the platform has no such string either, and a
+    // library cannot add translations to a consumer's app. So these two are
+    // English, and the name is never nothing — an empty display name throws
+    // inside `setMediaButtonPreferences` and takes the service down with it.
+    MediaControl.REPEATMODE -> "Repeat"
+    MediaControl.SHUFFLE -> "Shuffle"
   }
 
   private fun playerCommandOf(control: MediaControl): @Player.Command Int = when (control) {
@@ -256,6 +300,8 @@ internal object MediaButtons {
     MediaControl.SKIPTOPREVIOUS -> Player.COMMAND_SEEK_TO_PREVIOUS
     MediaControl.FASTFORWARD -> Player.COMMAND_SEEK_FORWARD
     MediaControl.REWIND -> Player.COMMAND_SEEK_BACK
+    MediaControl.REPEATMODE -> Player.COMMAND_SET_REPEAT_MODE
+    MediaControl.SHUFFLE -> Player.COMMAND_SET_SHUFFLE_MODE
   }
 
   /**
@@ -280,6 +326,18 @@ internal object MediaButtons {
 
       MediaControl.SKIPTONEXT, MediaControl.FASTFORWARD ->
         button.setSlots(CommandButton.SLOT_FORWARD, CommandButton.SLOT_FORWARD_SECONDARY, OVERFLOW)
+
+      // The two toggles never claim a primary slot. `SLOT_CENTRAL` is
+      // play/pause, and the back/forward slots are transport — a shuffle button
+      // where "previous" belongs is the layout every music app avoids. The
+      // secondary slots are precisely where Android 13+ shades put them, and
+      // overflow is the honest fallback when a transport control got there
+      // first (media3 takes "the first available and allowed slot").
+      MediaControl.SHUFFLE ->
+        button.setSlots(CommandButton.SLOT_BACK_SECONDARY, OVERFLOW)
+
+      MediaControl.REPEATMODE ->
+        button.setSlots(CommandButton.SLOT_FORWARD_SECONDARY, OVERFLOW)
     }
   }
 

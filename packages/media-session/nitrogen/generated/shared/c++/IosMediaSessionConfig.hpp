@@ -31,6 +31,7 @@
 
 
 #include <optional>
+#include <vector>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -40,10 +41,11 @@ namespace margelo::nitro::rnmediamediasession {
   struct IosMediaSessionConfig final {
   public:
     std::optional<double> artworkCacheSize     SWIFT_PRIVATE;
+    std::optional<std::vector<double>> supportedPlaybackRates     SWIFT_PRIVATE;
 
   public:
     IosMediaSessionConfig() = default;
-    explicit IosMediaSessionConfig(std::optional<double> artworkCacheSize): artworkCacheSize(artworkCacheSize) {}
+    explicit IosMediaSessionConfig(std::optional<double> artworkCacheSize, std::optional<std::vector<double>> supportedPlaybackRates): artworkCacheSize(artworkCacheSize), supportedPlaybackRates(supportedPlaybackRates) {}
 
   public:
     friend bool operator==(const IosMediaSessionConfig& lhs, const IosMediaSessionConfig& rhs) = default;
@@ -59,12 +61,14 @@ namespace margelo::nitro {
     static inline margelo::nitro::rnmediamediasession::IosMediaSessionConfig fromJSI(jsi::Runtime& runtime, const jsi::Value& arg) {
       jsi::Object obj = arg.asObject(runtime);
       return margelo::nitro::rnmediamediasession::IosMediaSessionConfig(
-        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "artworkCacheSize")))
+        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "artworkCacheSize"))),
+        JSIConverter<std::optional<std::vector<double>>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "supportedPlaybackRates")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::rnmediamediasession::IosMediaSessionConfig& arg) {
       jsi::Object obj(runtime);
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "artworkCacheSize"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.artworkCacheSize));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "supportedPlaybackRates"), JSIConverter<std::optional<std::vector<double>>>::toJSI(runtime, arg.supportedPlaybackRates));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -76,6 +80,7 @@ namespace margelo::nitro {
         return false;
       }
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "artworkCacheSize")))) return false;
+      if (!JSIConverter<std::optional<std::vector<double>>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "supportedPlaybackRates")))) return false;
       return true;
     }
   };

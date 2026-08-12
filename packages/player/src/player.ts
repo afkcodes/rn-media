@@ -7,9 +7,14 @@ import {
 } from './errors'
 import type { LogEvent, PlayerEvent } from './events'
 import { toPlayerEvents } from './events'
+import type { CommonMetadata } from './common-metadata'
+import { toCommonMetadata } from './common-metadata'
 import type { AudioFilter } from './filters'
 import { compileAudioFilters } from './filters'
+import type { HttpHeaders } from './headers'
+import { HTTP_HEADER_FIELDS_OPTION, compileHttpHeaderFields } from './headers'
 import { createMpvClient } from './native-client'
+import { escapeSubparam } from './subparam'
 import { VisualizerController } from './visualizer-controller'
 import {
   MPV_VOLUME_SCALE,
@@ -40,6 +45,7 @@ import {
   withResyncedAnchor,
 } from './state'
 import type {
+  ChapterEntry,
   MpvClient,
   MpvEvent,
   MpvFormat,
@@ -178,6 +184,23 @@ export type Metadata = Readonly<Record<string, string>>
  * the new file can start."
  */
 export type GaplessAudioMode = 'no' | 'yes' | 'weak'
+
+/**
+ * Which channel layout the output is forced to — the typed subset of mpv's
+ * `--audio-channels` this library exposes.
+ *
+ * - `'auto-safe'` — mpv's default: "Use the system's preferred channel layout.
+ *   If there is none […] force stereo."
+ * - `'auto'` — "Send the audio device whatever it accepts, preferring the
+ *   audio's original channel layout."
+ * - `'stereo'` / `'mono'` — "Force a downmix to stereo or mono."
+ *
+ * The option also accepts arbitrary layout lists (`5.1`, `fl-fr-lfe`); those
+ * stay reachable through `mpvOptions` / `setPropertyString` rather than being
+ * typed here, because a phone's audio output is stereo and a typed union of
+ * surround layouts would be an API for a case this library does not have.
+ */
+export type AudioChannelMode = 'auto-safe' | 'auto' | 'stereo' | 'mono'
 
 /**
  * FFmpeg's own HTTP reconnection, wired through mpv's `stream-lavf-o`.
@@ -574,18 +597,121 @@ export interface PlayerOptions {
   readonly now?: () => number
 }
 
+/**
+ * Per-source options shared by {@link Player.load}, {@link Player.loadPlaylist}
+ * and {@link PlaylistApi.add} — everything that becomes a `loadfile` per-file
+ * option.
+ *
+ * @remarks
+ * These are **per entry**, not per player: mpv applies them when the entry
+ * starts and "restore[s] to the previous value at end of playback" (mpv 0.41.0
+ * `input.rst`, `loadfile`). So a token attached to one track does not leak onto
+ * the next one.
+ */
+export interface SourceOptions {
+  /**
+   * Start position in seconds (mpv's per-file `start` option).
+   *
+   * On {@link Player.loadPlaylist} this applies to **one** entry — the one at
+   * `startIndex` — and not to the rest of the queue. See
+   * {@link LoadPlaylistOptions.startPosition}.
+   */
+  readonly startPosition?: number
+  /**
+   * HTTP request headers for **this source only** — the typed form of mpv's
+   * `http-header-fields`.
+   *
+   * @example
+   * ```ts
+   * await player.load(`${server}/Audio/${id}/stream`, {
+   *   headers: { Authorization: `MediaBrowser Token="${token}"` },
+   * })
+   * ```
+   *
+   * @throws {@link PlayerErrorException} with code `invalid-state` when a
+   * header name is empty, padded with whitespace, or contains `:`, CR, LF or
+   * NUL, or when a value contains CR, LF or NUL. mpv writes these lines into
+   * the request verbatim (`stream/stream_lavf.c:218` joins each with `\r\n`),
+   * so those characters are request splitting, not a formatting preference.
+   *
+   * @remarks
+   * **Why this exists rather than "just use `mpvOptions`".** The raw route was
+   * unsafe in exactly the case people reach for it: `http-header-fields` is
+   * itself a `,`-separated list, and the file-option string it travels in is
+   * *also* `,`-separated, so any header containing a comma (`Accept:
+   * text/html, application/xml`, a multi-valued `Cache-Control`, a cookie
+   * pair) used to corrupt the whole option list. This path escapes both layers — the list separator with
+   * mpv's backslash form, the option value with mpv's fixed-length `%n%` form —
+   * so a header value can contain anything except the characters above.
+   *
+   * **Interaction with {@link PlayerOptions.userAgent}.** They are different
+   * mpv options (`user-agent` vs `http-header-fields`) and both are sent, so a
+   * per-source `User-Agent` header does *not* silently disappear — but it does
+   * take precedence, because FFmpeg only appends its own `user_agent` line
+   * `if (!has_header(s->headers, "\r\nUser-Agent: "))` (`libavformat/http.c`,
+   * FFmpeg 8.1.2, the tree these binaries are built from). Set one or the
+   * other, not both.
+   *
+   * **Interaction with {@link SourceResolver}.** Headers belong to the *entry*,
+   * not to the URL, and survive a rewrite: mpv applies per-file options in
+   * `load_per_file_options()` (`player/loadfile.c:1707`) and only *then* runs
+   * the `on_load` hook that rewrites `stream-open-filename`
+   * (`loadfile.c:1725`). So a resolver that swaps a logical URI for a signed
+   * CDN URL still sends the headers the queue entry carried. If your signed URL
+   * makes the header redundant, drop the header — nothing removes it for you.
+   *
+   * **What it does not do.** These are HTTP(S) options. `file://`, and any
+   * protocol not served by libavformat's HTTP client, ignore them (mpv:
+   * "Unknown or misspelled options are silently ignored").
+   */
+  readonly headers?: HttpHeaders
+  /**
+   * Extra per-file mpv options, e.g. `{ 'audio-channels': 'stereo' }`.
+   *
+   * Values are escaped with mpv's own fixed-length quoting before they are
+   * joined into `loadfile`'s option list, so a value may contain commas,
+   * colons, quotes and spaces. A key given here **wins** over the typed options
+   * above it: pass `'http-header-fields'` yourself and {@link headers} is not
+   * emitted at all (and you own both layers of escaping); pass `'demuxer'` and
+   * the `.m3u8` guard steps aside.
+   */
+  readonly mpvOptions?: Readonly<Record<string, string>>
+}
+
 /** Options for {@link Player.load}. */
-export interface LoadOptions {
+export interface LoadOptions extends SourceOptions {
   /** Start playing immediately. Defaults to `true`. */
   readonly autoPlay?: boolean
-  /** Start position in seconds (mpv's per-file `start` option). */
-  readonly startPosition?: number
-  /** Extra per-file mpv options, e.g. `{ 'audio-channels': 'stereo' }`. */
-  readonly mpvOptions?: Readonly<Record<string, string>>
 }
 
 /** Options for {@link Player.loadPlaylist}. */
 export interface LoadPlaylistOptions extends LoadOptions {
+  /**
+   * Start position in seconds, applied to **the entry at {@link startIndex}
+   * only** — every other entry starts at its own beginning.
+   *
+   * @remarks
+   * This is what makes the session-restore call mean what it reads like:
+   *
+   * ```ts
+   * await player.loadPlaylist(tracks, { startIndex: 5, startPosition: 120 })
+   * // entry 5 resumes at 2:00; entries 0-4 and 6+ start at 0:00.
+   * ```
+   *
+   * Until 0.1.0 this option was attached to every appended entry, so restoring
+   * a session made the *whole queue* start two minutes in — silently, because
+   * `start` is a per-file option and nothing reports it back. If you genuinely
+   * want an offset on every entry (a queue of identically-structured files with
+   * a fixed intro, say), pass it yourself through
+   * {@link SourceOptions.mpvOptions} as `{ start: '120' }`, which is applied to
+   * each entry exactly as before.
+   *
+   * **Cannot be combined with {@link shuffle}**, for the same reason
+   * {@link startIndex} cannot: after mpv permutes the queue, no index — and
+   * therefore no entry — is identifiable as the one the offset was meant for.
+   * The combination throws an `invalid-state` {@link PlayerError}.
+   */
+  readonly startPosition?: number
   /**
    * Which entry to start on. Defaults to `0`.
    *
@@ -628,6 +754,67 @@ export interface TrackChangedEvent {
   readonly index: number
   /** The index that was current before. */
   readonly previousIndex: number
+}
+
+/** Payload of the `chapterChanged` event. */
+export interface ChapterChangedEvent {
+  /**
+   * The chapter now current, 0-based; `-1` when the position is before the
+   * first chapter, and `undefined` when the entry has no chapters (which is how
+   * this event reports a move *off* a chaptered entry).
+   */
+  readonly index: number | undefined
+  /** The chapter that was current before, with the same conventions. */
+  readonly previousIndex: number | undefined
+}
+
+/**
+ * Why the playback position jumped — the two causes this library can tell apart
+ * from mpv's own events, and no more.
+ *
+ * - `'seek'` — mpv raised `MPV_EVENT_SEEK`, i.e. something asked for a new
+ *   position in the *current* entry: {@link Player.seekTo},
+ *   {@link Player.seekBy}, a chapter jump, a lock-screen scrub, or a `seek`
+ *   through the raw {@link Player.command} hatch.
+ * - `'auto-advance'` — the current entry changed (`playlist-pos` moved), so the
+ *   position restarted somewhere else entirely. It covers a natural queue
+ *   advance, a `playlist.next()`/`jumpTo()`, a repeat wrap and a retry.
+ *
+ * There is deliberately no third value for "a new file was loaded" or "the user
+ * did it": mpv does not report intent, and inventing a distinction that the
+ * event stream cannot support is how a typed API starts lying.
+ */
+export type PositionDiscontinuityReason = 'seek' | 'auto-advance'
+
+/** Payload of the `seekStarted` event. */
+export interface SeekStartedEvent {
+  /** What caused it. See {@link PositionDiscontinuityReason}. */
+  readonly reason: PositionDiscontinuityReason
+  /**
+   * The projected position, in seconds, at the instant the jump began — i.e.
+   * where playback was *leaving from*.
+   *
+   * This is the projection, not a fresh read: the truth is not knowable until
+   * mpv restarts, and paying a synchronous `time-pos` round-trip here would put
+   * one on the event path for an analytics signal.
+   */
+  readonly from: number
+}
+
+/** Payload of the `seekCompleted` event. */
+export interface SeekCompletedEvent {
+  /**
+   * What caused it — the same value the matching {@link SeekStartedEvent}
+   * carried.
+   */
+  readonly reason: PositionDiscontinuityReason
+  /**
+   * Where playback resumed, in seconds. This one *is* authoritative: mpv's
+   * `playbackRestart` is the point at which the position becomes meaningful
+   * again, and the player already re-anchors on a real `time-pos` read there
+   * (see the batch read budget), so this costs nothing extra.
+   */
+  readonly position: number
 }
 
 /** Payload of the `retrying` event. */
@@ -732,8 +919,72 @@ export interface PlayerEventMap {
    * than papered over.
    */
   queueChanged: (event: QueueChangedEvent) => void
+  /**
+   * The **whole queue** finished: the last entry ended naturally and nothing
+   * follows it.
+   *
+   * Fires immediately after the `trackEnded` for that entry, and only when the
+   * queue is genuinely over — with `loop: 'playlist'` (or `'track'`) it never
+   * fires, because mpv is about to start something. It is the hook for
+   * autoplay, radio mode, "up next" recommendations and "playback finished"
+   * analytics, all of which `trackEnded` alone cannot express.
+   *
+   * @remarks
+   * Derived from the same snapshot pair every other event here is derived from:
+   * the entry ended (`end-file` reason `eof`) and the pre-end snapshot said
+   * {@link PlayerState.hasNext} was `false`. Nothing polls, and there is no new
+   * native signal — mpv has none to give.
+   *
+   * A queue that stops because an entry *failed* does not produce this: that is
+   * the `error` event, and conflating "finished" with "gave up" is exactly the
+   * distinction this library is built around.
+   */
+  queueEnded: () => void
   /** The current playlist entry changed. */
   trackChanged: (event: TrackChangedEvent) => void
+  /**
+   * The current chapter changed — including moving off, or onto, an entry that
+   * has chapters at all.
+   *
+   * @remarks
+   * Driven by mpv's observed `chapter` property, so it fires when the position
+   * crosses a chapter boundary during ordinary playback just as it does for
+   * {@link Player.setChapter}. Read the chapter's title with
+   * {@link Player.getChapters}; this event carries only the cursor, exactly as
+   * {@link trackChanged} does for the queue.
+   */
+  chapterChanged: (event: ChapterChangedEvent) => void
+  /**
+   * The playback position is about to jump — a seek started, or the current
+   * entry changed.
+   *
+   * @remarks
+   * **This is the "position discontinuity" pair, and it is what makes accurate
+   * listening analytics possible without polling.** Because position is
+   * projected locally and never streamed (ARCHITECTURE §7), an app that wants
+   * to know "how much of this track was actually heard" has to know when the
+   * clock jumped and from where. `seekStarted.from` is where it left,
+   * {@link seekCompleted}`.position` is where it landed, and everything between
+   * two of these was played in real time.
+   *
+   * Every `seekStarted` is followed by exactly one `seekCompleted` unless mpv
+   * never restarts (the entry failed, or the player was destroyed mid-seek) —
+   * the pending reason is dropped on `end-file`, so a failed seek does not
+   * glue itself onto the next successful one. Deliberately *not* on
+   * `start-file`: an auto-advance announces itself when the cursor moves, and
+   * mpv's ordering of `start-file` against that cursor change is not
+   * guaranteed — clearing there could wipe a pending `'auto-advance'` before
+   * the new entry's restart completes it.
+   */
+  seekStarted: (event: SeekStartedEvent) => void
+  /**
+   * The position finished jumping and playback resumed — mpv's
+   * `playbackRestart`.
+   *
+   * Carries the authoritative new position and the reason its
+   * {@link seekStarted} carried. See there for the pairing rules.
+   */
+  seekCompleted: (event: SeekCompletedEvent) => void
   /**
    * The current entry's metadata changed — a new track's tags, or a live
    * stream's now-playing update (ICY `StreamTitle`, which mpv surfaces as the
@@ -855,7 +1106,7 @@ export type Unsubscribe = () => void
  * }))
  * ```
  */
-export interface PlaylistAddOptions {
+export interface PlaylistAddOptions extends SourceOptions {
   /**
    * Where the entry goes. Omitted, it is appended to the end.
    *
@@ -1041,8 +1292,35 @@ export interface PlaylistApi {
   ): Promise<void>
   /** Go to the next entry. */
   next(): Promise<void>
-  /** Go to the previous entry. */
-  previous(): Promise<void>
+  /**
+   * The ⏮ button: restart the current entry, or go to the previous one.
+   *
+   * @param options - `restartThreshold` in seconds; defaults to
+   * {@link DEFAULT_RESTART_THRESHOLD_SECONDS} (3). Pass `0` to always move.
+   *
+   * @remarks
+   * **The universal music-app convention, implemented once here rather than in
+   * every app.** More than `restartThreshold` seconds into an entry, this seeks
+   * back to `0`; before that, it moves to the previous entry (mpv's
+   * `playlist-prev weak`). The same shape mpv itself uses for chapters — see
+   * `--chapter-seek-threshold` and {@link Player.previousChapter}.
+   *
+   * Two cases where it always *moves* instead of restarting, both forced rather
+   * than chosen:
+   *
+   * - **A live stream** ({@link PlayerState.isLive}): there is no position `0`
+   *   to return to, and mpv would reject the seek.
+   * - **`restartThreshold: 0`**: the opt-out, for an app that draws separate
+   *   "restart" and "previous" controls.
+   *
+   * At the head of the queue with nothing to go back to, restarting is still
+   * what happens if you are past the threshold — and if you are not, mpv's
+   * `playlist-prev` does nothing, which is the same thing every player does.
+   *
+   * The position it compares against is the locally projected one
+   * ({@link Player.getPosition}), so this costs no native round-trip.
+   */
+  previous(options?: { readonly restartThreshold?: number }): Promise<void>
   /** Remove every entry except the one currently playing. */
   clear(): Promise<void>
   /**
@@ -1260,6 +1538,31 @@ const REPLAY_GAIN_MODES: readonly ReplayGainMode[] = ['no', 'track', 'album']
 
 /** Every accepted {@link GaplessAudioMode}, for runtime validation. */
 const GAPLESS_AUDIO_MODES: readonly GaplessAudioMode[] = ['no', 'yes', 'weak']
+
+/** mpv's own domain for `--pitch` (`options/options.c`: `M_RANGE(0.01, 100.0)`). */
+const PITCH_MIN = 0.01
+const PITCH_MAX = 100
+
+/** Every accepted {@link AudioChannelMode}, for runtime validation. */
+const AUDIO_CHANNEL_MODES: readonly AudioChannelMode[] = [
+  'auto-safe',
+  'auto',
+  'stereo',
+  'mono',
+]
+
+/**
+ * The default number of seconds into an entry after which
+ * {@link PlaylistApi.previous} restarts it instead of going back.
+ *
+ * @remarks
+ * Three seconds is the convention every music player converged on — long
+ * enough that a mis-tap during an intro still goes back, short enough that
+ * "restart this song" is reachable without hunting for a scrubber. It is a
+ * default rather than a rule: pass your own `restartThreshold`, or `0` to opt
+ * out and always move.
+ */
+export const DEFAULT_RESTART_THRESHOLD_SECONDS = 3
 
 /**
  * An argument this library rejects before it can reach mpv.
@@ -1626,19 +1929,47 @@ function loadfileFlagFor(
  *
  * A caller who passes their own `demuxer` in `mpvOptions` wins: this is a
  * default, not a policy.
+ *
+ * ## Escaping
+ * mpv parses this string with `parse_keyvalue_list()`, which reads each key and
+ * each value through `read_subparam()` — the same function the `af` chain goes
+ * through (`filters.ts`). So the same rule applies here, and it is applied to
+ * *everything*, including this library's own `start` and `demuxer` values:
+ * anything outside mpv's `NAMECH` alphabet is written in mpv's fixed-length
+ * `%<bytes>%<value>` form. See `subparam.ts` for why that form and not quotes.
  */
 function formatFileOptions(
-  options: Readonly<Record<string, string>> | undefined,
-  startPosition: number | undefined,
+  options: SourceOptions,
   source: string
 ): string | undefined {
+  const raw = options.mpvOptions
   const parts: string[] = []
-  if (startPosition !== undefined) parts.push(`start=${startPosition}`)
-  if (options?.[DEMUXER_OPTION] === undefined && needsHlsDemuxer(source)) {
-    parts.push(`${DEMUXER_OPTION}=${HLS_DEMUXER}`)
+  // Every key and every value goes through mpv's own quoting. `read_subparam`
+  // (`options/m_option.c:1984`) is what parses both halves of every pair here,
+  // and its fixed-length form is the only one with no forbidden characters —
+  // see `subparam.ts`. Without it a value containing a comma silently truncates
+  // the option list and shifts everything after it, which is precisely how
+  // `http-header-fields` (a comma-separated list *inside* a comma-separated
+  // list) used to corrupt a load.
+  const push = (key: string, value: string): void => {
+    parts.push(`${escapeSubparam(key)}=${escapeSubparam(value)}`)
   }
-  for (const [key, value] of Object.entries(options ?? {})) {
-    parts.push(`${key}=${value}`)
+  if (options.startPosition !== undefined) {
+    push('start', String(options.startPosition))
+  }
+  if (raw?.[DEMUXER_OPTION] === undefined && needsHlsDemuxer(source)) {
+    push(DEMUXER_OPTION, HLS_DEMUXER)
+  }
+  if (
+    options.headers !== undefined &&
+    raw?.[HTTP_HEADER_FIELDS_OPTION] === undefined
+  ) {
+    // Throws on an unusable header name/value before anything reaches mpv.
+    const fields = compileHttpHeaderFields(options.headers)
+    if (fields !== undefined) push(HTTP_HEADER_FIELDS_OPTION, fields)
+  }
+  for (const [key, value] of Object.entries(raw ?? {})) {
+    push(key, value)
   }
   return parts.length > 0 ? parts.join(',') : undefined
 }
@@ -1652,6 +1983,28 @@ function formatFileOptions(
  */
 function isTrackChange(event: PlayerEvent): boolean {
   return event.kind === 'property' && event.name === MpvProperty.playlistPos
+}
+
+/**
+ * The playlist index a batch leaves the cursor on, or `undefined` when the
+ * batch did not move it.
+ *
+ * The *last* `playlist-pos` in the batch wins, because that is the value mpv
+ * left behind — a batch that accumulated across two boundaries carries both,
+ * and the one-shot reads must describe where the cursor ended up rather than
+ * where it passed through. (Native coalescing usually collapses these to one
+ * already; this does not depend on that.)
+ */
+function trackChangeIndexOf(
+  events: readonly PlayerEvent[]
+): number | undefined {
+  let index: number | undefined
+  for (const event of events) {
+    if (!isTrackChange(event)) continue
+    const value = event.kind === 'property' ? event.value : undefined
+    index = typeof value === 'number' ? Math.trunc(value) : -1
+  }
+  return index
 }
 
 /**
@@ -1669,6 +2022,19 @@ function isQueueMovement(event: PlayerEvent): boolean {
     (event.name === MpvProperty.playlistPos ||
       event.name === MpvProperty.playlistCount)
   )
+}
+
+/**
+ * What one track-change read moment produced.
+ *
+ * `reads` is the reducer's half ({@link TrackChangeReads}); `uri` is the
+ * Player's — the logical URI of the entry that just became current, used for
+ * error classification and never published in {@link PlayerState}. They are
+ * separated so the reducer's input stays exactly what the reducer consumes.
+ */
+interface TrackChangeSnapshot {
+  readonly reads: TrackChangeReads
+  readonly uri?: string
 }
 
 /**
@@ -1696,6 +2062,15 @@ export class Player {
   #destroyed = false
   #visualizer: VisualizerController | undefined
   #resolution: SourceResolverController | undefined
+  /**
+   * The reason of the position jump currently in flight, i.e. the one a
+   * `seekStarted` announced and the next `playbackRestart` will complete.
+   *
+   * `undefined` means nothing is pending — which is also what an `end-file`
+   * leaves behind, so a seek that never landed cannot glue itself onto the next
+   * entry's restart. See {@link PlayerEventMap.seekStarted}.
+   */
+  #pendingDiscontinuity: PositionDiscontinuityReason | undefined
 
   /**
    * The attempt budget from {@link RetryOptions.maxAttempts}. `0` disables
@@ -1735,10 +2110,14 @@ export class Player {
     [K in PlayerEventName]: Set<PlayerEventMap[K]>
   } = {
     trackEnded: new Set(),
+    queueEnded: new Set(),
     error: new Set(),
     retrying: new Set(),
     queueChanged: new Set(),
     trackChanged: new Set(),
+    chapterChanged: new Set(),
+    seekStarted: new Set(),
+    seekCompleted: new Set(),
     metadataChanged: new Set(),
     prefetchStarted: new Set(),
     log: new Set(),
@@ -2005,11 +2384,7 @@ export class Player {
     } else if (options.autoPlay === true) {
       this.#setBool(MpvProperty.pause, false)
     }
-    const fileOptions = formatFileOptions(
-      options.mpvOptions,
-      options.startPosition,
-      source
-    )
+    const fileOptions = formatFileOptions(options, source)
     await this.command(buildLoadfileArgs(source, 'replace', fileOptions))
   }
 
@@ -2040,6 +2415,15 @@ export class Player {
     options: LoadPlaylistOptions = {}
   ): Promise<void> {
     this.#assertAlive('loadPlaylist')
+    if (options.shuffle === true && options.startPosition !== undefined) {
+      throw invalidArgument(
+        '`shuffle` and `startPosition` cannot be combined: the offset applies ' +
+          'to the entry at `startIndex`, and after mpv shuffles the whole ' +
+          'playlist no index identifies the source you passed at that ' +
+          'position. Load in order and call `playlist.shuffle()` afterwards, ' +
+          'or seek once playback has started.'
+      )
+    }
     if (options.shuffle === true && options.startIndex !== undefined) {
       throw invalidArgument(
         '`shuffle` and `startIndex` cannot be combined: mpv shuffles the whole ' +
@@ -2073,13 +2457,22 @@ export class Player {
     await this.command(['stop'])
     if (sources.length === 0) return
 
-    for (const source of sources) {
+    // Everything except the start offset, which belongs to one entry.
+    const { startPosition: _startPosition, ...sharedOptions } = options
+
+    for (const [index, source] of sources.entries()) {
       // Per entry, not once for the whole queue: the HLS guard is decided by
       // each source's own extension, so a `.m3u8` next to a `.mp3` gets the
       // forced demuxer and the `.mp3` does not.
+      //
+      // And `startPosition` is attached to the entry at `startIndex` ONLY.
+      // Attaching it to every entry — which is what this did until 0.1.0 —
+      // makes the natural session-restore call, `{ startIndex: 5,
+      // startPosition: 120 }`, start every track in the queue two minutes in,
+      // silently: `start` is a per-file option, so nothing observable reports
+      // it back. See `LoadPlaylistOptions.startPosition`.
       const fileOptions = formatFileOptions(
-        options.mpvOptions,
-        options.startPosition,
+        index === startIndex ? options : sharedOptions,
         source
       )
       await this.command(buildLoadfileArgs(source, 'append', fileOptions))
@@ -2192,13 +2585,196 @@ export class Player {
   }
 
   /**
+   * Seek by a delta relative to the current position.
+   *
+   * @param deltaSeconds - Seconds to move; negative seeks backwards.
+   *
+   * @remarks
+   * **Not `seekTo(getPosition() + delta)`.** That is what an app has to write
+   * without this method, and it races the projection: the position it reads is
+   * extrapolated from an anchor that may be a few hundred milliseconds old, so
+   * a rapid tap on a ±15 s button accumulates the projection error into the
+   * target. mpv's `relative` seek is applied to *mpv's* clock, at the instant
+   * the command runs, and cannot drift.
+   *
+   * Uses `relative+exact` — precise rather than nearest-keyframe — matching
+   * {@link seekTo}. mpv's own default for a relative seek is `keyframes`
+   * (fast), but for audio the difference is a decode of at most a frame or two,
+   * and a jump-back button that lands somewhere other than where the label said
+   * is a worse trade than that.
+   *
+   * mpv clamps the target to the file: seeking past the end ends the entry, and
+   * seeking before `0` lands at `0`. On a live stream (`state.isLive`) a
+   * backward seek fails inside mpv and playback continues unchanged.
+   */
+  async seekBy(deltaSeconds: number): Promise<void> {
+    this.#assertAlive('seekBy')
+    if (!Number.isFinite(deltaSeconds)) {
+      throw invalidArgument(
+        `\`seekBy\` takes a finite number of seconds; got ${deltaSeconds}.`
+      )
+    }
+    await this.command(['seek', String(deltaSeconds), 'relative+exact'])
+  }
+
+  /**
+   * Stop playback and unload the current entry, keeping the player — and, by
+   * default, the queue — alive.
+   *
+   * @param options - `clearPlaylist: true` clears the queue too.
+   *
+   * @remarks
+   * This is the transport-button meaning of stop: "stop playing, keep my
+   * queue". It sends mpv's `stop keep-playlist` ("Do not clear the playlist").
+   * mpv's own default is the opposite — mpv 0.41.0 `input.rst`: "Stop playback
+   * and clear playlist. With default settings, this is essentially like
+   * `quit`. Useful for the client API: playback can be stopped without
+   * terminating the player." That default is deliberately inverted here,
+   * because this API is judged against the React Native ecosystem, not against
+   * mpv's CLI: react-native-track-player's `stop()` keeps the queue (its
+   * queue-clearing call is the separate `reset()` — "Resets the player
+   * stopping the current track and clearing the queue"), so a migrator's
+   * `stop()` silently destroying a queue would be data loss, while the reverse
+   * surprise — the queue still being there — is benign. Destructive behaviour
+   * is opt-in, consistent with the rest of the API: pass
+   * `{ clearPlaylist: true }` for mpv's full clear.
+   *
+   * Afterwards the state settles to `status: 'idle'` (mpv ends the entry with
+   * reason `stop`, which also clears any `error`). The queue is intact but
+   * **nothing is loaded**: mpv leaves no playlist entry "current", and
+   * `playlist-pos` reads `-1` whenever "no entry is 'current'" (`input.rst`,
+   * property docs) — so `state.playlist` becomes `{ index: -1, count: n }` and
+   * {@link PlayerState.hasNext} / {@link PlayerState.hasPrevious} are both
+   * `false`. That means {@link play} alone does **not** resume — it only flips
+   * `pause` with nothing playing. The way back into the kept queue is
+   * {@link PlaylistApi.jumpTo} (or a fresh {@link load}); after
+   * `{ clearPlaylist: true }` a new load is the only way, since the queue is
+   * gone.
+   *
+   * @example
+   * ```ts
+   * await player.stop()                         // queue intact, nothing playing
+   * await player.playlist.jumpTo(0)             // …and this is the way back in
+   * await player.stop({ clearPlaylist: true })  // mpv's full clear; queue gone
+   * ```
+   */
+  async stop(
+    options: { readonly clearPlaylist?: boolean } = {}
+  ): Promise<void> {
+    this.#assertAlive('stop')
+    // Nothing that was being re-attempted survives a deliberate stop.
+    this.#resetRetry()
+    await this.command(
+      options.clearPlaylist === true ? ['stop'] : ['stop', 'keep-playlist']
+    )
+  }
+
+  /**
    * Set the playback rate.
    *
    * @param rate - Multiplier. Clamped to mpv's documented `0.01 … 100`.
+   *
+   * @remarks
+   * Pitch is preserved: mpv inserts `scaletempo2` automatically whenever the
+   * speed is not `1` (`--audio-pitch-correction`, on by default). Use
+   * {@link setPitch} for the other axis — it moves pitch *without* moving
+   * speed.
+   *
+   * One practical bound worth knowing: `scaletempo2` mutes its output outside
+   * `min-speed`/`max-speed` (`0.25`/`8.0`), so a rate below 0.25× or above 8×
+   * is silent rather than fast.
    */
   setRate(rate: number): void {
     this.#assertAlive('setRate')
     this.#setNumber(MpvProperty.speed, clamp(rate, 0.01, 100))
+  }
+
+  /**
+   * Shift the pitch **without changing the speed**.
+   *
+   * @param ratio - Frequency multiplier. `1` is the file's own pitch, `2` is an
+   * octave up, `0.5` an octave down.
+   * @throws {@link PlayerErrorException} with code `invalid-state` when `ratio`
+   * is outside mpv's documented `0.01 … 100`.
+   *
+   * @remarks
+   * **A ratio, not semitones, and deliberately so.** mpv's `--pitch` is a
+   * frequency factor (mpv 0.41.0 `options.rst`: "Raise or lower the audio's
+   * pitch by the factor given as parameter. Does not affect playback speed"),
+   * and exposing semitones would mean this library picking a tuning convention
+   * and hiding the actual knob. The conversion is one line, and it is the
+   * manual's own: "octaves are separated by a factor of 2 whereas semitones are
+   * represented by a factor of 2^(1/12)".
+   *
+   * ```ts
+   * const semitones = (n: number) => 2 ** (n / 12)
+   * player.setPitch(semitones(-2))   // down a whole tone
+   * player.setPitch(semitones(7))    // up a perfect fifth ≈ 1.4983
+   * player.setPitch(1)               // back to the recording's own pitch
+   * ```
+   *
+   * **Independent of {@link setRate}.** Both drive mpv's own `scaletempo2` —
+   * the same filter already in the chain for speed (ARCHITECTURE §18) — so this
+   * needs no ffmpeg filter, no engine flag and no GPL-licensed library
+   * (`rubberband` is GPL and is not, and will not be, compiled in). Speed and
+   * pitch compose: 1.5× speed with `setPitch(1)` is a faster audiobook at the
+   * right pitch; 1× speed with `setPitch(1.06)` is a semitone-up transposition
+   * for a singer.
+   *
+   * **The honest range.** mpv accepts `0.01 … 100` and this method enforces
+   * exactly that, but the *useful* range is narrower and mpv says why: "the
+   * range of pitch change is effectively limited by the `min-speed` and
+   * `max-speed` parameters of `scaletempo2`: for example, a `min-speed` of 0.25
+   * limits the highest pitch factor to 4 (1/0.25)". With the defaults (0.25 /
+   * 8.0) that is roughly `0.125 … 4` before the output goes silent rather than
+   * extreme. Values are validated, never clamped, because a pitch of `0` is a
+   * bug in the caller and silently turning it into `0.01` hides it.
+   *
+   * The current value is in {@link PlayerState.pitch}, and it is *global*: mpv's
+   * `--reset-on-next-file` resets nothing by default, so it survives track
+   * changes like `speed` and `volume` do.
+   */
+  setPitch(ratio: number): void {
+    this.#assertAlive('setPitch')
+    assertInRange(ratio, PITCH_MIN, PITCH_MAX, 'pitch')
+    this.#setNumber(MpvProperty.pitch, ratio)
+  }
+
+  /**
+   * Force a channel layout on the output — including the mono downmix.
+   *
+   * @param mode - See {@link AudioChannelMode}.
+   * @throws {@link PlayerErrorException} with code `invalid-state` for a value
+   * outside that union.
+   *
+   * @remarks
+   * `'mono'` is the accessibility case this exists for: single-sided hearing
+   * loss, or one earbud in. Both mobile platforms offer it as a system
+   * accessibility toggle, and an app that wants its own switch has had no way
+   * to ask for one.
+   *
+   * mpv 0.41.0 `options.rst` on `--audio-channels`: "`--audio-channels=<stereo|
+   * mono>` — Force a downmix to stereo or mono." **No filter and no engine flag
+   * is involved** — this is mpv's own channel-layout negotiation, not the
+   * `pan` filter (which is not compiled into these binaries).
+   *
+   * Applies to the entry that is already playing: the option carries
+   * `UPDATE_AUDIO` (`options/options.c`), so mpv rebuilds the audio chain in
+   * place. The rebuild reopens the audio device, so expect a very short gap —
+   * this is a settings-screen control, not something to toggle per frame.
+   *
+   * One documented consequence, mpv's own: a single-layout list "triggers
+   * decoder-downmix, which might be different from the normal mpv downmix",
+   * because the decision is made before the device is opened.
+   */
+  setAudioChannels(mode: AudioChannelMode): void {
+    this.#assertAlive('setAudioChannels')
+    if (!AUDIO_CHANNEL_MODES.includes(mode)) {
+      throw invalidArgument(
+        `\`setAudioChannels\` takes one of ${AUDIO_CHANNEL_MODES.map((value) => `'${value}'`).join(', ')}; got '${String(mode)}'.`
+      )
+    }
+    this.#setString(MpvProperty.audioChannels, mode)
   }
 
   /**
@@ -2281,7 +2857,11 @@ export class Player {
           `\`position\` must be 'next' or a playlist index; got '${String(position)}'.`
         )
       }
-      const fileOptions = formatFileOptions(undefined, undefined, source)
+      // The same per-entry options `load()` accepts. A queued track that needs
+      // an `Authorization` header, a start offset or a demuxer hint can carry
+      // them itself — before 0.1.0 this call passed nothing at all, so it
+      // could not, and no caller would have predicted the asymmetry.
+      const fileOptions = formatFileOptions(options ?? {}, source)
       await this.command(
         buildLoadfileArgs(
           source,
@@ -2321,9 +2901,27 @@ export class Player {
       this.#resetRetry()
       await this.command(['playlist-next', 'weak'])
     },
-    previous: async () => {
+    previous: async (options) => {
       this.#assertAlive('playlist.previous')
+      const threshold =
+        options?.restartThreshold ?? DEFAULT_RESTART_THRESHOLD_SECONDS
+      if (!Number.isFinite(threshold) || threshold < 0) {
+        throw invalidArgument(
+          `\`restartThreshold\` must be a finite number >= 0 seconds; got ${threshold}.`
+        )
+      }
       this.#resetRetry()
+      // Restart only when there is a `0` to go back to: a live stream has no
+      // seekable origin and mpv would refuse the seek, leaving the button doing
+      // nothing at all — which is worse than moving.
+      if (
+        threshold > 0 &&
+        !this.#state.isLive &&
+        this.getPosition() > threshold
+      ) {
+        await this.seekTo(0)
+        return
+      }
       await this.command(['playlist-prev', 'weak'])
     },
     clear: async () => {
@@ -2511,6 +3109,117 @@ export class Player {
   }
 
   // -------------------------------------------------------------------------
+  // Chapters
+  // -------------------------------------------------------------------------
+
+  /**
+   * The current entry's chapters — title and start time, in file order.
+   *
+   * @returns `[]` when the entry has no chapters (an ordinary music track), or
+   * when nothing is loaded. The two are the same answer to a caller.
+   *
+   * @remarks
+   * **One bounded native read, on demand** — one
+   * `mpv_get_property("chapter-list", MPV_FORMAT_NODE)`, whatever the chapter
+   * count, and a *pull* rather than a subscription for exactly the reasons
+   * {@link PlaylistApi.entries} is (see there): it is a variable-size array that
+   * mpv already owns, it changes only when the entry changes, and a snapshot of
+   * it in {@link PlayerState} would be a second copy on the bridge.
+   *
+   * The cursor — which chapter is playing *now* — is
+   * {@link PlayerState.chapter}, updated from mpv's observed `chapter`
+   * property, and {@link PlayerEventMap.chapterChanged} is when to re-read this
+   * (you rarely need to: chapters do not change within an entry).
+   *
+   * Chapters come from the container: m4b audiobooks, Matroska/`.mka`, Ogg
+   * chapter tags, and podcast MP3s with an ID3 `CHAP` frame. mpv can also load
+   * them from a side file (`--chapters-file`), reachable through
+   * `mpvOptions: { 'chapters-file': … }` on the load — which is how an app
+   * feeds chapters from a podcast feed's own JSON.
+   *
+   * @throws {@link PlayerErrorException} if the player has been destroyed.
+   *
+   * @example
+   * ```ts
+   * const chapters = player.getChapters()
+   * const current = player.state.chapter
+   * const label =
+   *   current !== undefined && current >= 0
+   *     ? (chapters[current]?.title ?? `Chapter ${current + 1}`)
+   *     : undefined
+   * ```
+   */
+  getChapters(): readonly ChapterEntry[] {
+    this.#assertAlive('getChapters')
+    // Frozen for the same reason `playlist.entries()` is: this is a photograph
+    // of mpv's state, and a mutable copy invites an app to edit it and believe
+    // something changed.
+    return Object.freeze(this.#guard(() => this.#client.getChapters()))
+  }
+
+  /**
+   * Jump to the start of a chapter.
+   *
+   * @param index - 0-based chapter index.
+   * @throws {@link PlayerErrorException} with code `invalid-state` when `index`
+   * is not a non-negative integer.
+   *
+   * @remarks
+   * mpv 0.41.0 `input.rst` on the `chapter` property: "Setting this property
+   * results in an absolute seek to the start of the chapter." An index past the
+   * last chapter is clamped by mpv itself (it seeks to the end of the file);
+   * this method rejects only what cannot mean anything at all.
+   *
+   * Writing the property is a *property write*, not a command, so — like
+   * {@link setRate} — it returns immediately and the resulting seek arrives
+   * through {@link PlayerEventMap.seekStarted} / `seekCompleted` like any other.
+   * {@link nextChapter} and {@link previousChapter} are commands and are
+   * therefore awaitable; the asymmetry is mpv's, and hiding it would mean
+   * inventing a promise that resolves on nothing.
+   */
+  setChapter(index: number): void {
+    this.#assertAlive('setChapter')
+    if (!Number.isInteger(index) || index < 0) {
+      throw invalidArgument(
+        `\`setChapter\` takes a non-negative integer chapter index; got ${index}.`
+      )
+    }
+    this.#setNumber(MpvProperty.chapter, index)
+  }
+
+  /**
+   * Skip to the next chapter (mpv's `add chapter 1`).
+   *
+   * At the last chapter mpv advances to the next playlist entry, which is the
+   * behaviour a chapter-skip button is expected to have in an audiobook app.
+   */
+  async nextChapter(): Promise<void> {
+    this.#assertAlive('nextChapter')
+    await this.command(['add', MpvProperty.chapter, '1'])
+  }
+
+  /**
+   * Skip to the previous chapter (mpv's `add chapter -1`).
+   *
+   * @remarks
+   * **This is restart-or-previous, and mpv already implements it** — the same
+   * convention {@link PlaylistApi.previous} applies to the queue. mpv 0.41.0
+   * `options.rst`, `--chapter-seek-threshold` (default `5.0`): "Distance in
+   * seconds from the beginning of a chapter within which a backward chapter
+   * seek will go to the previous chapter. Past this threshold, a backward
+   * chapter seek will go to the beginning of the current chapter instead."
+   *
+   * So `add chapter -1` is *not* `chapter = chapter - 1`, and this method
+   * deliberately does not smooth that over. Change the threshold with
+   * `setPropertyNumber('chapter-seek-threshold', n)`; a negative value means
+   * always go back a chapter.
+   */
+  async previousChapter(): Promise<void> {
+    this.#assertAlive('previousChapter')
+    await this.command(['add', MpvProperty.chapter, '-1'])
+  }
+
+  // -------------------------------------------------------------------------
   // Metadata
   // -------------------------------------------------------------------------
 
@@ -2546,6 +3255,34 @@ export class Player {
     // returned as-is rather than copied: Nitro builds a fresh JS object per
     // call, so there is nothing shared to defend against.
     return map ?? {}
+  }
+
+  /**
+   * The current entry's tags, normalised to the fields a now-playing screen
+   * actually renders.
+   *
+   * @returns The normalised view; `{}` when nothing is loaded or the entry is
+   * untagged. Fields with no usable tag are absent rather than empty.
+   *
+   * @remarks
+   * **Same single node read as {@link getMetadata}**, with the most-copied
+   * snippet in the ecosystem applied to it: `title ?? TITLE ?? icy-title`,
+   * `album_artist ?? albumartist ?? TPE2`, `"4/12"` split into number and
+   * total, `2006-05-01` reduced to a year. FLAC/Vorbis, ID3, MP4 and ICY each
+   * spell these differently and mpv passes the demuxer's spelling through
+   * unchanged, so every app has been writing this function.
+   *
+   * The full mapping table is on {@link toCommonMetadata}, which is exported so
+   * it can be applied to a tag map from anywhere (a `metadataChanged` payload,
+   * a persisted snapshot) without a player.
+   *
+   * This is a convenience *over* the raw map, never a replacement for it:
+   * everything else the file carries — MusicBrainz ids, ReplayGain tags,
+   * `icy-url`, custom fields — is still in {@link getMetadata}.
+   */
+  getCommonMetadata(): CommonMetadata {
+    this.#assertAlive('getCommonMetadata')
+    return toCommonMetadata(this.getMetadata())
   }
 
   /**
@@ -2770,10 +3507,10 @@ export class Player {
    * | read | when | count |
    * | ---- | ---- | ----- |
    * | `#readTimePos` | batch carried a position discontinuity | 1 |
-   * | `#readTrackChange` | batch moved the playlist cursor | 3 |
+   * | `#readTrackChange` | batch moved the playlist cursor | 4 |
    * | {@link getMetadata} | batch touched `metadata`/`media-title` **and** something is listening for `metadataChanged` | 1 |
    *
-   * **Worst case: 5 synchronous reads per batch**, whatever the tag count and
+   * **Worst case: 6 synchronous reads per batch**, whatever the tag count and
    * whatever the queue length. It was `6 + 2N` (47 for a 20-tag FLAC) until
    * `metadata` became a single node read and resolve-ahead's two playlist reads
    * moved off this turn — see `#resolveAhead`.
@@ -2786,14 +3523,20 @@ export class Player {
     const mapped = toPlayerEvents(events)
     if (mapped.length === 0) return true
 
+    const cursor = trackChangeIndexOf(mapped)
+    const trackChange =
+      cursor === undefined ? undefined : this.#readTrackChange(cursor)
+
     const context: ReducerContext = {
       now: this.#now(),
       ...(mapped.some(isPositionDiscontinuity)
         ? { timePos: this.#readTimePos() }
         : {}),
-      ...(mapped.some(isTrackChange)
-        ? { trackChange: this.#readTrackChange() }
-        : {}),
+      ...(trackChange !== undefined ? { trackChange: trackChange.reads } : {}),
+      // The URI of the entry these events are *about*, i.e. still the previous
+      // one when this batch is a track change: the `end-file` being classified
+      // belongs to the entry that ended. `#currentUri` is advanced after the
+      // fan-out, below.
       ...(this.#currentUri !== undefined ? { uri: this.#currentUri } : {}),
     }
 
@@ -2803,7 +3546,7 @@ export class Player {
 
     for (const event of mapped) {
       const after = reducePlayerState(next, event, context)
-      this.#collectEmissions(next, after, event, emissions)
+      this.#collectEmissions(next, after, event, context.now, emissions)
       next = after
     }
 
@@ -2816,6 +3559,15 @@ export class Player {
       for (const listener of [...this.#stateListeners]) listener(next)
     }
     for (const emit of emissions) emit()
+
+    // Only *after* the fan-out, so every listener above classified the entry
+    // that these events were about — and only when the read produced something,
+    // so a momentary read failure (or a cursor moving to `-1`) leaves the last
+    // known URI in place rather than dropping error classification to
+    // "unknown". See `#readTrackChange`.
+    if (trackChange?.uri !== undefined && trackChange.uri !== '') {
+      this.#currentUri = trackChange.uri
+    }
 
     // A `playbackRestart` is mpv's "position is meaningful again" signal, i.e.
     // the entry opened and audio is flowing. Whatever it cost to get there is
@@ -2934,10 +3686,18 @@ export class Player {
     before: PlayerState,
     after: PlayerState,
     event: PlayerEvent,
+    now: number,
     out: Array<() => void>
   ): void {
     switch (event.kind) {
       case 'endFile': {
+        // Whatever jump was in flight is not going to land: the entry it
+        // belonged to is over. Cleared here rather than on `startFile`, because
+        // mpv's ordering of `start-file` against the `playlist-pos` change that
+        // arms an auto-advance is not something this layer should depend on.
+        out.push(() => {
+          this.#pendingDiscontinuity = undefined
+        })
         if (after.status === 'ended') {
           const index = before.playlist.index
           // Read from the snapshot taken *before* the end, for the same reason
@@ -2945,12 +3705,20 @@ export class Player {
           // and mpv starts the next one immediately afterwards.
           const wasLive = before.isLive
           const wasPlaying = before.playing
+          // Same reading: whether anything follows is a fact about the queue as
+          // it was when this entry finished, and it already accounts for the
+          // loop mode (see `PlayerState.hasNext`).
+          const wasLast = !before.hasNext
           out.push(() => {
             // A clean end of a *live* entry is a server hanging up, not a
             // broadcast finishing — but only if the app said so. See
             // `RetryOptions.retryLiveEof`.
             if (this.#tryRetryLiveEof(index, wasLive, wasPlaying)) return
             this.#emit('trackEnded', { index })
+            // After `trackEnded`, never instead of it: the last entry both
+            // ended and ended the queue, and a listener that counts plays needs
+            // the first event as much as one that offers "up next" needs this.
+            if (wasLast) this.#emit('queueEnded')
           })
         } else if (after.status === 'error' && after.error !== undefined) {
           const error = after.error
@@ -2979,12 +3747,33 @@ export class Player {
           })
           return
         }
+        if (event.name === MpvProperty.chapter) {
+          const chapter = after.chapter
+          const previousChapter = before.chapter
+          if (chapter === previousChapter) return
+          out.push(() => {
+            this.#emit('chapterChanged', {
+              index: chapter,
+              previousIndex: previousChapter,
+            })
+          })
+          return
+        }
         if (event.name !== MpvProperty.playlistPos) return
         const index = after.playlist.index
         const previousIndex = before.playlist.index
         if (index === previousIndex) return
+        // Where the old entry's clock stood when the cursor left it. Projected,
+        // not read: the truth for the *new* entry arrives with the restart, and
+        // a synchronous `time-pos` here would buy nothing but a round-trip at
+        // the worst moment (see the batch read budget).
+        const from = projectPosition(before, now)
         out.push(() => {
           this.#emit('trackChanged', { index, previousIndex })
+          // The cursor moving is a position discontinuity in its own right —
+          // the clock did not seek, it restarted somewhere else entirely.
+          this.#pendingDiscontinuity = 'auto-advance'
+          this.#emit('seekStarted', { reason: 'auto-advance', from })
         })
         return
       }
@@ -2995,9 +3784,30 @@ export class Player {
         })
         return
       }
+      case 'seek': {
+        const from = projectPosition(before, now)
+        out.push(() => {
+          this.#pendingDiscontinuity = 'seek'
+          this.#emit('seekStarted', { reason: 'seek', from })
+        })
+        return
+      }
+      case 'playbackRestart': {
+        // The reducer has already re-anchored on the one-shot `time-pos` read,
+        // so this is mpv's own number rather than a projection.
+        const position = after.positionAnchor.position
+        out.push(() => {
+          const reason = this.#pendingDiscontinuity
+          // Nothing announced a jump — an ordinary restart with no
+          // discontinuity to complete. Silence is the honest answer; inventing
+          // a reason here is how `seekCompleted` would stop meaning anything.
+          if (reason === undefined) return
+          this.#pendingDiscontinuity = undefined
+          this.#emit('seekCompleted', { reason, position })
+        })
+        return
+      }
       case 'startFile':
-      case 'seek':
-      case 'playbackRestart':
       case 'shutdown':
         return
       default: {
@@ -3287,7 +4097,7 @@ export class Player {
    * unavailable yields no key at all, which the reducer reads as "unknown"
    * rather than "unchanged".
    */
-  #readTrackChange(): TrackChangeReads {
+  #readTrackChange(index: number): TrackChangeSnapshot {
     const duration = this.#readInBatch(() =>
       this.#client.getPropertyNumber(MpvProperty.duration)
     )
@@ -3297,10 +4107,35 @@ export class Player {
     const title = this.#readInBatch(() =>
       this.#client.getPropertyString(MpvProperty.mediaTitle)
     )
+    // The fourth read, and the cheapest correct answer to "which source is
+    // playing *now*". `#currentUri` used to be whatever `load()`/`loadPlaylist()`
+    // was last told, so after one `playlist.next()` — or a repeat wrap, or a
+    // resumed session — every error was classified against the URI of a track
+    // that finished minutes ago, turning a network failure on entry 7 into a
+    // `load-failed` because entry 0 happened to be a local file.
+    //
+    // It is a *logical* URI (`playlist/N/filename` is the string that was
+    // passed to `loadfile`; a source resolver rewrites `stream-open-filename`
+    // and never touches the playlist), which is exactly the right thing to
+    // classify on and to show a user.
+    //
+    // Read here rather than anywhere else because this batch has already paid
+    // for the boundary: mpv is joining an opener thread either way, and the
+    // three reads above are already in flight. `-1` (no current entry) is not
+    // read at all — there is no such property.
+    const uri =
+      index >= 0
+        ? this.#readInBatch(() =>
+            this.#client.getPropertyString(playlistFilenameProperty(index))
+          )
+        : undefined
     return {
-      ...(duration !== undefined ? { duration } : {}),
-      ...(seekable !== undefined ? { seekable } : {}),
-      ...(title !== undefined ? { title } : {}),
+      reads: {
+        ...(duration !== undefined ? { duration } : {}),
+        ...(seekable !== undefined ? { seekable } : {}),
+        ...(title !== undefined ? { title } : {}),
+      },
+      ...(uri !== undefined ? { uri } : {}),
     }
   }
 

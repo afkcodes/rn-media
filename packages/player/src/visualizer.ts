@@ -365,14 +365,15 @@ export function decodeVisualizerFrame(
       sum += magnitude * magnitude
     }
     // `10 * log10(power)` — power, not amplitude, so no factor of 20.
-    const db = sum > 0 ? 10 * Math.log10(sum) + plan.tiltDb[b]! : Number.NEGATIVE_INFINITY
+    const db =
+      sum > 0
+        ? 10 * Math.log10(sum) + plan.tiltDb[b]!
+        : Number.NEGATIVE_INFINITY
     power[b] = db
     if (db > peakDb) peakDb = db
   }
 
-  const gainDb = options.autoGain
-    ? advanceGain(state, peakDb, options)
-    : 0
+  const gainDb = options.autoGain ? advanceGain(state, peakDb, options) : 0
   state.gainDb = gainDb
 
   const span = options.maxDb - options.minDb

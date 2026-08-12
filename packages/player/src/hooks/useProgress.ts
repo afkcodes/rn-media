@@ -55,6 +55,14 @@ function selectProgressSource(state: PlayerState): ProgressSource {
 }
 
 /**
+ * Default re-render period of {@link useProgress}, in milliseconds.
+ *
+ * Four renders a second is smooth enough for a seek bar and a `m:ss` readout,
+ * and each one costs a local projection — no native call, no bridge traffic.
+ */
+export const DEFAULT_PROGRESS_INTERVAL_MS = 250
+
+/**
  * A ticking view of the playback position.
  *
  * The position is *projected* locally from the player's anchor — nothing is
@@ -73,7 +81,7 @@ function selectProgressSource(state: PlayerState): ProgressSource {
  */
 export function useProgress(
   player: Player | undefined,
-  intervalMs = 250
+  intervalMs = DEFAULT_PROGRESS_INTERVAL_MS
 ): Progress {
   const source = usePlayerState(player, selectProgressSource, sameSource)
   const [, setTick] = useState(0)

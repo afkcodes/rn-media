@@ -18,7 +18,7 @@ public extension MediaSessionConfig {
   /**
    * Create a new instance of `MediaSessionConfig`.
    */
-  init(android: AndroidMediaSessionConfig?, ios: IosMediaSessionConfig?) {
+  init(android: AndroidMediaSessionConfig?, ios: IosMediaSessionConfig?, jumpForwardSeconds: Double, jumpBackwardSeconds: Double) {
     self.init({ () -> bridge.std__optional_AndroidMediaSessionConfig_ in
       if let __unwrappedValue = android {
         return bridge.create_std__optional_AndroidMediaSessionConfig_(__unwrappedValue)
@@ -31,7 +31,7 @@ public extension MediaSessionConfig {
       } else {
         return .init()
       }
-    }())
+    }(), jumpForwardSeconds, jumpBackwardSeconds)
   }
 
   @inline(__always)
@@ -42,5 +42,15 @@ public extension MediaSessionConfig {
   @inline(__always)
   var ios: IosMediaSessionConfig? {
     return self.__ios.value
+  }
+  
+  @inline(__always)
+  var jumpForwardSeconds: Double {
+    return self.__jumpForwardSeconds
+  }
+  
+  @inline(__always)
+  var jumpBackwardSeconds: Double {
+    return self.__jumpBackwardSeconds
   }
 }

@@ -18,7 +18,7 @@ public extension AndroidMediaSessionConfig {
   /**
    * Create a new instance of `AndroidMediaSessionConfig`.
    */
-  init(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Bool, stopForegroundTimeoutMs: Double?, playbackResumption: Bool) {
+  init(notificationChannelId: String, notificationChannelName: String, notificationIcon: String?, stopForegroundOnPause: Bool, stopForegroundTimeoutMs: Double?, playbackResumption: Bool, notificationColor: Double?) {
     self.init(std.string(notificationChannelId), std.string(notificationChannelName), { () -> bridge.std__optional_std__string_ in
       if let __unwrappedValue = notificationIcon {
         return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
@@ -31,7 +31,13 @@ public extension AndroidMediaSessionConfig {
       } else {
         return .init()
       }
-    }(), playbackResumption)
+    }(), playbackResumption, { () -> bridge.std__optional_double_ in
+      if let __unwrappedValue = notificationColor {
+        return bridge.create_std__optional_double_(__unwrappedValue)
+      } else {
+        return .init()
+      }
+    }())
   }
 
   @inline(__always)
@@ -76,5 +82,17 @@ public extension AndroidMediaSessionConfig {
   @inline(__always)
   var playbackResumption: Bool {
     return self.__playbackResumption
+  }
+  
+  @inline(__always)
+  var notificationColor: Double? {
+    return { () -> Double? in
+      if bridge.has_value_std__optional_double_(self.__notificationColor) {
+        let __unwrapped = bridge.get_std__optional_double_(self.__notificationColor)
+        return __unwrapped
+      } else {
+        return nil
+      }
+    }()
   }
 }

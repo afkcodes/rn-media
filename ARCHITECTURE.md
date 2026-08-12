@@ -87,6 +87,20 @@ receipt** (NTP-skew clamped) and media3's position supplier projects by pure
 subtraction — the lock-screen scrubber advances with zero bridge traffic in
 either direction.
 
+Two consequences that are API decisions rather than implementation details.
+**Discontinuities are events** (`seekStarted`/`seekCompleted`, carrying
+`reason: 'seek' | 'auto-advance'`), derived from mpv's `MPV_EVENT_SEEK` and the
+`playlist-pos` change against the `playbackRestart` that lands them — no new
+native signal, and they are what makes accurate listening analytics possible
+without polling: everything between two of them was heard in real time. And
+**playback milestones (25/50/75/90 %) are a hook, not a `Player` feature**
+(`useMilestones`), because a mid-track time event needs a tick and this design
+has none: a timer inside the player would freeze with the screen off (see
+Platform truths) and fire a burst on unlock, while a discontinuity-only check
+would fire every mark at once at the track's end. The hook rides `useProgress`'s
+existing tick and adds no timer; the honest cost — no mounted UI, no
+milestones — is documented on it rather than hidden.
+
 ### 8. One JS runtime, kept alive by platform primitives — no headless fork
 Proven from RN 0.86 sources: destroying the last Activity does *not* tear down
 the ReactInstance; the foreground service supplies process residency and Nitro
@@ -341,8 +355,54 @@ carries the exact standing.
 - **`jumpTo` clears `pause`** — mpv's `playlist-play-index` restarts the entry
   but never touches the global pause flag; "buffering forever" was actually
   "started, paused".
+- **`stop()` keeps the queue; clearing is the opt-in.** mpv's bare `stop`
+  "stops playback and clears playlist" (input.rst) — `Player.stop()` instead
+  sends `stop keep-playlist` and reserves the full clear for
+  `stop({ clearPlaylist: true })`. The default is judged against the RN
+  ecosystem, not mpv's CLI: react-native-track-player's `stop()` keeps the
+  queue (clearing is its separate `reset()`), so a migrator's `stop()`
+  silently destroying a queue is data loss, while the reverse surprise — the
+  queue still being there — is benign. Destructive stays opt-in, like
+  everywhere else in the API. After `stop()` mpv leaves no entry "current"
+  (`playlist-pos` −1, so `hasNext`/`hasPrevious` read false): the way back
+  into the kept queue is `playlist.jumpTo(i)`, not `play()`.
 - **Audio-only core defaults**: `vid=no`, `force-window=no`, `idle=yes`,
-  `audio-display=no`.
+  `audio-display=no`. The cost, stated because the README's formats row used to
+  imply otherwise: under `audio-display=no` mpv never *selects* the
+  attached-picture track (`player/loadfile.c:617`), and the only image-returning
+  command in the client API (`screenshot-raw`) needs a configured video output
+  this core never creates — so embedded cover art **decodes** (eight decoders
+  are compiled) but cannot be **extracted**. Detection survives
+  (`track-list/N/albumart`); extraction is native work, not a wrapper.
+- **Every `loadfile` per-file option is escaped with mpv's own quoting.** The
+  option list is `opt1=v1,opt2=v2`, parsed by `parse_keyvalue_list()` →
+  `read_subparam()` — the *same* function the `af` chain goes through — so the
+  same rule applies: anything outside mpv's `NAMECH` alphabet is written
+  `%<bytes>%<value>` (`subparam.ts`, shared with `filters.ts`). Unescaped, any
+  value containing a comma truncated the list and shifted every option after
+  it; the case that made it a real bug rather than a latent one is
+  `http-header-fields`, itself a comma-separated list, i.e. exactly the option
+  an authenticated library needs. Headers therefore get **two** layers: `\,`
+  inside the list item (mpv's string-list rule, `get_nextsep()`), `%n%` around
+  the whole value.
+- **`startPosition` on a queue belongs to one entry.** `loadPlaylist` attaches
+  `start=` to the entry at `startIndex` only. Applied to every appended entry —
+  as it was until 0.1.0 — the natural session-restore call
+  (`{ startIndex: 5, startPosition: 120 }`) silently made *every* track begin
+  two minutes in, and per-file options publish nothing observable to notice it
+  by. Combining it with `shuffle` throws, for the same reason `startIndex` +
+  `shuffle` does: after mpv permutes the queue no index identifies the source
+  the offset was meant for.
+- **The current entry's URI is read at the boundary, not remembered from the
+  load.** Error classification (network vs load-failed, and therefore
+  `retryable`, and therefore §22's whole retry decision) is keyed on the URI of
+  the entry that failed. That used to be whatever `load()`/`loadPlaylist()` was
+  last told, so after one `playlist.next()` every failure was judged against a
+  track that finished minutes ago. It is now `playlist/<new index>/filename`,
+  read in the same already-paid one-shot batch as `duration`/`seekable`/
+  `media-title` (a fourth read on cursor-change batches, worst case six per
+  batch) and adopted *after* the fan-out, so an `end-file` in the same batch is
+  still classified against the entry that ended.
 - **`gapless-audio` left at mpv's `weak`** (exposed as the typed `gaplessAudio`,
   never written unless the caller asks). `weak` keeps the audio device open while
   consecutive entries decode to the same format and reopens it when they do not;
@@ -528,7 +588,8 @@ The three non-obvious decisions:
 
 **The sleep timer is native because our own Platform truth says it must be.**
 `setSleepTimer/cancelSleepTimer/getSleepTimerRemaining` + an `onSleepTimer`
-handler callback. Android uses a main-looper `Handler.postDelayed`, iOS a
+handler callback. (It later grew `setSleepTimerToTrackEnd()` and a structured
+`getSleepTimer()`; both are native for the same reason and are described in §23.) Android uses a main-looper `Handler.postDelayed`, iOS a
 cancellable `DispatchQueue.main.asyncAfter` work item — neither is tied to an
 Activity, neither is a JS timer. On fire the pause is **native-first** (§9) and,
 on Android, literally the same path a notification pause takes: the facade
@@ -884,6 +945,136 @@ entry played for longer than the audio the player is willing to hold) of
 wall-clock playback since the restart. Bounded either way — a broadcast that has
 genuinely ended is re-attempted `maxAttempts` times and then the queue moves on,
 which is the documented cost of recovering the station that had not.
+
+### 23. Remote-surface parity: one jump interval, repeat/shuffle on both sides, and an honest metadata table
+Four `media-session` additions that share one premise — *a knob that behaves
+differently per platform is a defect, and a field the OS cannot render is a
+gap to state rather than to fake.*
+
+**Jump intervals are one cross-platform option, and fixing them was a bug fix.**
+`RemoteCommandBinding.swift` pinned `skipInterval = 15` in both directions while
+Android never called `setSeekBackIncrementMs`/`setSeekForwardIncrementMs` and
+therefore inherited media3's `C.DEFAULT_SEEK_BACK_INCREMENT_MS = 5_000` /
+`DEFAULT_SEEK_FORWARD_INCREMENT_MS = 15_000` (1.11.0, `javap` on the shipped
+AAR). The same JS call skipped back 5 s on Android and 15 s on iOS — a
+parity-gate violation, not a missing knob. `jumpForwardSeconds` /
+`jumpBackwardSeconds` therefore sit at the **top level** of `MediaServiceConfig`,
+not under a platform namespace, and default to **15/15** — RNTP V4's and V5's
+default, and what the platform where the value was deliberate already did.
+Android applies them through `SimpleBasePlayer.State.Builder`, iOS through
+`MPSkipIntervalCommand.preferredIntervals`; both platforms still resolve the
+increment natively and deliver an absolute `seekTo`, so the handler interface
+stays free of relative-seek methods (§the `MediaControl` doc comment). They are
+mirrored into `ResumptionStore` too, because a revived service builds its facade
+player before any JavaScript exists and that player's increments are what a
+notification's fast-forward button resolves against.
+
+**Repeat and shuffle are a capability *and* a control, and the difference is
+load-bearing.** `MediaCapability.setRepeatMode`/`setShuffle` put
+`COMMAND_SET_REPEAT_MODE` (15) / `COMMAND_SET_SHUFFLE_MODE` (14) on the facade,
+which is what makes `SimpleBasePlayer` dispatch
+`handleSetRepeatMode`/`handleSetShuffleModeEnabled` at all and what lights up
+Android Auto, Wear and third-party controllers. That alone does **not** put a
+button in the phone's shade: `DefaultMediaNotificationProvider` draws previous /
+play-pause / next and nothing else. So `MediaControl.repeatMode`/`shuffle` were
+added as well, drawn with media3's state-dependent icons
+(`ICON_REPEAT_OFF/_ONE/_ALL`, `ICON_SHUFFLE_ON/_OFF`) in the *secondary* slots —
+never central or back/forward, which belong to transport. The control is spelled
+`repeatMode` because a union member becomes a native enumerator verbatim and
+`repeat` is a Swift keyword; the same constraint that produced `defaultMode` in
+`@rn-media/audio-session`. State rides the existing `playbackState` channel as
+two additive, defaulted fields (`'off'` / `false`), and a press is a *request*:
+`onSetRepeatMode`/`onSetShuffle` are called and nothing moves until the app
+broadcasts — the acknowledge-by-broadcast contract (§9) that also completes
+media3's pending-operation future. Both handler methods are optional for the
+reason `onSleepTimer` is: this interface is the player-agnostic contract.
+iOS uses `changeRepeatModeCommand`/`changeShuffleModeCommand`, whose
+`currentRepeatType`/`currentShuffleType` are pushed on every broadcast (both are
+`assign`, i.e. readwrite, in `MPRemoteCommand.h` — Apple's docs file them under a
+"Retrieving…" heading that reads as read-only and is not).
+`MPShuffleType.collections` has no cross-platform twin and is read as "on".
+
+**The sleep timer grew a second mode, and it is still native-first.**
+`setSleepTimerToTrackEnd()` is a separate method rather than an option object,
+because the two modes take different arguments. A package with no playback engine
+can still compute the deadline —
+`(duration − projectedPosition) / rate`, both halves already on the broadcast
+channels — so it is computed natively and **re-armed on every broadcast**. That
+is not a new subscription: broadcasts are discontinuity-only (§7), which means a
+seek, a pause, a rate change and a late-arriving duration are exactly the events
+that move the deadline. Nothing polls; nothing new crosses the bridge. Two cases
+have no computable deadline (live, or a duration not yet broadcast) and one has
+no deadline at all (paused); all three leave the timer **armed** and waiting for
+the *current item to change*, which fires it — the honest reading of "stop after
+this one" and the only thing that makes the feature work on a live stream. The
+item is identified by `index:id`, because ids legitimately repeat in a queue and
+an index alone moves under a queue edit. `getSleepTimer(): {mode,
+remainingSeconds?}` exists because `getSleepTimerRemaining()` cannot distinguish
+"armed, deadline unknown" from "not armed", and a timer badge that vanishes is a
+bug the old shape made unavoidable.
+
+The latch is **one nullable key, cleared at every exit from track-end mode**
+(fire, cancel, a countdown replacing it, `stop`), and both of those words were
+paid for. It was first written as a key *plus* a `latched` boolean reset only in
+`stop()`, which let the pair drift: a fired timer left `latched = true` with a
+stale key, and because `armAtTrackEnd()` marks the mode armed **synchronously**
+on the JS thread while the re-latch is only posted to main, a broadcast block
+already queued on the looper could run in between, compare the current item
+against an item from the previous session, read "the item changed" and pause
+playback *at the instant of arming*. The synchronous arm stays — it closes the
+opposite race, where a broadcast racing an arm would be ignored as "not armed" —
+so the fix is on the stale side, and collapsing two fields into one makes
+half-reset unrepresentable rather than merely unlikely. The decision itself
+(`trackEndAction(latchedKey, currentKey) -> Fire | Wait(latchTo)`) is a pure
+function in `Snapshot.kt`, unit-tested on the JVM including that regression;
+what stays in the controller is a `Handler` post and a `when`, which is the part
+that genuinely needs a device. iOS mirrors it as `TrackEndAction.next(latched:
+current:)` in the same shape, deliberately, because the two platforms diverging
+on the one branchy part of the feature is the bug class this package exists to
+prevent. One case is left alone and is benign by construction: re-arming while a
+track-end timer is *still* armed keeps the old latch for the gap, and that latch
+is necessarily current — had the item changed, the retarget would already have
+fired and cleared it.
+
+**Metadata gained seven fields and one honest table.** `albumArtist`,
+`trackNumber`, `discNumber`, `year`, `subtitle`, `isLive` and `extras` map onto
+media3 `MediaMetadata` in full. iOS renders three of them:
+`MPNowPlayingInfoCenter` documents a *subset* of `MPMediaItem` keys, and while
+`AlbumTrackNumber` and `DiscNumber` are on it, **there is no year key at all**
+(the only date-shaped key is an `NSDate` and is not on the list), **no third
+display line**, and **no arbitrary-payload key**. Those three are carried through
+the session and through persistence — the app gets them back — and are simply not
+published, rather than being folded into `artist`/`album` the way the ecosystem
+usually does, which would corrupt two fields the app also sets. `albumArtist` is
+sent despite being off the documented list, because the key is real, unknown keys
+are ignored, and some surfaces read it — with no promise attached. `extras` is
+string→string precisely because its two destinations are an Android `Bundle`
+crossing a binder and a JSON round trip.
+
+**`notificationColor` needed a provider decorator, not a builder call.**
+`DefaultMediaNotificationProvider.createNotification` is `final` in media3 1.11
+and its `Builder` offers channel id, channel name, notification id and small icon
+— no colour. A `MediaNotification.Provider` that delegates and then sets
+`Notification.color` on the result is the only public lever, and setting it after
+the build is what makes it stick. Stated as a *hint*: Android 12+ media
+notifications derive their palette from the artwork and may ignore it.
+
+**`ios.supportedPlaybackRates` is namespaced, and the asymmetry was checked.**
+`MPChangePlaybackRateCommand.supportedPlaybackRates` is a fixed list iOS snaps
+the user's choice to. Nothing on the Android side takes a list: media3's speed
+lever is `COMMAND_SET_SPEED_AND_PITCH` → an arbitrary float, its notification
+draws no rate control, and `javap` over the shipped 1.11.0 AARs finds no
+supported-rates API anywhere. So this is a platform fact, not a missing mapping,
+and it lives under `ios` for the same reason `playbackResumption` lives under
+`android` — the shape of the config should say which platform can honour it.
+
+**The persisted schema went to 2.** Both channels gained fields, and the reader
+that matters is `ResumptionStore` in a process with no JavaScript, which can only
+check the version. `unsupportedVersion` — "I will not guess" — costs one
+session's resumption card, which the next broadcast rewrites, and buys never
+silently restoring a session with shuffle off because the record could not say
+otherwise. `SchemaVersionSyncTest` still fails the Android build if the TS writer
+and the Kotlin reader drift.
 
 ## Platform truths we build around (learned, verified)
 

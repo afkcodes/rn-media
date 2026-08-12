@@ -2,10 +2,7 @@ export { AudioSession, createAudioSession } from './audio-session'
 export { AudioSessionPresets } from './presets'
 export { wireAudioSession } from './wire'
 
-export type {
-  AudioSessionPlayerLike,
-  WireAudioSessionOptions,
-} from './wire'
+export type { AudioSessionPlayerLike, WireAudioSessionOptions } from './wire'
 
 export type {
   AudioSessionApi,

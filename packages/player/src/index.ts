@@ -19,6 +19,7 @@ export type { ScreenStateSource } from './screen-state'
 export type { RnMediaScreenState } from './specs/screen-state.nitro'
 
 export type {
+  ChapterEntry,
   MpvClient,
   MpvEndFileReason,
   MpvEvent,
@@ -66,6 +67,14 @@ export type {
   UnsupportedError,
   UnsupportedFormatError,
 } from './errors'
+
+export { toCommonMetadata } from './common-metadata'
+export type { CommonMetadata } from './common-metadata'
+
+export { HTTP_HEADER_FIELDS_OPTION, compileHttpHeaderFields } from './headers'
+export type { HttpHeaders } from './headers'
+
+export { escapeSubparam, utf8Length } from './subparam'
 
 export {
   EQUALIZER_BANDS,
@@ -122,13 +131,11 @@ export {
   DEFAULT_RESOLVER_TTL_MS,
   SourceResolverController,
 } from './source-resolver'
-export type {
-  SourceResolver,
-  SourceResolverOptions,
-} from './source-resolver'
+export type { SourceResolver, SourceResolverOptions } from './source-resolver'
 
 export {
   BUFFERED_POSITION_STEP,
+  BUFFERING_PERCENT_STEP,
   clearPlayerError,
   createInitialState,
   isPositionDiscontinuity,
@@ -171,12 +178,15 @@ export type {
 export {
   DEFAULT_CACHE_SECS,
   DEFAULT_RECONNECT_DELAY_MAX_SECONDS,
+  DEFAULT_RESTART_THRESHOLD_SECONDS,
   DEFAULT_RETRY_MAX_ATTEMPTS,
   DEFAULT_USER_AGENT,
   LIVE_EOF_BUDGET_RESET_SECONDS,
   Player,
 } from './player'
 export type {
+  AudioChannelMode,
+  ChapterChangedEvent,
   GaplessAudioMode,
   LoadOptions,
   LoadPlaylistOptions,
@@ -190,12 +200,16 @@ export type {
   PlayerOptions,
   PlaylistAddOptions,
   PlaylistApi,
+  PositionDiscontinuityReason,
   QueueChangeReason,
   QueueChangedEvent,
   ReplayGainMode,
   ReplayGainOptions,
   RetryOptions,
   RetryingEvent,
+  SeekCompletedEvent,
+  SeekStartedEvent,
+  SourceOptions,
   TrackChangedEvent,
   TrackEndedEvent,
   Unsubscribe,
@@ -205,7 +219,9 @@ export { usePlayer } from './hooks/usePlayer'
 export type { UsePlayerOptions, UsePlayerResult } from './hooks/usePlayer'
 export { usePlayerState } from './hooks/usePlayerState'
 export type { PlayerStateSelector } from './hooks/usePlayerState'
-export { useProgress } from './hooks/useProgress'
+export { DEFAULT_PROGRESS_INTERVAL_MS, useProgress } from './hooks/useProgress'
 export type { Progress } from './hooks/useProgress'
+export { DEFAULT_MILESTONES, useMilestones } from './hooks/useMilestones'
+export type { Milestone } from './hooks/useMilestones'
 export { useVisualizer } from './hooks/useVisualizer'
 export type { UseVisualizerResult } from './hooks/useVisualizer'

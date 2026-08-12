@@ -4,7 +4,8 @@ import { MpvProperty } from '../properties'
 import { VisualizerController } from '../visualizer-controller'
 import { FakeMpvClient, toneCapture } from './fake-mpv-client'
 
-const NOT_FOUND = '[mpv:-8] mpv_get_property("pcm-tap", DOUBLE): property not found'
+const NOT_FOUND =
+  '[mpv:-8] mpv_get_property("pcm-tap", DOUBLE): property not found'
 
 function starts(client: FakeMpvClient) {
   return client.visualizerCalls.filter((call) => call.kind === 'start')
@@ -73,7 +74,9 @@ describe('VisualizerController — laziness', () => {
     controller.capabilities
     controller.capabilities
     controller.capabilities
-    expect(spy.mock.calls.filter(([name]) => name === MpvProperty.pcmTap)).toHaveLength(1)
+    expect(
+      spy.mock.calls.filter(([name]) => name === MpvProperty.pcmTap)
+    ).toHaveLength(1)
   })
 })
 
@@ -183,7 +186,9 @@ describe('VisualizerController — typed failure', () => {
       expect.unreachable('subscribe should have thrown')
     } catch (thrown) {
       expect(thrown).toBeInstanceOf(PlayerErrorException)
-      expect((thrown as PlayerErrorException).playerError.code).toBe('unsupported')
+      expect((thrown as PlayerErrorException).playerError.code).toBe(
+        'unsupported'
+      )
     }
   })
 
@@ -202,7 +207,9 @@ describe('VisualizerController — typed failure', () => {
       controller.subscribe(() => {})
       expect.unreachable('subscribe should have thrown')
     } catch (thrown) {
-      expect((thrown as PlayerErrorException).playerError.code).toBe('unsupported')
+      expect((thrown as PlayerErrorException).playerError.code).toBe(
+        'unsupported'
+      )
     }
   })
 
@@ -281,7 +288,9 @@ describe('toVisualizerError', () => {
 
   it('strips a stack trace out of the human-readable message', () => {
     const error = toVisualizerError(
-      new Error('[visualizer:unavailable] no PCM tap here\n    at Foo.bar(X.kt:12)')
+      new Error(
+        '[visualizer:unavailable] no PCM tap here\n    at Foo.bar(X.kt:12)'
+      )
     )
     expect(error.message).toBe('no PCM tap here')
   })

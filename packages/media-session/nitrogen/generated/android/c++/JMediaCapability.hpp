@@ -66,6 +66,12 @@ namespace margelo::nitro::rnmediamediasession {
         case MediaCapability::SETRATE:
           static const auto fieldSETRATE = clazz->getStaticField<JMediaCapability>("SETRATE");
           return clazz->getStaticFieldValue(fieldSETRATE);
+        case MediaCapability::SETREPEATMODE:
+          static const auto fieldSETREPEATMODE = clazz->getStaticField<JMediaCapability>("SETREPEATMODE");
+          return clazz->getStaticFieldValue(fieldSETREPEATMODE);
+        case MediaCapability::SETSHUFFLE:
+          static const auto fieldSETSHUFFLE = clazz->getStaticField<JMediaCapability>("SETSHUFFLE");
+          return clazz->getStaticFieldValue(fieldSETSHUFFLE);
         default:
           std::string stringValue = std::to_string(static_cast<int>(value));
           throw std::invalid_argument("Invalid enum value (" + stringValue + "!");

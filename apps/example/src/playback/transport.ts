@@ -51,6 +51,15 @@ export class Transport {
     void player.playlist.next()
   }
 
+  /**
+   * ⏮ is restart-or-previous, and the library owns the rule.
+   *
+   * `playlist.previous()` seeks to `0` when more than three seconds into the
+   * entry and moves back otherwise — the convention every music app
+   * implements, and one this app deliberately does *not* reimplement with
+   * `getPosition() > 3`. Pass `{ restartThreshold }` to change it, or `0` for
+   * an always-move button.
+   */
   previous(): void {
     const player = this.#hooks.player()
     if (player === undefined) return
@@ -96,8 +105,47 @@ export class Transport {
     void this.#hooks.player()?.seekTo(seconds)
   }
 
+  /**
+   * The ±15 s buttons, and the reason they are not `seekTo(position + delta)`.
+   *
+   * The position this app can read is *projected* from an anchor that may be a
+   * few hundred milliseconds old (nothing ticks across the bridge — that is the
+   * whole design), so computing an absolute target from it accumulates the
+   * projection error on every rapid tap. `seekBy` is mpv's own `relative` seek,
+   * applied to mpv's clock at the instant it runs.
+   */
+  seekBy(deltaSeconds: number): void {
+    void this.#hooks.player()?.seekBy(deltaSeconds)
+  }
+
   setRate(rate: number): void {
     this.#hooks.player()?.setRate(rate)
+  }
+
+  /**
+   * Pitch, independent of speed — mpv's own `--pitch`, a frequency **ratio**.
+   *
+   * `1` is the recording's own pitch; a semitone is `2 ** (1 / 12)`. It drives
+   * the same `scaletempo2` that already handles speed, so no filter chain and
+   * no engine flag is involved, and `setRate` is unaffected.
+   */
+  setPitchSemitones(semitones: number): void {
+    this.#hooks.player()?.setPitch(2 ** (semitones / 12))
+  }
+
+  /**
+   * Chapter navigation, when the entry has chapters (audiobooks, podcasts).
+   *
+   * `previousChapter()` is restart-or-previous inside mpv itself: a backward
+   * chapter seek restarts the current chapter unless you are within
+   * `--chapter-seek-threshold` (5 s) of its start.
+   */
+  nextChapter(): void {
+    void this.#hooks.player()?.nextChapter()
+  }
+
+  previousChapter(): void {
+    void this.#hooks.player()?.previousChapter()
   }
 
   setVolume(volume: number): void {

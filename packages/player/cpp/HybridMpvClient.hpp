@@ -216,6 +216,7 @@ public:
   std::optional<bool> getPropertyBool(const std::string& name) override;
   std::optional<std::unordered_map<std::string, std::string>> getPropertyMap(const std::string& name) override;
   std::vector<PlaylistEntry> getPlaylistEntries() override;
+  std::vector<ChapterEntry> getChapters() override;
 
   void setPropertyString(const std::string& name, const std::string& value) override;
   void setPropertyNumber(const std::string& name, double value) override;

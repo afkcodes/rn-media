@@ -21,7 +21,9 @@ const CAPABILITIES: VisualizerCapabilities = {
   maxFftSize: 16384,
 }
 
-function options(overrides: Partial<Parameters<typeof resolveVisualizerOptions>[0]> = {}) {
+function options(
+  overrides: Partial<Parameters<typeof resolveVisualizerOptions>[0]> = {}
+) {
   return resolveVisualizerOptions(overrides, CAPABILITIES)
 }
 
@@ -141,7 +143,11 @@ describe('decodeVisualizerFrame — calibration', () => {
 
   it('hands the linear magnitudes through untouched', () => {
     const capture = toneCapture(7, 0.25, { bins: 33 })
-    const frame = decodeVisualizerFrame(capture, options({ bands: 4 }), createDecodeState(4))!
+    const frame = decodeVisualizerFrame(
+      capture,
+      options({ bands: 4 }),
+      createDecodeState(4)
+    )!
     expect(frame.magnitudes).toHaveLength(33)
     expect(frame.magnitudes[7]).toBeCloseTo(0.25, 6)
     expect(frame.magnitudes[6]).toBe(0)
@@ -154,7 +160,11 @@ describe('decodeVisualizerFrame — calibration', () => {
       capturedAt: 12345,
       dropped: 7,
     })
-    const frame = decodeVisualizerFrame(capture, options({ bands: 4 }), createDecodeState(4))!
+    const frame = decodeVisualizerFrame(
+      capture,
+      options({ bands: 4 }),
+      createDecodeState(4)
+    )!
     expect(frame.sampleRate).toBe(44100)
     expect(frame.capturedAt).toBe(12345)
     expect(frame.dropped).toBe(7)
@@ -219,7 +229,11 @@ describe('decodeVisualizerFrame — bands', () => {
   it('hands out a fresh array per frame, never a live view of the state', () => {
     const state = createDecodeState(4)
     const resolved = options({ bands: 4 })
-    const first = decodeVisualizerFrame(toneCapture(10, 1, { bins: 129 }), resolved, state)!
+    const first = decodeVisualizerFrame(
+      toneCapture(10, 1, { bins: 129 }),
+      resolved,
+      state
+    )!
     const snapshot = Array.from(first.bands)
     decodeVisualizerFrame(toneCapture(10, 0, { bins: 129 }), resolved, state)
     expect(Array.from(first.bands)).toEqual(snapshot)
@@ -227,7 +241,11 @@ describe('decodeVisualizerFrame — bands', () => {
 
   it('resets the smoothing buffer when the band count changes', () => {
     const state = createDecodeState(4)
-    decodeVisualizerFrame(toneCapture(10, 1, { bins: 129 }), options({ bands: 4 }), state)
+    decodeVisualizerFrame(
+      toneCapture(10, 1, { bins: 129 }),
+      options({ bands: 4 }),
+      state
+    )
     const frame = decodeVisualizerFrame(
       toneCapture(10, 1, { bins: 129 }),
       options({ bands: 16 }),
@@ -251,13 +269,19 @@ describe('decodeVisualizerFrame — bands', () => {
     const state = createDecodeState(8)
     const resolved = options({ bands: 8 })
     decodeVisualizerFrame(
-      visualizerCapture({ magnitudes: new Array(129).fill(0.1), sampleRate: 48000 }),
+      visualizerCapture({
+        magnitudes: new Array(129).fill(0.1),
+        sampleRate: 48000,
+      }),
       resolved,
       state
     )
     const plan = state.plan
     decodeVisualizerFrame(
-      visualizerCapture({ magnitudes: new Array(129).fill(0.1), sampleRate: 44100 }),
+      visualizerCapture({
+        magnitudes: new Array(129).fill(0.1),
+        sampleRate: 44100,
+      }),
       resolved,
       state
     )
@@ -355,10 +379,19 @@ describe('decodeVisualizerFrame — auto-gain', () => {
 
   it('backs off faster than it builds', () => {
     const state = createDecodeState(4)
-    const resolved = options({ bands: 4, attack: 1, tiltDbPerOctave: 0, autoGain: true })
+    const resolved = options({
+      bands: 4,
+      attack: 1,
+      tiltDbPerOctave: 0,
+      autoGain: true,
+    })
     // Settle quiet, so there is real gain to shed.
     for (let i = 0; i < 400; i++) {
-      decodeVisualizerFrame(toneCapture(100, magnitudeForDb(-60), { bins: 513 }), resolved, state)
+      decodeVisualizerFrame(
+        toneCapture(100, magnitudeForDb(-60), { bins: 513 }),
+        resolved,
+        state
+      )
     }
     const before = state.gainDb
     decodeVisualizerFrame(toneCapture(100, 1, { bins: 513 }), resolved, state)
@@ -370,9 +403,18 @@ describe('decodeVisualizerFrame — auto-gain', () => {
 
   it('holds still in silence instead of amplifying the noise floor', () => {
     const state = createDecodeState(4)
-    const resolved = options({ bands: 4, attack: 1, tiltDbPerOctave: 0, autoGain: true })
+    const resolved = options({
+      bands: 4,
+      attack: 1,
+      tiltDbPerOctave: 0,
+      autoGain: true,
+    })
     for (let i = 0; i < 200; i++) {
-      decodeVisualizerFrame(toneCapture(100, magnitudeForDb(-40), { bins: 513 }), resolved, state)
+      decodeVisualizerFrame(
+        toneCapture(100, magnitudeForDb(-40), { bins: 513 }),
+        resolved,
+        state
+      )
     }
     const settled = state.gainDb
     for (let i = 0; i < 200; i++) {
@@ -439,10 +481,17 @@ describe('decodeVisualizerFrame — waveform', () => {
       magnitudes: new Array(33).fill(0),
       waveform: [0, 0.5, -0.75, 0.25],
     })
-    const frame = decodeVisualizerFrame(capture, options({ bands: 4 }), createDecodeState(4))!
+    const frame = decodeVisualizerFrame(
+      capture,
+      options({ bands: 4 }),
+      createDecodeState(4)
+    )!
     expect(frame.waveform).toHaveLength(4)
     expect(frame.peak).toBeCloseTo(0.75, 6)
-    expect(frame.rms).toBeCloseTo(Math.sqrt((0 + 0.25 + 0.5625 + 0.0625) / 4), 6)
+    expect(frame.rms).toBeCloseTo(
+      Math.sqrt((0 + 0.25 + 0.5625 + 0.0625) / 4),
+      6
+    )
   })
 })
 
@@ -473,9 +522,13 @@ describe('decodeVisualizerFrame — peak ballistics', () => {
     const state = createDecodeState(1)
     const high = decodeVisualizerFrame(loud, resolved, state)!.peaks[0]!
     for (let i = 0; i < 3; i++) {
-      expect(decodeVisualizerFrame(silent, resolved, state)!.peaks[0]).toBeCloseTo(high, 6)
+      expect(
+        decodeVisualizerFrame(silent, resolved, state)!.peaks[0]
+      ).toBeCloseTo(high, 6)
     }
-    expect(decodeVisualizerFrame(silent, resolved, state)!.peaks[0]).toBeLessThan(high)
+    expect(
+      decodeVisualizerFrame(silent, resolved, state)!.peaks[0]
+    ).toBeLessThan(high)
   })
 
   it('accelerates as it falls instead of drooping exponentially', () => {

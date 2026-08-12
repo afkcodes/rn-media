@@ -108,7 +108,9 @@ async function service(): Promise<{
   api: MediaServiceApi
 }> {
   const native = new FakeNativeMediaSession()
-  const api = await createMediaService(native).init(() => new RecordingHandler())
+  const api = await createMediaService(native).init(
+    () => new RecordingHandler()
+  )
   return { native, api }
 }
 
@@ -207,8 +209,10 @@ describe('save → restore round trip', () => {
       setQueue: () => calls.push('queue'),
       setResumptionSnapshot: () => {},
       setSleepTimer: () => {},
+      setSleepTimerToTrackEnd: () => {},
       cancelSleepTimer: () => {},
       getSleepTimerRemaining: () => undefined,
+      getSleepTimer: () => undefined,
       stopService: () => Promise.resolve(),
     }
 
@@ -745,5 +749,78 @@ describe('native resumption mirror', () => {
     // Persistence is the feature that matters; the mirror is a cache.
     expect(storage.writes).toHaveLength(1)
     expect(errors).toEqual([boom])
+  })
+})
+
+describe('schema version 2 (B2 + B4 additions)', () => {
+  it('is version 2, and the Kotlin reader is guarded against drifting from it', () => {
+    // `SchemaVersionSyncTest` on the Android side reads this very constant out
+    // of `persistence.ts` and fails the module build if
+    // `ResumptionStore.SCHEMA_VERSION` disagrees. The reader that matters runs
+    // in a process with no JavaScript in it, so it cannot ask.
+    expect(PERSISTENCE_SCHEMA_VERSION).toBe(2)
+  })
+
+  it('refuses a version-1 record rather than restoring it without repeat/shuffle', () => {
+    // The honest answer, and the whole point of the field: a v1 record has no
+    // repeatMode/shuffleEnabled and no extended tags, and quietly restoring a
+    // session with shuffle off because the record could not say otherwise is
+    // exactly the silent wrongness `unsupportedVersion` exists to prevent.
+    const storage = new SyncStorage()
+    storage.poke(JSON.stringify({ v: 1, savedAt: NOW, queue: QUEUE }))
+    return expect(restorePersisted(storage)).resolves.toEqual({
+      status: 'unsupportedVersion',
+      found: 1,
+      expected: 2,
+    })
+  })
+
+  it('round-trips repeat, shuffle and every extended tag', async () => {
+    const storage = new SyncStorage()
+    const rich = {
+      id: 'a',
+      title: 'A',
+      duration: 240_000,
+      albumArtist: 'Various Artists',
+      trackNumber: 7,
+      discNumber: 2,
+      year: 1997,
+      subtitle: 'Episode 12',
+      isLive: false,
+      extras: { source: 'library' },
+    }
+    const { api } = await service()
+    const persisted = withPersistence(api, storage, { now: () => NOW })
+
+    persisted.setQueue([rich])
+    persisted.setMediaItem(rich)
+    persisted.setPlaybackState(
+      playbackState({ repeatMode: 'one', shuffleEnabled: true, queueIndex: 0 })
+    )
+
+    const restored = await restorePersisted(storage)
+    expect(restored.status).toBe('restored')
+    if (restored.status !== 'restored') return
+
+    expect(restored.session.mediaItem).toEqual(rich)
+    expect(restored.session.queue).toEqual([rich])
+    expect(restored.session.playbackState).toMatchObject({
+      repeatMode: 'one',
+      shuffleEnabled: true,
+    })
+  })
+
+  it('restores a record written before the app used repeat/shuffle as off/false', async () => {
+    const storage = new SyncStorage()
+    const { api } = await service()
+    const persisted = withPersistence(api, storage, { now: () => NOW })
+    persisted.setPlaybackState(playbackState({ queueIndex: -1 }))
+
+    const restored = await restorePersisted(storage)
+    if (restored.status !== 'restored') throw new Error(restored.status)
+    expect(restored.session.playbackState).toMatchObject({
+      repeatMode: 'off',
+      shuffleEnabled: false,
+    })
   })
 })

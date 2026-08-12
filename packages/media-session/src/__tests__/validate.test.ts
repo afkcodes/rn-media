@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import { MediaSessionError } from '../errors'
 import {
+  DEFAULT_JUMP_SECONDS,
   DEFAULT_PLAYBACK_RESUMPTION,
+  DEFAULT_REPEAT_MODE,
+  DEFAULT_SHUFFLE_ENABLED,
+  DEFAULT_SUPPORTED_PLAYBACK_RATES,
   MAX_COMPACT_CONTROLS,
   MAX_STOP_FOREGROUND_TIMEOUT_MS,
   normalizeConfig,
@@ -242,7 +246,12 @@ describe('normalizeConfig', () => {
   })
 
   it('is fine with no config at all', () => {
-    expect(normalizeConfig()).toEqual({ android: undefined, ios: undefined })
+    expect(normalizeConfig()).toEqual({
+      android: undefined,
+      ios: undefined,
+      jumpForwardSeconds: 15,
+      jumpBackwardSeconds: 15,
+    })
   })
 
   describe('playbackResumption', () => {
@@ -269,7 +278,6 @@ describe('normalizeConfig', () => {
     it('rejects a non-boolean rather than coercing it', () => {
       expect(() =>
         normalizeConfig({
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           android: { ...base, playbackResumption: 'yes' as any },
         })
       ).toThrowError(/playbackResumption must be a boolean/)
@@ -369,5 +377,241 @@ describe('validateSleepTimerSeconds', () => {
     expect(() =>
       validateSleepTimerSeconds('30' as unknown as number)
     ).toThrowError(MediaSessionError)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                    Tier B additions (B1, B2, B4, B6, B12)                  */
+/* -------------------------------------------------------------------------- */
+
+describe('repeat and shuffle on the playback state (B2)', () => {
+  it('defaults to off/false, so a state that predates the fields is unchanged', () => {
+    const normalized = normalizePlaybackState(playbackState())
+
+    expect(normalized.repeatMode).toBe(DEFAULT_REPEAT_MODE)
+    expect(normalized.shuffleEnabled).toBe(DEFAULT_SHUFFLE_ENABLED)
+    expect(normalized.repeatMode).toBe('off')
+    expect(normalized.shuffleEnabled).toBe(false)
+  })
+
+  it('carries what the app broadcast', () => {
+    const normalized = normalizePlaybackState(
+      playbackState({ repeatMode: 'one', shuffleEnabled: true })
+    )
+
+    expect(normalized.repeatMode).toBe('one')
+    expect(normalized.shuffleEnabled).toBe(true)
+  })
+
+  it('rejects a repeat mode that is not one of the three', () => {
+    expect(() =>
+      normalizePlaybackState(bad({ repeatMode: 'sideways' }))
+    ).toThrowError(/playbackState\.repeatMode/)
+  })
+
+  it('rejects a non-boolean shuffle flag', () => {
+    expect(() =>
+      normalizePlaybackState(bad({ shuffleEnabled: 'yes' }))
+    ).toThrowError(/playbackState\.shuffleEnabled/)
+  })
+
+  it('accepts the two new capabilities and the two new controls', () => {
+    const normalized = normalizePlaybackState(
+      playbackState({
+        capabilities: ['setRepeatMode', 'setShuffle'],
+        controls: ['repeatMode', 'shuffle'],
+      })
+    )
+
+    expect(normalized.capabilities).toEqual(['setRepeatMode', 'setShuffle'])
+    expect(normalized.controls).toEqual(['repeatMode', 'shuffle'])
+  })
+
+  it('the repeat CONTROL is not named `repeat` — that is a Swift keyword', () => {
+    // The member becomes a native enumerator verbatim, and the package has been
+    // bitten by this once already (`defaultMode` in @rn-media/audio-session).
+    expect(() =>
+      normalizePlaybackState(bad({ controls: ['repeat'] }))
+    ).toThrowError(/playbackState\.controls/)
+  })
+})
+
+describe('extended media item fields (B4)', () => {
+  const base = { id: 'a', title: 'A' }
+
+  it('carries every new field through untouched', () => {
+    const item = {
+      ...base,
+      albumArtist: 'Various Artists',
+      trackNumber: 7,
+      discNumber: 2,
+      year: 1997,
+      subtitle: 'Episode 12',
+      isLive: false,
+      extras: { source: 'library' },
+    }
+
+    expect(validateMediaItem(item)).toEqual(item)
+  })
+
+  it('is happy with none of them — every one is optional', () => {
+    expect(validateMediaItem(base)).toEqual(base)
+  })
+
+  it('rejects a fractional or zero ordinal rather than truncating it', () => {
+    // media3's setTrackNumber(Integer) and MPMediaItemPropertyAlbumTrackNumber
+    // would both turn 2.5 into a plausible-looking wrong answer.
+    for (const field of ['trackNumber', 'discNumber', 'year'] as const) {
+      expect(() => validateMediaItem({ ...base, [field]: 2.5 })).toThrowError(
+        new RegExp(`${field} must be a positive integer`)
+      )
+      expect(() => validateMediaItem({ ...base, [field]: 0 })).toThrowError(
+        new RegExp(`${field} must be a positive integer`)
+      )
+      expect(() => validateMediaItem({ ...base, [field]: -1 })).toThrowError(
+        new RegExp(`${field} must be a positive integer`)
+      )
+    }
+  })
+
+  it('rejects a non-boolean isLive', () => {
+    expect(() =>
+      validateMediaItem({ ...base, isLive: 'yes' } as never)
+    ).toThrowError(/isLive must be a boolean/)
+  })
+
+  it('rejects non-string extras values — they cross a Bundle and JSON', () => {
+    expect(() =>
+      validateMediaItem({ ...base, extras: { n: 1 } } as never)
+    ).toThrowError(/extras\["n"\] must be a string/)
+    expect(() =>
+      validateMediaItem({ ...base, extras: { o: {} } } as never)
+    ).toThrowError(/extras\["o"\] must be a string/)
+  })
+
+  it('rejects an array where an extras object belongs', () => {
+    expect(() =>
+      validateMediaItem({ ...base, extras: ['a'] } as never)
+    ).toThrowError(/extras must be an object of string values/)
+  })
+
+  it('validates queue entries as thoroughly as the current item', () => {
+    expect(() =>
+      validateQueue([base, { ...base, trackNumber: 1.5 }] as never)
+    ).toThrowError(/queue\[1\]\.trackNumber/)
+  })
+})
+
+describe('jump intervals (B1 — the parity defect)', () => {
+  it('defaults BOTH directions to the same 15 seconds', () => {
+    // The defect: iOS pinned 15/15 while Android inherited media3's
+    // C.DEFAULT_SEEK_BACK_INCREMENT_MS = 5000 / _FORWARD_ = 15000, so the same
+    // JS call skipped back 5 s on Android and 15 s on iOS.
+    const config = normalizeConfig()
+
+    expect(config.jumpForwardSeconds).toBe(DEFAULT_JUMP_SECONDS)
+    expect(config.jumpBackwardSeconds).toBe(DEFAULT_JUMP_SECONDS)
+    expect(config.jumpForwardSeconds).toBe(config.jumpBackwardSeconds)
+    expect(DEFAULT_JUMP_SECONDS).toBe(15)
+  })
+
+  it('passes an asymmetric pair through when the app asks for one', () => {
+    const config = normalizeConfig({
+      jumpForwardSeconds: 30,
+      jumpBackwardSeconds: 10,
+    })
+
+    expect(config.jumpForwardSeconds).toBe(30)
+    expect(config.jumpBackwardSeconds).toBe(10)
+  })
+
+  it('defaults the one that was omitted rather than mirroring the other', () => {
+    const config = normalizeConfig({ jumpForwardSeconds: 30 })
+
+    expect(config.jumpForwardSeconds).toBe(30)
+    expect(config.jumpBackwardSeconds).toBe(15)
+  })
+
+  it('rejects zero, negatives and non-finite intervals', () => {
+    for (const value of [0, -15, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => normalizeConfig({ jumpForwardSeconds: value })).toThrowError(
+        /jumpForwardSeconds/
+      )
+      expect(() =>
+        normalizeConfig({ jumpBackwardSeconds: value })
+      ).toThrowError(/jumpBackwardSeconds/)
+    }
+  })
+})
+
+describe('notification colour (B6)', () => {
+  const android = {
+    notificationChannelId: 'playback',
+    notificationChannelName: 'Playback',
+  }
+
+  it('passes an ARGB integer through, signed or unsigned', () => {
+    expect(
+      normalizeConfig({
+        android: { ...android, notificationColor: 0xff1db954 },
+      }).android?.notificationColor
+    ).toBe(4280138068)
+    expect(
+      normalizeConfig({ android: { ...android, notificationColor: -16777216 } })
+        .android?.notificationColor
+    ).toBe(-16777216)
+  })
+
+  it('is undefined when the app did not choose one', () => {
+    expect(
+      normalizeConfig({ android }).android?.notificationColor
+    ).toBeUndefined()
+  })
+
+  it('rejects a fractional colour or one outside 32 bits', () => {
+    for (const value of [1.5, 0x1_0000_0000, -0x8000_0001]) {
+      expect(() =>
+        normalizeConfig({ android: { ...android, notificationColor: value } })
+      ).toThrowError(/notificationColor/)
+    }
+  })
+})
+
+describe('iOS supported playback rates (B12)', () => {
+  it('is passed through undefined when the app did not choose', () => {
+    // The default list lives next to the command it configures, so "did not
+    // choose" stays distinguishable from "chose exactly the default".
+    expect(
+      normalizeConfig({ ios: {} }).ios?.supportedPlaybackRates
+    ).toBeUndefined()
+  })
+
+  it('passes an audiobook ladder through in order', () => {
+    const rates = [1, 1.25, 1.5, 1.75, 2, 3]
+
+    expect(
+      normalizeConfig({ ios: { supportedPlaybackRates: rates } }).ios
+        ?.supportedPlaybackRates
+    ).toEqual(rates)
+  })
+
+  it('rejects an empty list — omit it for the default instead', () => {
+    expect(() =>
+      normalizeConfig({ ios: { supportedPlaybackRates: [] } })
+    ).toThrowError(/supportedPlaybackRates/)
+  })
+
+  it('rejects zero and negative rates', () => {
+    for (const value of [0, -1]) {
+      expect(() =>
+        normalizeConfig({ ios: { supportedPlaybackRates: [1, value] } })
+      ).toThrowError(/supportedPlaybackRates/)
+    }
+  })
+
+  it('documents the default list, which is the one that already shipped', () => {
+    expect(DEFAULT_SUPPORTED_PLAYBACK_RATES).toEqual([
+      0.5, 0.75, 1, 1.25, 1.5, 2,
+    ])
   })
 })

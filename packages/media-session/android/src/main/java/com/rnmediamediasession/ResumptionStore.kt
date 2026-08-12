@@ -10,6 +10,8 @@ import com.margelo.nitro.rnmediamediasession.MediaCapability
 import com.margelo.nitro.rnmediamediasession.MediaControl
 import com.margelo.nitro.rnmediamediasession.MediaCustomAction
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
+import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
+import com.margelo.nitro.rnmediamediasession.MediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import org.json.JSONArray
 import org.json.JSONObject
@@ -48,6 +50,21 @@ import org.json.JSONObject
  * throws. A record this package cannot understand means "no resumption", which
  * is exactly the behaviour that shipped before the feature existed.
  */
+/**
+ * The mirrored configuration a cold-started service rebuilds itself from.
+ *
+ * The Android half plus the cross-platform jump intervals — i.e. everything
+ * `MediaSessionConfig` carries that this platform can act on. A dedicated type
+ * rather than passing `AndroidMediaSessionConfig` around because the intervals
+ * are deliberately *not* an Android option (they exist to make both platforms
+ * agree) and hiding them inside the Android struct would say the opposite.
+ */
+internal data class MirroredConfig(
+  val android: AndroidMediaSessionConfig,
+  val jumpForwardMs: Long,
+  val jumpBackwardMs: Long,
+)
+
 internal object ResumptionStore {
 
   private const val PREFS = "rn-media.media-session"
@@ -56,9 +73,19 @@ internal object ResumptionStore {
    * Schema-versioned key names rather than a version *field*: a reader that
    * does not know the key simply finds nothing, which is already the correct
    * behaviour ("no resumption"). Bump the suffix when the shape changes.
+   *
+   * Bumped to `v2` alongside `PERSISTENCE_SCHEMA_VERSION` 2 (repeat/shuffle on
+   * the state, extended tags on media items, jump intervals and the notification
+   * colour on the config). The superseded keys are removed on the next write —
+   * see [putSession] / [putConfig] — so an upgraded app does not leave a
+   * readable session record behind for nothing.
    */
-  private const val KEY_SESSION = "resumption.session.v1"
-  private const val KEY_CONFIG = "resumption.config.v1"
+  private const val KEY_SESSION = "resumption.session.v2"
+  private const val KEY_CONFIG = "resumption.config.v2"
+
+  /** Keys written by the previous schema, deleted on the first write after an upgrade. */
+  private const val LEGACY_KEY_SESSION = "resumption.session.v1"
+  private const val LEGACY_KEY_CONFIG = "resumption.config.v1"
 
   private val writer: Handler by lazy {
     Handler(HandlerThread("rn-media-resumption").apply { start() }.looper)
@@ -87,7 +114,7 @@ internal object ResumptionStore {
     writer.post {
       val payload = synchronized(pending) { pending[0].also { pending[0] = null } } ?: return@post
       try {
-        val editor = prefs(app).edit()
+        val editor = prefs(app).edit().remove(LEGACY_KEY_SESSION)
         if (payload.isEmpty()) editor.remove(KEY_SESSION) else editor.putString(KEY_SESSION, payload)
         editor.commit()
       } catch (error: Throwable) {
@@ -107,12 +134,12 @@ internal object ResumptionStore {
    */
   // Deliberate commit() — same rationale as putSession above.
   @android.annotation.SuppressLint("ApplySharedPref")
-  fun putConfig(context: Context, config: AndroidMediaSessionConfig?) {
+  fun putConfig(context: Context, config: MediaSessionConfig?) {
     val app = context.applicationContext
-    val json = config?.let(::encodeConfig)
+    val json = config?.takeIf { it.android != null }?.let(::encodeConfig)
     writer.post {
       try {
-        val editor = prefs(app).edit()
+        val editor = prefs(app).edit().remove(LEGACY_KEY_CONFIG)
         if (json == null) editor.remove(KEY_CONFIG) else editor.putString(KEY_CONFIG, json)
         editor.commit()
       } catch (error: Throwable) {
@@ -131,15 +158,26 @@ internal object ResumptionStore {
    * field drops the key (`JSONObject.put` removes rather than stores `null`),
    * which is exactly what [readConfig]'s optional readers expect.
    */
-  internal fun encodeConfig(config: AndroidMediaSessionConfig): String =
-    JSONObject()
-      .put("channelId", config.notificationChannelId)
-      .put("channelName", config.notificationChannelName)
-      .put("icon", config.notificationIcon)
-      .put("stopForegroundOnPause", config.stopForegroundOnPause)
-      .put("stopForegroundTimeoutMs", config.stopForegroundTimeoutMs)
-      .put("playbackResumption", config.playbackResumption)
+  internal fun encodeConfig(config: MediaSessionConfig): String {
+    val android = requireNotNull(config.android) { "encodeConfig needs an android config" }
+    return JSONObject()
+      .put("channelId", android.notificationChannelId)
+      .put("channelName", android.notificationChannelName)
+      .put("icon", android.notificationIcon)
+      .put("stopForegroundOnPause", android.stopForegroundOnPause)
+      .put("stopForegroundTimeoutMs", android.stopForegroundTimeoutMs)
+      .put("playbackResumption", android.playbackResumption)
+      .put("notificationColor", android.notificationColor)
+      // Mirrored because a revived service builds a `BroadcastPlayer` before any
+      // JavaScript exists, and that player's seek increments are what a
+      // notification's fast-forward button resolves against. Without these the
+      // resumed session would fall back to media3's asymmetric defaults — the
+      // exact defect the option exists to remove — for the seconds before the
+      // runtime arrives.
+      .put("jumpForwardSeconds", config.jumpForwardSeconds)
+      .put("jumpBackwardSeconds", config.jumpBackwardSeconds)
       .toString()
+  }
 
   /**
    * Does this app declare a receiver for `ACTION_MEDIA_BUTTON`?
@@ -175,7 +213,7 @@ internal object ResumptionStore {
    *
    * Synchronous by requirement, not by preference — see the class docs.
    */
-  fun readConfig(context: Context): AndroidMediaSessionConfig? {
+  fun readConfig(context: Context): MirroredConfig? {
     val raw = try {
       prefs(context).getString(KEY_CONFIG, null)
     } catch (error: Throwable) {
@@ -187,13 +225,20 @@ internal object ResumptionStore {
       val json = JSONObject(raw)
       val channelId = json.optString("channelId").takeIf { it.isNotEmpty() } ?: return null
       val channelName = json.optString("channelName").takeIf { it.isNotEmpty() } ?: return null
-      AndroidMediaSessionConfig(
-        notificationChannelId = channelId,
-        notificationChannelName = channelName,
-        notificationIcon = json.optStringOrNull("icon"),
-        stopForegroundOnPause = json.optBoolean("stopForegroundOnPause", true),
-        stopForegroundTimeoutMs = json.optDoubleOrNull("stopForegroundTimeoutMs"),
-        playbackResumption = json.optBoolean("playbackResumption", false),
+      MirroredConfig(
+        android = AndroidMediaSessionConfig(
+          notificationChannelId = channelId,
+          notificationChannelName = channelName,
+          notificationIcon = json.optStringOrNull("icon"),
+          stopForegroundOnPause = json.optBoolean("stopForegroundOnPause", true),
+          stopForegroundTimeoutMs = json.optDoubleOrNull("stopForegroundTimeoutMs"),
+          playbackResumption = json.optBoolean("playbackResumption", false),
+          notificationColor = json.optDoubleOrNull("notificationColor"),
+        ),
+        // Absent (a record written before the option existed) falls back to the
+        // shared default rather than to media3's, which is the whole point.
+        jumpForwardMs = json.optDoubleOrNull("jumpForwardSeconds")?.toJumpMs() ?: DEFAULT_JUMP_MS,
+        jumpBackwardMs = json.optDoubleOrNull("jumpBackwardSeconds")?.toJumpMs() ?: DEFAULT_JUMP_MS,
       )
     } catch (error: Throwable) {
       Log.w(RnMediaMediaSessionService.TAG, "Ignoring an unreadable mirrored config.", error)
@@ -280,6 +325,8 @@ internal object ResumptionStore {
       } ?: emptyList(),
       queueIndex = if (queueIndex in queue.indices) queueIndex else -1,
       errorMessage = null,
+      repeatMode = state?.optStringOrNull("repeatMode")?.let(::repeatMode) ?: MediaRepeatMode.OFF,
+      shuffleEnabled = state?.optBoolean("shuffleEnabled", false) ?: false,
       item = item,
       queue = queue,
     )
@@ -296,8 +343,35 @@ internal object ResumptionStore {
       artworkUri = json.optStringOrNull("artworkUri"),
       duration = json.optDoubleOrNull("duration"),
       genre = json.optStringOrNull("genre"),
+      albumArtist = json.optStringOrNull("albumArtist"),
+      trackNumber = json.optDoubleOrNull("trackNumber"),
+      discNumber = json.optDoubleOrNull("discNumber"),
+      year = json.optDoubleOrNull("year"),
+      subtitle = json.optStringOrNull("subtitle"),
+      isLive = if (json.has("isLive") && !json.isNull("isLive")) json.optBoolean("isLive") else null,
+      extras = json.optJSONObject("extras")?.let(::parseExtras),
     )
   }
+
+  /**
+   * `extras` back out of JSON as the string map the struct declares.
+   *
+   * Non-string values are coerced with `optString` rather than dropped: the
+   * writer only ever puts strings there (the TS validator rejects anything
+   * else), so a number here means the record was hand-edited or written by
+   * something else — and keeping the key with its printed value tells the app
+   * more than silently losing it.
+   */
+  private fun parseExtras(json: JSONObject): Map<String, String>? {
+    val keys = json.keys()
+    if (!keys.hasNext()) return null
+    val out = HashMap<String, String>()
+    for (key in keys) out[key] = json.optString(key)
+    return out
+  }
+
+  private fun repeatMode(name: String): MediaRepeatMode? =
+    runCatching { MediaRepeatMode.valueOf(name.uppercase()) }.getOrNull()
 
   /**
    * Enum names as the TS union spells them, matched case-insensitively.
@@ -347,5 +421,5 @@ internal object ResumptionStore {
    * `private` — the object it lives in is already `internal`, so nothing about
    * the module's surface changes.
    */
-  internal const val SCHEMA_VERSION = 1
+  internal const val SCHEMA_VERSION = 2
 }

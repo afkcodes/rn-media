@@ -12,6 +12,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -46,6 +47,20 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<jni::JDouble> duration = this->getFieldValue(fieldDuration);
       static const auto fieldGenre = clazz->getField<jni::JString>("genre");
       jni::local_ref<jni::JString> genre = this->getFieldValue(fieldGenre);
+      static const auto fieldAlbumArtist = clazz->getField<jni::JString>("albumArtist");
+      jni::local_ref<jni::JString> albumArtist = this->getFieldValue(fieldAlbumArtist);
+      static const auto fieldTrackNumber = clazz->getField<jni::JDouble>("trackNumber");
+      jni::local_ref<jni::JDouble> trackNumber = this->getFieldValue(fieldTrackNumber);
+      static const auto fieldDiscNumber = clazz->getField<jni::JDouble>("discNumber");
+      jni::local_ref<jni::JDouble> discNumber = this->getFieldValue(fieldDiscNumber);
+      static const auto fieldYear = clazz->getField<jni::JDouble>("year");
+      jni::local_ref<jni::JDouble> year = this->getFieldValue(fieldYear);
+      static const auto fieldSubtitle = clazz->getField<jni::JString>("subtitle");
+      jni::local_ref<jni::JString> subtitle = this->getFieldValue(fieldSubtitle);
+      static const auto fieldIsLive = clazz->getField<jni::JBoolean>("isLive");
+      jni::local_ref<jni::JBoolean> isLive = this->getFieldValue(fieldIsLive);
+      static const auto fieldExtras = clazz->getField<jni::JMap<jni::JString, jni::JString>>("extras");
+      jni::local_ref<jni::JMap<jni::JString, jni::JString>> extras = this->getFieldValue(fieldExtras);
       return NativeMediaItem(
         id->toStdString(),
         title->toStdString(),
@@ -53,7 +68,21 @@ namespace margelo::nitro::rnmediamediasession {
         album != nullptr ? std::make_optional(album->toStdString()) : std::nullopt,
         artworkUri != nullptr ? std::make_optional(artworkUri->toStdString()) : std::nullopt,
         duration != nullptr ? std::make_optional(duration->value()) : std::nullopt,
-        genre != nullptr ? std::make_optional(genre->toStdString()) : std::nullopt
+        genre != nullptr ? std::make_optional(genre->toStdString()) : std::nullopt,
+        albumArtist != nullptr ? std::make_optional(albumArtist->toStdString()) : std::nullopt,
+        trackNumber != nullptr ? std::make_optional(trackNumber->value()) : std::nullopt,
+        discNumber != nullptr ? std::make_optional(discNumber->value()) : std::nullopt,
+        year != nullptr ? std::make_optional(year->value()) : std::nullopt,
+        subtitle != nullptr ? std::make_optional(subtitle->toStdString()) : std::nullopt,
+        isLive != nullptr ? std::make_optional(static_cast<bool>(isLive->value())) : std::nullopt,
+        extras != nullptr ? std::make_optional([&]() {
+          std::unordered_map<std::string, std::string> __map;
+          __map.reserve(extras->size());
+          for (const auto& __entry : *extras) {
+            __map.emplace(__entry.first->toStdString(), __entry.second->toStdString());
+          }
+          return __map;
+        }()) : std::nullopt
       );
     }
 
@@ -63,7 +92,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JNativeMediaItem::javaobject> fromCpp(const NativeMediaItem& value) {
-      using JSignature = JNativeMediaItem(jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JString>);
+      using JSignature = JNativeMediaItem(jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JString>, jni::alias_ref<jni::JBoolean>, jni::alias_ref<jni::JMap<jni::JString, jni::JString>>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -74,7 +103,20 @@ namespace margelo::nitro::rnmediamediasession {
         value.album.has_value() ? jni::make_jstring(value.album.value()) : nullptr,
         value.artworkUri.has_value() ? jni::make_jstring(value.artworkUri.value()) : nullptr,
         value.duration.has_value() ? jni::JDouble::valueOf(value.duration.value()) : nullptr,
-        value.genre.has_value() ? jni::make_jstring(value.genre.value()) : nullptr
+        value.genre.has_value() ? jni::make_jstring(value.genre.value()) : nullptr,
+        value.albumArtist.has_value() ? jni::make_jstring(value.albumArtist.value()) : nullptr,
+        value.trackNumber.has_value() ? jni::JDouble::valueOf(value.trackNumber.value()) : nullptr,
+        value.discNumber.has_value() ? jni::JDouble::valueOf(value.discNumber.value()) : nullptr,
+        value.year.has_value() ? jni::JDouble::valueOf(value.year.value()) : nullptr,
+        value.subtitle.has_value() ? jni::make_jstring(value.subtitle.value()) : nullptr,
+        value.isLive.has_value() ? jni::JBoolean::valueOf(value.isLive.value()) : nullptr,
+        value.extras.has_value() ? [&]() -> jni::local_ref<jni::JMap<jni::JString, jni::JString>> {
+          auto __map = jni::JHashMap<jni::JString, jni::JString>::create(value.extras.value().size());
+          for (const auto& __entry : value.extras.value()) {
+            __map->put(jni::make_jstring(__entry.first), jni::make_jstring(__entry.second));
+          }
+          return __map;
+        }() : nullptr
       );
     }
   };

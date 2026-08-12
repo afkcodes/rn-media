@@ -1,4 +1,4 @@
-import type { MediaHandler, MediaItem } from './types'
+import type { MediaHandler, MediaItem, MediaRepeatMode } from './types'
 
 /**
  * No-op implementation of every {@link MediaHandler} method.
@@ -17,6 +17,16 @@ export class BaseMediaHandler implements MediaHandler {
   skipToPrevious(): void | Promise<void> {}
   skipToQueueItem(_index: number): void | Promise<void> {}
   setRate(_rate: number): void | Promise<void> {}
+  /**
+   * Default: nothing — and unlike the transport methods, doing nothing here is
+   * *visible*. The remote surface's repeat button will spring back to whatever
+   * the app last broadcast, because the state only moves when the app moves it.
+   * That is the same acknowledge-by-broadcast contract every other command
+   * follows; it is only more noticeable because the control is a toggle.
+   */
+  onSetRepeatMode(_mode: MediaRepeatMode): void | Promise<void> {}
+  /** Default: nothing. See {@link onSetRepeatMode}. */
+  onSetShuffle(_enabled: boolean): void | Promise<void> {}
   onTaskRemoved(): void | Promise<void> {}
   customAction(
     _name: string,
@@ -93,6 +103,12 @@ export class CompositeMediaHandler implements MediaHandler {
   }
   setRate(rate: number): void | Promise<void> {
     return this.inner.setRate(rate)
+  }
+  onSetRepeatMode(mode: MediaRepeatMode): void | Promise<void> {
+    return this.inner.onSetRepeatMode?.(mode)
+  }
+  onSetShuffle(enabled: boolean): void | Promise<void> {
+    return this.inner.onSetShuffle?.(enabled)
   }
   onTaskRemoved(): void | Promise<void> {
     return this.inner.onTaskRemoved()

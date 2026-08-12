@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { MediaSessionError } from '../errors'
+import { BaseMediaHandler } from '../handler'
 import { createMediaService } from '../media-service'
-import type { MediaServiceApi } from '../types'
+import type { MediaHandler, MediaServiceApi } from '../types'
 import {
   FakeNativeMediaSession,
   RecordingHandler,
@@ -125,8 +126,14 @@ describe('init lifecycle', () => {
           // Opt-in: a service that can restart the app from a snapshot is not
           // something an app gets by omission.
           playbackResumption: false,
+          notificationColor: undefined,
         },
         ios: undefined,
+        // Both defaulted, and defaulted to the SAME number on purpose: the
+        // asymmetry this replaced (iOS 15/15, Android media3's 5/15) was a
+        // parity defect, not a platform fact.
+        jumpForwardSeconds: 15,
+        jumpBackwardSeconds: 15,
       },
     ])
   })
@@ -166,7 +173,9 @@ describe('init lifecycle', () => {
     )
 
     native.initializeError = undefined
-    await expect(service.init(() => new RecordingHandler())).resolves.toBeDefined()
+    await expect(
+      service.init(() => new RecordingHandler())
+    ).resolves.toBeDefined()
   })
 
   it('allows init again after stopService', async () => {
@@ -174,7 +183,9 @@ describe('init lifecycle', () => {
     const service = createMediaService(native)
     await service.init(() => new RecordingHandler())
     await service.stopService()
-    await expect(service.init(() => new RecordingHandler())).resolves.toBeDefined()
+    await expect(
+      service.init(() => new RecordingHandler())
+    ).resolves.toBeDefined()
     expect(native.stopServiceCalls).toBe(1)
   })
 
@@ -214,9 +225,9 @@ describe('init lifecycle', () => {
     await expect(service.stopService()).rejects.toThrow('binder died')
     // Still initialized: pretending otherwise would let init() stack a second
     // session on top of a live one.
-    await expect(service.init(() => new RecordingHandler())).rejects.toMatchObject(
-      { code: 'alreadyInitialized' }
-    )
+    await expect(
+      service.init(() => new RecordingHandler())
+    ).rejects.toMatchObject({ code: 'alreadyInitialized' })
   })
 
   it('refuses every broadcast before init', () => {
@@ -236,7 +247,9 @@ describe('init lifecycle', () => {
   it('refuses broadcasts again after stopService', async () => {
     const { service } = await ready()
     await service.stopService()
-    expect(() => service.setQueue([])).toThrowError(/notInitialized|before init/)
+    expect(() => service.setQueue([])).toThrowError(
+      /notInitialized|before init/
+    )
   })
 })
 
@@ -300,5 +313,75 @@ describe('broadcast round-trip', () => {
     const { native, service } = await ready()
     service.setQueue([item('a'), item('b')])
     expect(native.last.queue).toHaveLength(2)
+  })
+})
+
+describe('repeat and shuffle fan-in (B2)', () => {
+  it('routes a remote repeat request to onSetRepeatMode', async () => {
+    const { native, handler } = await ready()
+    native.emit().setRepeatMode('all')
+    native.emit().setRepeatMode('one')
+    native.emit().setRepeatMode('off')
+
+    expect(handler.calls).toEqual([
+      'onSetRepeatMode(all)',
+      'onSetRepeatMode(one)',
+      'onSetRepeatMode(off)',
+    ])
+  })
+
+  it('routes a remote shuffle request to onSetShuffle', async () => {
+    const { native, handler } = await ready()
+    native.emit().setShuffle(true)
+    native.emit().setShuffle(false)
+
+    expect(handler.calls).toEqual(['onSetShuffle(true)', 'onSetShuffle(false)'])
+  })
+
+  it('does not throw for a handler that omits the optional methods', async () => {
+    // The methods are optional so that adding them is not a breaking change for
+    // structural implementors of the player-agnostic contract.
+    const native = new FakeNativeMediaSession()
+    const bare = new BaseMediaHandler()
+    delete (bare as Partial<MediaHandler>).onSetRepeatMode
+    delete (bare as Partial<MediaHandler>).onSetShuffle
+    await createMediaService(native).init(() => bare)
+
+    expect(() => native.emit().setRepeatMode('all')).not.toThrow()
+    expect(() => native.emit().setShuffle(true)).not.toThrow()
+  })
+
+  it('reports a throwing repeat handler under its handler-method name', async () => {
+    const native = new FakeNativeMediaSession()
+    const handler = new RecordingHandler()
+    handler.throwWith = new Error('boom')
+    const onHandlerError = vi.fn()
+    await createMediaService(native).init(() => handler, { onHandlerError })
+
+    native.emit().setRepeatMode('all')
+
+    expect(onHandlerError).toHaveBeenCalledWith(
+      'onSetRepeatMode',
+      expect.any(Error)
+    )
+  })
+
+  it('broadcasts the current mode and flag out on channel 1', async () => {
+    const { native, service } = await ready()
+    service.setPlaybackState(
+      playbackState({
+        repeatMode: 'all',
+        shuffleEnabled: true,
+        capabilities: ['setRepeatMode', 'setShuffle'],
+        controls: ['repeatMode', 'shuffle'],
+      })
+    )
+
+    expect(native.last.playbackState).toMatchObject({
+      repeatMode: 'all',
+      shuffleEnabled: true,
+      capabilities: ['setRepeatMode', 'setShuffle'],
+      controls: ['repeatMode', 'shuffle'],
+    })
   })
 })
