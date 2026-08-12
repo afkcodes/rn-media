@@ -1,0 +1,318 @@
+/**
+ * The app's command surface, and the thing that owns everything else here.
+ *
+ * The player, the audio session and the media session all live **outside
+ * React**, and that is the single most important thing in this app.
+ *
+ * On Android the JS runtime outlives the Activity — but the React tree does
+ * not. Destroying the Activity calls `ReactHost.stopSurface`, which unmounts
+ * every component. Anything a hook owns goes with it: `usePlayer` would destroy
+ * the mpv core in its cleanup, and a `MediaService.init` effect would tear the
+ * session down, so pressing Back would silently end background playback while
+ * the notification was still on screen. (Measured: session went
+ * `PLAYING → STOPPED` on the Back key when this was hook-owned.)
+ *
+ * Hooks are right for a screen-scoped player. A media app's player is
+ * process-scoped, so it is created once — see `index.ts` — and React only ever
+ * reads it.
+ *
+ * Five collaborators, each in its own file: `engine.ts` builds the player,
+ * `transport.ts` owns the sound-making commands (and the audio-focus rule),
+ * `queue.ts` mirrors mpv's playlist, `output.ts` holds the engine options a UI
+ * can change live, and `session.ts` broadcasts to every remote surface. This
+ * class is the seam between them, and the only thing the UI and the media
+ * handler talk to — which is why the delegating one-liners below are worth
+ * their space: they are the app's whole command vocabulary on one screen.
+ */
+import {
+  toPlayerError,
+  type Player,
+  type PlayerError,
+  type PlayerState,
+  type ReplayGainMode,
+} from '@rn-media/player'
+import { AudioSession } from '@rn-media/audio-session'
+import type { Track } from '../data/tracks'
+import { createEngine, type Engine, type PrefetchNote } from './engine'
+import { DemoMediaHandler, type PlaybackCommands } from './handler'
+import { OutputOptions } from './output'
+import { QueueMirror } from './queue'
+import { Transport } from './transport'
+import { restoreSession, type RestoreOutcome } from './persistence'
+import { SessionBridge } from './session'
+
+export type { PrefetchNote } from './engine'
+
+export class Playback implements PlaybackCommands {
+  #engine: Engine | undefined
+  #error: PlayerError | undefined
+  #startingPlayer: Promise<void> | undefined
+  #restoring: Promise<void> | undefined
+  #restored: RestoreOutcome | undefined
+  /** Position to seek to once mpv has opened the resumed entry. */
+  #pendingResumeMs: number | undefined
+
+  /* --- app-owned state the UI draws ------------------------------------- */
+
+  #station: string | undefined
+  #prefetch: PrefetchNote | undefined
+
+  readonly #listeners = new Set<() => void>()
+
+  readonly #session = new SessionBridge({
+    handler: () => new DemoMediaHandler(() => this),
+    snapshot: () => this.#engine?.player.state,
+    onChange: () => this.#notify(),
+  })
+
+  readonly #output = new OutputOptions({
+    player: () => this.#engine?.player,
+    onChange: () => this.#done(),
+    onError: (cause) => this.#fail(cause),
+  })
+
+  readonly #transport = new Transport({
+    player: () => this.#engine?.player,
+    ensureSession: () => void this.#session.ensure(),
+  })
+
+  readonly #queue = new QueueMirror({
+    player: () => this.#engine?.player,
+    onChange: (tracks) => {
+      this.#session.setQueue(tracks)
+      this.#notify()
+    },
+    onEdited: () => {
+      this.#session.refresh(this.#engine?.player.state)
+      this.#done()
+    },
+    onError: (cause) => this.#fail(cause),
+  })
+
+  /* --- reads ------------------------------------------------------------- */
+
+  get player(): Player | undefined {
+    return this.#engine?.player
+  }
+  get error(): PlayerError | undefined {
+    return this.#error
+  }
+  get queue(): readonly Track[] {
+    return this.#queue.tracks
+  }
+  get restoreNote(): string {
+    return this.#restored?.note ?? 'not attempted'
+  }
+  /** Station identity from the ICY tags — see the `metadataChanged` wiring. */
+  get station(): string | undefined {
+    return this.#station
+  }
+  get prefetch(): PrefetchNote | undefined {
+    return this.#prefetch
+  }
+  get prefetchEnabled(): boolean {
+    return this.#output.prefetchEnabled
+  }
+  get replayGain(): ReplayGainMode {
+    return this.#output.replayGain
+  }
+
+  /** Re-render notification for the UI. Nothing else depends on it. */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  /* --- startup ----------------------------------------------------------- */
+
+  /** Idempotent: safe to call from every mount, and from a Fast Refresh. */
+  async start(): Promise<void> {
+    // Before the player, so the queue can open on the entry the last process
+    // died on rather than jumping to track 1 and then correcting itself.
+    await (this.#restoring ??= this.#restore())
+    await (this.#startingPlayer ??= this.#createPlayer())
+    await this.#session.ensure()
+  }
+
+  async #restore(): Promise<void> {
+    const outcome = await restoreSession()
+    this.#restored = outcome
+    this.#pendingResumeMs = outcome.pendingResumeMs
+    this.#session.setRestored(outcome.session)
+  }
+
+  async #createPlayer(): Promise<void> {
+    try {
+      this.#engine = await createEngine(
+        {
+          onState: (state) => {
+            this.#onStateChange(state)
+            this.#notify()
+          },
+          onStation: (station) => {
+            this.#station = station
+            this.#notify()
+          },
+          onPrefetch: (note) => {
+            this.#prefetch = note
+            this.#notify()
+          },
+        },
+        this.#restored?.resumeIndex ?? 0
+      )
+    } catch (cause) {
+      this.#error = toPlayerError(cause)
+      console.error('[example] player start failed:', cause)
+    }
+    this.#notify()
+  }
+
+  /* --- state → session ---------------------------------------------------- */
+
+  #onStateChange(state: PlayerState): void {
+    this.#consumeResume(state)
+    this.#queue.syncIfChanged(state.playlist.count)
+    this.#session.publish(state, this.#queue.at(state.playlist.index))
+  }
+
+  /**
+   * Seek to the restored position, once — and only once mpv has actually opened
+   * the entry it belongs to.
+   *
+   * `autoPlay: false` means nothing is loaded at startup, so there is nothing
+   * to seek *into* until the user presses play and the entry reaches `ready`.
+   * The index check is what stops a resume point leaking onto a different
+   * track if the user skips before pressing play.
+   */
+  #consumeResume(state: PlayerState): void {
+    const ms = this.#pendingResumeMs
+    if (ms === undefined) return
+    if (
+      state.status !== 'ready' ||
+      state.playlist.index !== this.#restored?.resumeIndex
+    ) {
+      return
+    }
+    this.#pendingResumeMs = undefined
+    console.log(`[example] persistence: resuming at ${ms} ms`)
+    void this.player?.seekTo(ms / 1000)
+  }
+
+  /* --- transport (delegated) ---------------------------------------------- */
+
+  play(): Promise<void> {
+    return this.#transport.play()
+  }
+  pause(): void {
+    this.#transport.pause()
+  }
+  toggle(): void {
+    this.#transport.toggle()
+  }
+  next(): void {
+    this.#transport.next()
+  }
+  previous(): void {
+    this.#transport.previous()
+  }
+  jumpTo(index: number): Promise<void> {
+    return this.#transport.jumpTo(index)
+  }
+  seekTo(seconds: number): void {
+    this.#transport.seekTo(seconds)
+  }
+  setRate(rate: number): void {
+    this.#transport.setRate(rate)
+  }
+  setVolume(volume: number): void {
+    this.#transport.setVolume(volume)
+  }
+  toggleMuted(): void {
+    this.#transport.toggleMuted()
+  }
+
+  /* --- queue (delegated to the mirror) ------------------------------------ */
+
+  playNext(track: Track): Promise<void> {
+    return this.#queue.playNext(track)
+  }
+  shuffle(): Promise<void> {
+    return this.#queue.shuffle()
+  }
+  unshuffle(): Promise<void> {
+    return this.#queue.unshuffle()
+  }
+  clearQueue(): Promise<void> {
+    return this.#queue.clear()
+  }
+
+  /* --- engine options (delegated) ------------------------------------------ */
+
+  setReplayGain(mode: ReplayGainMode): void {
+    this.#output.setReplayGain(mode)
+  }
+
+  setPrefetchEnabled(enabled: boolean): void {
+    this.#output.setPrefetchEnabled(enabled)
+    // The banner's last sighting is only meaningful while prefetch is on.
+    if (!enabled) this.#prefetch = undefined
+  }
+
+  /* --- sleep timer, checkpoints, teardown --------------------------------- */
+
+  setSleepTimer(seconds: number): void {
+    this.#session.setSleepTimer(seconds)
+  }
+  cancelSleepTimer(): void {
+    this.#session.cancelSleepTimer()
+  }
+  sleepTimerRemaining(): number | undefined {
+    return this.#session.sleepTimerRemaining()
+  }
+  saveSession(): void {
+    this.#session.save()
+  }
+
+  /**
+   * The only thing that ends background execution — pause never does.
+   *
+   * The player stays alive and so does the app; only the session goes.
+   */
+  async stop(): Promise<void> {
+    this.pause()
+    try {
+      await this.#session.stop()
+    } finally {
+      await AudioSession.deactivate()
+      this.#notify()
+    }
+  }
+
+  /** Not called by the UI — here so the teardown path is written down. */
+  async dispose(): Promise<void> {
+    await this.stop()
+    this.#engine?.dispose()
+    this.#engine = undefined
+    this.#startingPlayer = undefined
+    this.#notify()
+  }
+
+  /* --- plumbing ------------------------------------------------------------ */
+
+  #notify(): void {
+    for (const listener of this.#listeners) listener()
+  }
+
+  /** A command succeeded: clear any banner an earlier one left behind. */
+  #done(): void {
+    this.#error = undefined
+    this.#notify()
+  }
+
+  /** Typed, surfaced, never swallowed. The banner reads {@link error}. */
+  #fail(cause: unknown): void {
+    this.#error = toPlayerError(cause)
+    console.warn(`[example] ${this.#error.code}: ${this.#error.message}`)
+    this.#notify()
+  }
+}

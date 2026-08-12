@@ -24,45 +24,45 @@
  * app is the on-device test bed, and "the scrubber is greyed out and says live"
  * is a check you can make with your eyes, whereas an absent view proves nothing.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   PanResponder,
   StyleSheet,
   Text,
   View,
   type LayoutChangeEvent,
-} from 'react-native';
-import { COLORS } from './theme';
+} from 'react-native'
+import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 
 /** `m:ss`, or `--:--` when there is no number to show. */
 export function formatTime(seconds: number | undefined): string {
-  if (seconds === undefined || !Number.isFinite(seconds)) return '--:--';
-  const total = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`;
+  if (seconds === undefined || !Number.isFinite(seconds)) return '--:--'
+  const total = Math.max(0, Math.floor(seconds))
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`
 }
 
 export interface SeekBarProps {
   /** Projected playhead, in seconds (`Progress.position`). */
-  readonly position: number;
+  readonly position: number
   /** Total length in seconds, or `undefined` when unknown / live. */
-  readonly duration: number | undefined;
+  readonly duration: number | undefined
   /** Absolute buffered timestamp in seconds, if mpv has an estimate. */
-  readonly buffered: number | undefined;
+  readonly buffered: number | undefined
   /** `Progress.isLive` — an endless stream has nothing to scrub through. */
-  readonly live: boolean;
+  readonly live: boolean
   /** Set while the player has not been created yet. */
-  readonly disabled?: boolean;
+  readonly disabled?: boolean
   /** Fired once, on release, with the target position in seconds. */
-  readonly onSeek: (seconds: number) => void;
+  readonly onSeek: (seconds: number) => void
 }
 
 function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return value < 0 ? 0 : value > 1 ? 1 : value;
+  if (!Number.isFinite(value)) return 0
+  return value < 0 ? 0 : value > 1 ? 1 : value
 }
 
 function percent(fraction: number): `${number}%` {
-  return `${clamp01(fraction) * 100}%`;
+  return `${clamp01(fraction) * 100}%`
 }
 
 export function SeekBar({
@@ -73,42 +73,41 @@ export function SeekBar({
   disabled = false,
   onSeek,
 }: SeekBarProps): React.JSX.Element {
-  const seekable =
-    !disabled && !live && duration !== undefined && duration > 0;
+  const seekable = !disabled && !live && duration !== undefined && duration > 0
 
   /** Fraction under the finger, `undefined` when not dragging. */
-  const [scrub, setScrub] = useState<number | undefined>(undefined);
+  const [scrub, setScrub] = useState<number | undefined>(undefined)
   /** Target of the seek we are still waiting for the player to reach. */
-  const [pending, setPending] = useState<number | undefined>(undefined);
+  const [pending, setPending] = useState<number | undefined>(undefined)
 
   /**
    * Track geometry, filled in by `onLayout` (width) and by the grant event
    * (`pageX - locationX` is the bar's left edge in page coordinates — the one
    * offset a `View` will not tell you without an async `measure`).
    */
-  const geometry = useRef({ width: 0, originX: 0 });
+  const geometry = useRef({ width: 0, originX: 0 })
 
   /**
    * The responder is built once and outlives every render, so everything it
    * needs is read through this ref rather than captured.
    */
-  const latest = useRef({ duration, onSeek });
+  const latest = useRef({ duration, onSeek })
   useEffect(() => {
-    latest.current = { duration, onSeek };
-  });
+    latest.current = { duration, onSeek }
+  })
 
   // Stop holding the post-release target once the player has actually moved
   // there — or after a grace period, so a seek that never lands cannot freeze
   // the display.
   useEffect(() => {
-    if (pending === undefined) return undefined;
+    if (pending === undefined) return undefined
     if (Math.abs(position - pending) < 1) {
-      setPending(undefined);
-      return undefined;
+      setPending(undefined)
+      return undefined
     }
-    const id = setTimeout(() => setPending(undefined), 1500);
-    return () => clearTimeout(id);
-  }, [pending, position]);
+    const id = setTimeout(() => setPending(undefined), 1500)
+    return () => clearTimeout(id)
+  }, [pending, position])
 
   const responder = useMemo(
     () =>
@@ -122,46 +121,46 @@ export function SeekBar({
         onPanResponderTerminationRequest: () => false,
         onShouldBlockNativeResponder: () => true,
 
-        onPanResponderGrant: event => {
-          const { pageX, locationX } = event.nativeEvent;
-          geometry.current.originX = pageX - locationX;
-          setScrub(fractionAt(pageX));
+        onPanResponderGrant: (event) => {
+          const { pageX, locationX } = event.nativeEvent
+          geometry.current.originX = pageX - locationX
+          setScrub(fractionAt(pageX))
         },
-        onPanResponderMove: event => {
-          setScrub(fractionAt(event.nativeEvent.pageX));
+        onPanResponderMove: (event) => {
+          setScrub(fractionAt(event.nativeEvent.pageX))
         },
-        onPanResponderRelease: event => {
-          const fraction = fractionAt(event.nativeEvent.pageX);
-          const total = latest.current.duration;
-          setScrub(undefined);
-          if (total === undefined) return;
-          const target = fraction * total;
-          setPending(target);
-          latest.current.onSeek(target);
+        onPanResponderRelease: (event) => {
+          const fraction = fractionAt(event.nativeEvent.pageX)
+          const total = latest.current.duration
+          setScrub(undefined)
+          if (total === undefined) return
+          const target = fraction * total
+          setPending(target)
+          latest.current.onSeek(target)
         },
         // Cancelled (a call, a system gesture): drop the drag, seek nothing.
         onPanResponderTerminate: () => setScrub(undefined),
       }),
-    [],
-  );
+    []
+  )
 
   function fractionAt(pageX: number): number {
-    const { width, originX } = geometry.current;
-    if (width <= 0) return 0;
-    return clamp01((pageX - originX) / width);
+    const { width, originX } = geometry.current
+    if (width <= 0) return 0
+    return clamp01((pageX - originX) / width)
   }
 
   function onLayout(event: LayoutChangeEvent): void {
-    geometry.current.width = event.nativeEvent.layout.width;
+    geometry.current.width = event.nativeEvent.layout.width
   }
 
-  const total = duration ?? 0;
+  const total = duration ?? 0
   // While a finger is down the player is not allowed near the thumb; after
   // release the target holds until the seek lands. See the header comment.
-  const shown = scrub !== undefined ? scrub * total : pending ?? position;
-  const playedFraction = seekable && total > 0 ? shown / total : 0;
+  const shown = scrub !== undefined ? scrub * total : (pending ?? position)
+  const playedFraction = seekable && total > 0 ? shown / total : 0
   const bufferedFraction =
-    seekable && total > 0 && buffered !== undefined ? buffered / total : 0;
+    seekable && total > 0 && buffered !== undefined ? buffered / total : 0
 
   return (
     <View style={styles.container}>
@@ -181,9 +180,7 @@ export function SeekBar({
           onLayout={onLayout}
           style={[styles.track, !seekable && styles.trackDisabled]}
         >
-          <View
-            style={[styles.buffered, { width: percent(bufferedFraction) }]}
-          />
+          <View style={[styles.buffered, { width: percent(bufferedFraction) }]} />
           <View style={[styles.played, { width: percent(playedFraction) }]} />
           {seekable ? (
             <View
@@ -210,35 +207,45 @@ export function SeekBar({
         </Text>
       </View>
     </View>
-  );
+  )
 }
 
+const BAR = 6
+
 const styles = StyleSheet.create({
-  container: { alignSelf: 'stretch', marginTop: 4 },
+  container: { alignSelf: 'stretch' },
   // Generous vertical padding: the touch target is 30pt tall, the bar is 6.
   // No *horizontal* padding — the grant handler assumes this view and the
   // track share a left edge.
-  hitArea: { paddingVertical: 12 },
+  hitArea: { paddingVertical: SPACE.md },
   track: {
-    height: 6,
-    borderRadius: 3,
+    height: BAR,
+    borderRadius: RADIUS.sm,
     backgroundColor: COLORS.border,
     justifyContent: 'center',
+    overflow: 'visible',
   },
   trackDisabled: { opacity: 0.5 },
   buffered: {
     position: 'absolute',
     left: 0,
-    height: 6,
-    borderRadius: 3,
+    height: BAR,
+    borderRadius: RADIUS.sm,
     backgroundColor: COLORS.track,
   },
   played: {
     position: 'absolute',
     left: 0,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.accent,
+    height: BAR,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.accentBright,
+    // The fill is the one thing on this screen that glows: it is the only
+    // element whose *length* carries information, so it gets the emphasis.
+    shadowColor: COLORS.accent,
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
   },
   thumb: {
     position: 'absolute',
@@ -246,14 +253,16 @@ const styles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     marginLeft: -8,
-    backgroundColor: COLORS.accent,
+    borderWidth: 3,
+    borderColor: COLORS.background,
+    backgroundColor: COLORS.text,
   },
-  thumbActive: { transform: [{ scale: 1.35 }] },
+  thumbActive: { transform: [{ scale: 1.4 }] },
   labels: { flexDirection: 'row', justifyContent: 'space-between' },
   label: {
-    fontSize: 12,
+    fontSize: TYPE.caption,
     color: COLORS.muted,
     fontVariant: ['tabular-nums'],
   },
-  labelActive: { fontWeight: '600', color: COLORS.accent },
-});
+  labelActive: { fontWeight: '600', color: COLORS.accentBright },
+})
