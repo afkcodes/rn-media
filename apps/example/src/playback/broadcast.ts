@@ -152,6 +152,11 @@ export function toMediaItem(track: Track, state: PlayerState): MediaItem {
     title: song ?? track.title,
     artist: song === undefined ? track.artist : track.title,
     album: track.album,
+    // Regression note (2026-08-13): the monolith spread the whole track, so
+    // artwork rode along invisibly; this projection picks fields, and the
+    // first field-pick dropped `artworkUri` — no artwork in the notification.
+    // A projection must name everything it forwards.
+    artworkUri: track.artworkUri,
     // Omitting duration is what tells the lock screen to render a live
     // indicator rather than a seek bar to nowhere.
     duration: durationMs(track, state),
