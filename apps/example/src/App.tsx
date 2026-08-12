@@ -3,7 +3,7 @@
  *
  * Wires all three packages together the way a real app should:
  *
- * - `@rn-media/player`      — one mpv core playing a 6-entry mpv playlist.
+ * - `@rn-media/player`      — one mpv core playing a 7-entry mpv playlist.
  * - `@rn-media/audio-session` — focus is requested before playback, and
  *                              interruptions / headphone unplugs are handled
  *                              by `wireAudioSession`.
@@ -14,6 +14,14 @@
  * The one rule worth internalising: **broadcast state, never poll it.** The
  * position that moves on the lock screen is projected natively from the anchor
  * this app pushes on discontinuities only; nothing ticks across the bridge.
+ *
+ * ## The screen
+ *
+ * Flat and card-less on purpose: whitespace groups, hairline rules, uppercase
+ * micro labels, one accent. The artwork and title carry the visual weight;
+ * every control is quiet. The layout is a single scroll of feature groups —
+ * hero, transport, status strips, queue, modes, output, DSP, visualizer,
+ * timers, persistence — one component file per group.
  *
  * ## Where everything lives
  *
@@ -58,6 +66,7 @@ import { EqualizerSection } from './components/EqualizerSection'
 import { NowPlaying } from './components/NowPlaying'
 import { OutputControls } from './components/OutputControls'
 import { PersistenceNote } from './components/PersistenceNote'
+import { PlaybackModes } from './components/PlaybackModes'
 import { PrefetchBanner } from './components/PrefetchBanner'
 import { RetryBanner } from './components/RetryBanner'
 import { QueueList } from './components/QueueList'
@@ -92,7 +101,7 @@ function App(): React.JSX.Element {
   // function, so the notification and this screen cannot disagree.
   const published = track === undefined ? undefined : durationMs(track, shell)
   const song = track === undefined ? undefined : nowPlaying(track, shell)
-  const live = progress.isLive || track?.live === true
+  const live = progress.isLive || track?.isLive === true
   // Chapters are a PULL, like the queue's contents: one node read, taken when
   // the entry changes rather than kept in state and pushed on every update.
   // Most entries have none, and this costs exactly one native call per track.
@@ -168,9 +177,20 @@ function App(): React.JSX.Element {
           ready={ready}
           onJump={(index) => void playback.jumpTo(index)}
           onPlayNext={(item) => void playback.playNext(item)}
-          onShuffle={() => void playback.shuffle()}
-          onUnshuffle={() => void playback.unshuffle()}
+          onAddLast={(item) => void playback.addLast(item)}
+          onRemove={(index) => void playback.removeAt(index)}
           onClear={() => void playback.clearQueue()}
+        />
+
+        {/* Repeat renders from the player (`shell.loop`), shuffle from the
+            controller — the same two sources the media-session broadcast
+            projects, so this row and the notification cannot disagree. */}
+        <PlaybackModes
+          loop={shell.loop}
+          shuffleEnabled={playback.shuffleEnabled}
+          ready={ready}
+          onRepeatMode={(mode) => playback.setRepeatMode(mode)}
+          onShuffle={(enabled) => void playback.setShuffleEnabled(enabled)}
         />
 
         <OutputControls
@@ -200,8 +220,9 @@ function App(): React.JSX.Element {
 
         <SleepTimerSection
           ready={ready}
-          getRemaining={() => playback.sleepTimerRemaining()}
+          getTimer={() => playback.sleepTimer()}
           onArm={(seconds) => playback.setSleepTimer(seconds)}
+          onArmTrackEnd={() => playback.setSleepTimerToTrackEnd()}
           onCancel={() => playback.cancelSleepTimer()}
         />
 
@@ -214,12 +235,14 @@ function App(): React.JSX.Element {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: COLORS.background },
   container: {
-    padding: SPACE.xl,
-    paddingBottom: SPACE.xxl * 2,
-    gap: SPACE.lg,
-    alignItems: 'center',
+    paddingHorizontal: SPACE.xl,
+    paddingTop: SPACE.lg,
+    paddingBottom: SPACE.section * 2,
+    // Whitespace is the container: one generous, uniform gap between groups
+    // is the whole grouping mechanism of this card-less screen.
+    gap: SPACE.section,
   },
-  header: { alignItems: 'center', gap: 2 },
+  header: { gap: 2 },
   wordmark: {
     fontSize: TYPE.label,
     fontWeight: '800',

@@ -8,9 +8,47 @@
  * notification, the lock screen and this app's own seek bar, so they cannot
  * disagree.
  */
-import type { PlayerState } from '@rn-media/player'
-import type { MediaItem, PlaybackState } from '@rn-media/media-session'
+import type { LoopMode, PlayerState } from '@rn-media/player'
+import type {
+  MediaItem,
+  MediaRepeatMode,
+  PlaybackState,
+} from '@rn-media/media-session'
 import type { Track } from '../data/tracks'
+
+/**
+ * The player's loop vocabulary ↔ the media session's repeat vocabulary.
+ *
+ * Same three states, different names (`track`/`one`, `playlist`/`all`), and
+ * the translation lives here — with the other projections — so the handler
+ * (session → player) and the broadcast (player → session) cannot each invent
+ * half of it. A remote repeat press round-trips through both: the notification
+ * sends `'one'`, {@link repeatToLoop} turns it into `setLoop('track')`, the
+ * observed property comes back through the snapshot, and {@link loopToRepeat}
+ * puts `'one'` on the next broadcast — which is what flips the icon.
+ */
+export function loopToRepeat(loop: LoopMode): MediaRepeatMode {
+  switch (loop) {
+    case 'off':
+      return 'off'
+    case 'track':
+      return 'one'
+    case 'playlist':
+      return 'all'
+  }
+}
+
+/** The inverse of {@link loopToRepeat}. */
+export function repeatToLoop(mode: MediaRepeatMode): LoopMode {
+  switch (mode) {
+    case 'off':
+      return 'off'
+    case 'one':
+      return 'track'
+    case 'all':
+      return 'playlist'
+  }
+}
 
 /** `PlayerStatus` (+ intent) collapsed onto the media-session vocabulary. */
 export function toMediaStatus(state: PlayerState): PlaybackState['status'] {
@@ -34,8 +72,16 @@ export function toMediaStatus(state: PlayerState): PlaybackState['status'] {
  * `positionAnchor` is seconds + `Date.now()`; the media session wants
  * milliseconds. `rate` is forced to `0` unless audio is genuinely advancing, so
  * the native projection freezes instead of drifting while buffering or paused.
+ *
+ * `shuffleEnabled` is a parameter rather than a `PlayerState` read because it
+ * is **app** state: mpv has no shuffle *mode*, only a reorder command, so the
+ * toggle lives in the controller and rides into the broadcast here. Repeat is
+ * the opposite — mpv owns it (`loop`), so it is read straight off the snapshot.
  */
-export function toPlaybackState(state: PlayerState): PlaybackState {
+export function toPlaybackState(
+  state: PlayerState,
+  shuffleEnabled: boolean
+): PlaybackState {
   const status = toMediaStatus(state)
   const advancing = status === 'playing' && !state.seeking
 
@@ -64,7 +110,15 @@ export function toPlaybackState(state: PlayerState): PlaybackState {
     // Any `MediaControl` works: `state.playing ? 'pause' : 'play'` for the
     // classic three-button transport, or `fastForward`/`rewind` (those take
     // the FORWARD/BACK slots, so they pair with dropping next/previous).
-    controls: ['skipToPrevious', 'stop', 'skipToNext'],
+    //
+    // `repeatMode`/`shuffle` are the wave-2 additions: listing them here is
+    // what puts the buttons on the Android notification's *expanded* layout
+    // (media3's default provider draws only the transport three otherwise);
+    // the capabilities below are what light them up on Android Auto, Wear and
+    // iOS's command center. The icon each draws comes from the current
+    // `repeatMode`/`shuffleEnabled` fields — a press changes nothing until the
+    // app acts and re-broadcasts, which is the acknowledgement contract.
+    controls: ['repeatMode', 'skipToPrevious', 'stop', 'skipToNext', 'shuffle'],
     capabilities: [
       'play',
       'pause',
@@ -73,11 +127,16 @@ export function toPlaybackState(state: PlayerState): PlaybackState {
       'skipToNext',
       'skipToPrevious',
       'skipToQueueItem',
+      'setRepeatMode',
+      'setShuffle',
     ],
-    // All three transport buttons fit the collapsed notification.
-    compactControlIndices: [0, 1, 2],
+    // The transport three keep the ≤3 collapsed slots; repeat and shuffle
+    // appear only when the notification is expanded.
+    compactControlIndices: [1, 2, 3],
     queueIndex: state.playlist.index,
     errorMessage: state.error?.message,
+    repeatMode: loopToRepeat(state.loop),
+    shuffleEnabled,
   }
 }
 
@@ -107,7 +166,7 @@ export function durationMs(
   track: Track,
   facts: TrackFacts
 ): number | undefined {
-  if (track.live === true || facts.isLive || facts.duration === undefined) {
+  if (track.isLive === true || facts.isLive || facts.duration === undefined) {
     return undefined
   }
   return Math.round(facts.duration) * 1000
@@ -138,7 +197,7 @@ export function nowPlaying(
   track: Track,
   facts: TrackFacts
 ): string | undefined {
-  if (track.live !== true) return undefined
+  if (track.isLive !== true) return undefined
   const title = facts.title
   return title !== undefined && title !== track.title ? title : undefined
 }
@@ -160,5 +219,15 @@ export function toMediaItem(track: Track, state: PlayerState): MediaItem {
     // Omitting duration is what tells the lock screen to render a live
     // indicator rather than a seek bar to nowhere.
     duration: durationMs(track, state),
+    // The wave-2 extended tags — named one by one, per the regression note
+    // above. `albumArtist` and the rest of the set are absent because no entry
+    // in TRACKS carries them truthfully, not because they were forgotten.
+    trackNumber: track.trackNumber,
+    year: track.year,
+    // `isLive` as a broadcast *fact*, replacing "no duration, so presumably
+    // live": Android drops seekability via `isDynamic`, iOS sets
+    // `MPNowPlayingInfoPropertyIsLiveStream`. Omitted (not `false`) for finite
+    // entries, which keeps the old inference for anything unannotated.
+    isLive: track.isLive,
   }
 }

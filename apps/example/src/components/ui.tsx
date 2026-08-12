@@ -1,15 +1,22 @@
 /**
- * The four primitives every section on this screen is built from.
+ * The shared vocabulary every feature component is built from.
  *
- * Not a design system — just enough shared vocabulary that a dozen
- * independently-written components still look like one app. Anything
- * feature-specific belongs in the component that owns the feature.
+ * Not a design system — just enough that a dozen independently-written
+ * components still look like one app. The language is **flat and card-less**:
+ * a {@link Section} is an uppercase micro label over a hairline rule, not a
+ * box; grouping is whitespace's job and hierarchy is typography's. The only
+ * things that keep a radius are {@link Chip}s — they are controls, and a
+ * control needs an edge a finger can find. Anything feature-specific belongs
+ * in the component that owns the feature.
  */
 import React from 'react'
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
-import { COLORS, RADIUS, SHADOW, SPACE, TYPE } from '../theme'
+import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 
-/** A titled card. The one container shape on the screen. */
+/**
+ * A titled group. No background, no border-box, no shadow — the label and the
+ * hairline under it are the entire container.
+ */
 export const Section = React.memo(function Section({
   title,
   accessory,
@@ -35,7 +42,10 @@ export const Section = React.memo(function Section({
   )
 })
 
-/** A pill button. `active` fills it with the accent; that is the whole state. */
+/**
+ * A small rectangular control. `active` fills it with the accent; that is the
+ * whole state. Flat otherwise: hairline outline, transparent fill.
+ */
 export const Chip = React.memo(function Chip({
   label,
   active = false,
@@ -111,27 +121,41 @@ export function Dot({ color }: { color: string }): React.JSX.Element {
   return <View style={[styles.dot, { backgroundColor: color }]} />
 }
 
+/**
+ * A status strip: a 2-pt coloured rule down the left of some text. This is the
+ * card-less banner — the rule carries the severity, the copy carries the fact,
+ * and there is no box.
+ */
+export function Strip({
+  color,
+  children,
+}: {
+  color: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <View style={[styles.strip, { borderLeftColor: color }]}>{children}</View>
+  )
+}
+
 const styles = StyleSheet.create({
   section: {
     alignSelf: 'stretch',
-    padding: SPACE.lg,
-    borderRadius: RADIUS.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: COLORS.borderSoft,
-    backgroundColor: COLORS.surface,
     gap: SPACE.md,
-    ...SHADOW.card,
   },
   sectionHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'baseline',
     justifyContent: 'space-between',
     gap: SPACE.sm,
+    paddingBottom: SPACE.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.borderSoft,
   },
   sectionTitle: {
     fontSize: TYPE.micro,
     fontWeight: '700',
-    letterSpacing: 1.4,
+    letterSpacing: 1.6,
     textTransform: 'uppercase',
     color: COLORS.muted,
   },
@@ -142,14 +166,13 @@ const styles = StyleSheet.create({
   },
   chip: {
     paddingHorizontal: SPACE.md,
-    paddingVertical: SPACE.sm,
-    borderRadius: RADIUS.pill,
-    borderWidth: 1,
+    paddingVertical: 6,
+    borderRadius: RADIUS.sm,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: COLORS.border,
-    backgroundColor: COLORS.surfaceSunken,
   },
   chipActive: {
-    borderColor: COLORS.accentBright,
+    borderColor: COLORS.accent,
     backgroundColor: COLORS.accent,
   },
   chipDanger: { borderColor: COLORS.error },
@@ -161,4 +184,10 @@ const styles = StyleSheet.create({
   dim: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
   dot: { width: 7, height: 7, borderRadius: 4 },
+  strip: {
+    alignSelf: 'stretch',
+    gap: SPACE.xs,
+    paddingLeft: SPACE.md,
+    borderLeftWidth: 2,
+  },
 })

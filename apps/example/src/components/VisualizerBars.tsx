@@ -6,7 +6,7 @@
  */
 import React from 'react'
 import { StyleSheet, View } from 'react-native'
-import { COLORS, RADIUS } from '../theme'
+import { COLORS } from '../theme'
 
 export const VISUALIZER_BANDS = 20
 /**
@@ -111,7 +111,7 @@ export const VisualizerBar = React.memo(function VisualizerBar({
  * The row's width is exactly the first bar's left edge to the last bar's right
  * edge, so `left: 0; right: 0` here means precisely "across the bars" — as a
  * sibling of the centering container it overhung both ends and read as stray
- * rules floating in the card.
+ * rules floating in the group.
  */
 export const VisualizerGrid = React.memo(function VisualizerGrid(): React.JSX.Element {
   return (
@@ -219,6 +219,6 @@ const styles = StyleSheet.create({
     height: 2,
     width: '100%',
     backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.sm,
+    borderRadius: 1,
   },
 })

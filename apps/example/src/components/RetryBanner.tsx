@@ -28,8 +28,8 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
-import { Detail } from './ui'
+import { COLORS, TYPE } from '../theme'
+import { Detail, Strip } from './ui'
 import type { RetryNote } from '../playback'
 
 export const RetryBanner = React.memo(function RetryBanner({
@@ -39,27 +39,23 @@ export const RetryBanner = React.memo(function RetryBanner({
 }): React.JSX.Element | null {
   if (note === undefined) return null
   return (
-    <View accessibilityRole="alert" style={styles.banner}>
-      <Text style={styles.title}>
-        Reconnecting — attempt {note.attempt} of {note.maxAttempts}
-      </Text>
-      <Detail>
-        Entry #{note.index} failed and is being re-attempted rather than
-        skipped: {note.message}
-      </Detail>
+    // A flat strip, not a card: the warning-coloured rule is the severity,
+    // the copy is the fact.
+    <View accessibilityRole="alert" style={styles.container}>
+      <Strip color={COLORS.warning}>
+        <Text style={styles.title}>
+          Reconnecting — attempt {note.attempt} of {note.maxAttempts}
+        </Text>
+        <Detail>
+          Entry #{note.index} failed and is being re-attempted rather than
+          skipped: {note.message}
+        </Detail>
+      </Strip>
     </View>
   )
 })
 
 const styles = StyleSheet.create({
-  banner: {
-    alignSelf: 'stretch',
-    gap: 2,
-    padding: SPACE.md,
-    borderRadius: RADIUS.md,
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.warning,
-    backgroundColor: COLORS.surfaceSunken,
-  },
+  container: { alignSelf: 'stretch' },
   title: { fontSize: TYPE.label, fontWeight: '600', color: COLORS.text },
 })

@@ -22,8 +22,8 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
-import { Chip, Detail } from './ui'
+import { COLORS, SPACE, TYPE } from '../theme'
+import { Chip, Detail, Strip } from './ui'
 import type { PrefetchNote } from '../playback'
 
 export const PrefetchBanner = React.memo(function PrefetchBanner({
@@ -38,46 +38,43 @@ export const PrefetchBanner = React.memo(function PrefetchBanner({
   onToggle: (enabled: boolean) => void
 }): React.JSX.Element {
   return (
-    <View style={[styles.banner, note !== undefined && styles.bannerActive]}>
-      <View style={styles.text}>
-        <Text style={styles.title}>
-          {note === undefined
-            ? enabled
-              ? 'Prefetch armed — waiting for a boundary'
-              : 'Prefetch off'
-            : 'Next entry opened early'}
-        </Text>
-        <Detail>
-          {note === undefined
-            ? enabled
-              ? 'mpv opens the next entry once the current one is fully read.'
-              : 'Every transition will pay for a cold connection.'
-            : `${note.uri}${note.entryId === undefined ? '' : ` · entry #${note.entryId}`}`}
-        </Detail>
-      </View>
-      <Chip
-        label={enabled ? 'On' : 'Off'}
-        active={enabled}
-        disabled={!ready}
-        onPress={() => onToggle(!enabled)}
-      />
+    // A flat strip like the retry/error banners — the rule turns success-green
+    // the moment `prefetchStarted` has fired, which is the visible proof a
+    // boundary is going to be gapless.
+    <View style={styles.container}>
+      <Strip color={note === undefined ? COLORS.border : COLORS.success}>
+        <View style={styles.row}>
+          <View style={styles.text}>
+            <Text style={styles.title}>
+              {note === undefined
+                ? enabled
+                  ? 'Prefetch armed — waiting for a boundary'
+                  : 'Prefetch off'
+                : 'Next entry opened early'}
+            </Text>
+            <Detail>
+              {note === undefined
+                ? enabled
+                  ? 'mpv opens the next entry once the current one is fully read.'
+                  : 'Every transition will pay for a cold connection.'
+                : `${note.uri}${note.entryId === undefined ? '' : ` · entry #${note.entryId}`}`}
+            </Detail>
+          </View>
+          <Chip
+            label={enabled ? 'On' : 'Off'}
+            active={enabled}
+            disabled={!ready}
+            onPress={() => onToggle(!enabled)}
+          />
+        </View>
+      </Strip>
     </View>
   )
 })
 
 const styles = StyleSheet.create({
-  banner: {
-    alignSelf: 'stretch',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACE.md,
-    padding: SPACE.md,
-    borderRadius: RADIUS.md,
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.border,
-    backgroundColor: COLORS.surfaceSunken,
-  },
-  bannerActive: { borderLeftColor: COLORS.success },
+  container: { alignSelf: 'stretch' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   text: { flex: 1, gap: 2 },
   title: { fontSize: TYPE.label, fontWeight: '600', color: COLORS.text },
 })

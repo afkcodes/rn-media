@@ -18,8 +18,10 @@ import {
   type MediaHandler,
   type PersistedMediaService,
   type PersistedSession,
+  type SleepTimerState,
 } from '@rn-media/media-session'
 import type { PlayerState } from '@rn-media/player'
+import { ACCENT_ARGB } from '../theme'
 import type { Track } from '../data/tracks'
 import { durationMs, nowPlaying, toMediaItem, toPlaybackState } from './broadcast'
 import { sessionStorage } from './persistence'
@@ -29,6 +31,15 @@ export interface SessionBridgeOptions {
   readonly handler: () => MediaHandler
   /** The player's current snapshot, for the catch-up broadcast on init. */
   readonly snapshot: () => PlayerState | undefined
+  /**
+   * The app's shuffle toggle, read at broadcast time.
+   *
+   * A getter rather than a field because it is **controller** state — mpv has
+   * no shuffle mode to observe, so the player snapshot cannot carry it and the
+   * bridge asks the owner instead. Repeat needs no twin here: `state.loop`
+   * arrives inside every snapshot already.
+   */
+  readonly shuffleEnabled: () => boolean
   /** Re-render notification for the UI. */
   readonly onChange: () => void
 }
@@ -100,7 +111,19 @@ export class SessionBridge {
           // `withPersistence` below — all three are required, and the
           // library logs which one is missing.
           playbackResumption: true,
+          // The app accent on the notification — full ARGB, alpha included
+          // (`0x1F6FEB` alone would be transparent black). A hint, not a
+          // guarantee: Android 12+ media shades often derive their palette
+          // from the artwork instead.
+          notificationColor: ACCENT_ARGB,
         },
+        // The cross-platform parity option: without it iOS pinned 15 s in both
+        // directions while Android inherited media3's 5 s back / 15 s forward
+        // — two behaviours from one JS call. Set to match this app's own jump
+        // buttons (back 15 / forward 30), so the lock screen and the in-app
+        // transport move by the same amounts.
+        jumpForwardSeconds: 30,
+        jumpBackwardSeconds: 15,
         onHandlerError: (method, cause) =>
           console.error(`[example] handler.${method} failed:`, cause),
       })
@@ -139,15 +162,18 @@ export class SessionBridge {
 
   #publishQueue(): void {
     this.#service?.setQueue(
-      // `uri` and `live` are app-side fields; `MediaItem` is metadata only, so
-      // they are destructured away rather than shipped to the session.
+      // `uri` is the one app-side field; `MediaItem` is metadata only, so it
+      // is destructured away rather than shipped to the session. Everything
+      // else — including the wave-2 extended tags (`trackNumber`, `year`,
+      // `isLive`) — rides along, so a queue-rendering controller sees the same
+      // facts the current-item channel carries.
       //
       // Ids are the track's own, which means "play next" can legitimately put
       // the same id in the queue twice. That is fine here — `setMediaItem`
       // enriches the entry at the broadcast `queueIndex` and both copies carry
       // identical metadata — and it keeps the persisted `mediaItem.id` equal to
       // a `TRACKS` id, which is what the restore path matches on.
-      this.#queue.map(({ uri: _uri, live: _live, ...item }) => ({
+      this.#queue.map(({ uri: _uri, ...item }) => ({
         ...item,
         duration: this.#durations.get(item.id),
       }))
@@ -181,6 +207,11 @@ export class SessionBridge {
       state.seeking,
       state.positionAnchor.timestamp,
       state.error?.message,
+      // Repeat and shuffle are discontinuities too: each changes at most once
+      // per user gesture, and the broadcast that carries the new value is what
+      // completes the pending operation on Android and flips the icon.
+      state.loop,
+      this.#options.shuffleEnabled(),
     ].join('|')
 
     if (signature === this.#lastSignature) return
@@ -206,7 +237,9 @@ export class SessionBridge {
     }
 
     service.setMediaItem(entry && toMediaItem(entry, state))
-    service.setPlaybackState(toPlaybackState(state))
+    service.setPlaybackState(
+      toPlaybackState(state, this.#options.shuffleEnabled())
+    )
   }
 
   /** Re-broadcast unconditionally — used after the queue is edited. */
@@ -233,15 +266,41 @@ export class SessionBridge {
     this.#options.onChange()
   }
 
+  /**
+   * Arm the other shape of timer: pause when the **current item finishes**.
+   *
+   * Same native scheduling as {@link setSleepTimer}; the deadline is computed
+   * natively from the broadcasts this bridge already sends (`duration` minus
+   * the projected position, over the rate) and re-armed on every one of them —
+   * so a seek, a pause or a late-arriving duration all move it without
+   * anything new crossing the bridge.
+   */
+  setSleepTimerToTrackEnd(): void {
+    try {
+      this.#service?.setSleepTimerToTrackEnd()
+      console.log('[example] sleep timer armed for end of track')
+    } catch (cause) {
+      console.warn('[example] sleep timer rejected:', cause)
+    }
+    this.#options.onChange()
+  }
+
   cancelSleepTimer(): void {
     this.#service?.cancelSleepTimer()
     console.log('[example] sleep timer cancelled')
     this.#options.onChange()
   }
 
-  /** Polled by the UI. Safe from JS *because the UI is on screen.* */
-  sleepTimerRemaining(): number | undefined {
-    return this.#service?.getSleepTimerRemaining()
+  /**
+   * Polled by the UI. Safe from JS *because the UI is on screen.*
+   *
+   * `getSleepTimer()` rather than `getSleepTimerRemaining()`, because the badge
+   * has to tell "armed for end of track, deadline unknowable" (a live stream,
+   * or a duration that has not arrived) apart from "not armed" — the bare
+   * number is `undefined` for both, the discriminated state is not.
+   */
+  sleepTimer(): SleepTimerState | undefined {
+    return this.#service?.getSleepTimer()
   }
 
   /* --- checkpoints and teardown ------------------------------------------ */

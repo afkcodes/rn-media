@@ -32,7 +32,7 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native'
-import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
+import { COLORS, SPACE, TYPE } from '../theme'
 
 /** `m:ss`, or `--:--` when there is no number to show. */
 export function formatTime(seconds: number | undefined): string {
@@ -210,17 +210,18 @@ export function SeekBar({
   )
 }
 
-const BAR = 6
+// A slim bar suits the flat screen; the *hit area* is what stays generous.
+const BAR = 4
 
 const styles = StyleSheet.create({
   container: { alignSelf: 'stretch' },
-  // Generous vertical padding: the touch target is 30pt tall, the bar is 6.
+  // Generous vertical padding: the touch target is 28pt tall, the bar is 4.
   // No *horizontal* padding — the grant handler assumes this view and the
   // track share a left edge.
   hitArea: { paddingVertical: SPACE.md },
   track: {
     height: BAR,
-    borderRadius: RADIUS.sm,
+    borderRadius: BAR / 2,
     backgroundColor: COLORS.border,
     justifyContent: 'center',
     overflow: 'visible',
@@ -230,29 +231,24 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     height: BAR,
-    borderRadius: RADIUS.sm,
+    borderRadius: BAR / 2,
     backgroundColor: COLORS.track,
   },
+  // The played fill is plain accent — its *length* is the information, and on
+  // a flat screen a glow would be the only glow. Emphasis by restraint.
   played: {
     position: 'absolute',
     left: 0,
     height: BAR,
-    borderRadius: RADIUS.sm,
-    backgroundColor: COLORS.accentBright,
-    // The fill is the one thing on this screen that glows: it is the only
-    // element whose *length* carries information, so it gets the emphasis.
-    shadowColor: COLORS.accent,
-    shadowOpacity: 0.9,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 4,
+    borderRadius: BAR / 2,
+    backgroundColor: COLORS.accent,
   },
   thumb: {
     position: 'absolute',
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    marginLeft: -8,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginLeft: -7,
     borderWidth: 3,
     borderColor: COLORS.background,
     backgroundColor: COLORS.text,

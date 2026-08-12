@@ -1,6 +1,10 @@
 /**
  * The hero: artwork, what is playing, and the scrubber.
  *
+ * This is the one part of the screen that gets visual weight — everything
+ * below it is quiet by design. No frame, no card, no glow: the artwork sits
+ * directly on the background and the type does the rest.
+ *
  * Three library features are visible here at once, and they are deliberately
  * drawn from three different places:
  *
@@ -9,7 +13,7 @@
  *   `media-title`, i.e. what the station says is on air *right now*;
  * - the **station line** under it comes from the `metadataChanged` event
  *   (`icy-name`/`icy-genre`/`icy-br`) — see the wiring in
- *   `src/playback/controller.ts`.
+ *   `src/playback/engine.ts`.
  *
  * The clock is `useProgress`, which projects the position locally from the
  * player's anchor: nothing is polled across the bridge, and the ticker stops
@@ -27,7 +31,7 @@
 import React from 'react'
 import { Image, StyleSheet, Text, View } from 'react-native'
 import type { ChapterEntry, Progress } from '@rn-media/player'
-import { COLORS, RADIUS, SHADOW, SPACE, TYPE } from '../theme'
+import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { Track } from '../data/tracks'
 import type { ShellState } from '../playback/shell'
 import { SeekBar, formatTime } from './SeekBar'
@@ -85,9 +89,17 @@ export function NowPlaying({
 
   return (
     <View style={styles.container}>
-      <Artwork track={track} live={live} />
+      <Artwork track={track} />
 
       <View style={styles.headline}>
+        {/* The live fact reads as type, not as a sticker on the artwork: a red
+            dot and the word, on their own line above the title. */}
+        {live ? (
+          <View style={styles.onAir}>
+            <Dot color={COLORS.live} />
+            <Text style={styles.onAirLabel}>ON AIR</Text>
+          </View>
+        ) : null}
         <Text numberOfLines={2} style={styles.title}>
           {track?.title ?? '—'}
         </Text>
@@ -155,91 +167,54 @@ export function NowPlaying({
 /**
  * Remote artwork, with a typographic fallback.
  *
- * Two of the six queue entries ship no `artworkUri`, and a music app with a
- * hole in it looks broken — so the fallback is a designed state rather than an
- * empty box.
+ * Two of the queue entries ship no `artworkUri`, and a music app with a hole
+ * in it looks broken — so the fallback is a designed state rather than an
+ * empty box. The sleeve keeps a small radius (it is an object, not a
+ * container) and nothing else: no frame, no shadow, no colour bleed.
  */
 const Artwork = React.memo(function Artwork({
   track,
-  live,
 }: {
   track: Track | undefined
-  live: boolean
 }): React.JSX.Element {
   const uri = track?.artworkUri
-  return (
-    <View style={styles.artFrame}>
-      {/*
-        A colour bleed under the sleeve. It is a plain View inset so that only
-        its bottom edge shows — RN core has no blur and this app is not growing
-        a dependency for one, and a soft-edged rectangle peeking out reads as
-        the same thing at a twentieth of the cost.
-      */}
-      <View pointerEvents="none" style={styles.artGlow} />
-      {uri === undefined ? (
-        <View style={[styles.art, styles.artFallback]}>
-          <Text style={styles.artInitial}>
-            {(track?.title ?? '♪').slice(0, 1).toUpperCase()}
-          </Text>
-        </View>
-      ) : (
-        <Image source={{ uri }} style={styles.art} resizeMode="cover" />
-      )}
-      {live ? (
-        <View style={styles.onAir}>
-          <Dot color={COLORS.onAccent} />
-          <Text style={styles.onAirLabel}>ON AIR</Text>
-        </View>
-      ) : null}
+  return uri === undefined ? (
+    <View style={[styles.art, styles.artFallback]}>
+      <Text style={styles.artInitial}>
+        {(track?.title ?? '♪').slice(0, 1).toUpperCase()}
+      </Text>
     </View>
+  ) : (
+    <Image source={{ uri }} style={styles.art} resizeMode="cover" />
   )
 })
 
-const ART = 208
+const ART = 224
 
 const styles = StyleSheet.create({
-  container: { alignSelf: 'stretch', alignItems: 'center', gap: SPACE.md },
-  artFrame: { width: ART, height: ART, ...SHADOW.card },
-  artGlow: {
-    position: 'absolute',
-    left: 14,
-    right: 14,
-    top: SPACE.xl,
-    bottom: -10,
-    borderRadius: RADIUS.xl,
-    backgroundColor: COLORS.accent,
-    opacity: 0.45,
-  },
+  container: { alignSelf: 'stretch', alignItems: 'center', gap: SPACE.lg },
   art: {
     width: ART,
     height: ART,
-    borderRadius: RADIUS.xl,
+    borderRadius: RADIUS.md,
     backgroundColor: COLORS.surface,
   },
   artFallback: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: COLORS.borderSoft,
   },
   artInitial: { fontSize: 72, fontWeight: '200', color: COLORS.border },
   onAir: {
-    position: 'absolute',
-    top: SPACE.md,
-    left: SPACE.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACE.xs,
-    paddingHorizontal: SPACE.sm,
-    paddingVertical: 3,
-    borderRadius: RADIUS.pill,
-    backgroundColor: COLORS.live,
+    marginBottom: 2,
   },
   onAirLabel: {
-    fontSize: 9,
+    fontSize: TYPE.micro,
     fontWeight: '800',
-    letterSpacing: 1,
-    color: COLORS.onAccent,
+    letterSpacing: 1.6,
+    color: COLORS.live,
   },
   headline: { alignSelf: 'stretch', alignItems: 'center', gap: 2 },
   title: {

@@ -113,6 +113,25 @@ export class QueueMirror {
   }
 
   /**
+   * "Add to end" — the plain `append` cell of `loadfile`'s table, and the
+   * counterpart the queue list shows next to {@link playNext} so both insert
+   * positions are one tap away. Duplicates are legal and expected: the row's
+   * identity is mpv's `entryId`, and the media-session queue channel carries
+   * the same id twice without complaint (see `NativeMediaItem.id`).
+   */
+  async addLast(track: Track): Promise<void> {
+    await this.#run((player) => player.playlist.add(track.uri))
+  }
+
+  /**
+   * Remove one entry. Removing the *current* one stops it and starts the next
+   * — mpv's rule, not ours, and the queue list says so in its footnote.
+   */
+  async remove(index: number): Promise<void> {
+    await this.#run((player) => player.playlist.remove(index))
+  }
+
+  /**
    * Shuffle everything, including the entry that is playing.
    *
    * mpv keeps the *entry* current, not the index, so the music does not stop —
@@ -150,7 +169,7 @@ export class QueueMirror {
 
   /** Join mpv's entries to `TRACKS` and publish, skipping an empty answer. */
   #adopt(entries: readonly PlaylistEntry[]): void {
-    // `[]` is what an idle core answers, and blanking the queue card because
+    // `[]` is what an idle core answers, and blanking the queue list because
     // mpv has not been given a playlist yet would be a worse lie than being one
     // event stale.
     if (entries.length === 0) return
