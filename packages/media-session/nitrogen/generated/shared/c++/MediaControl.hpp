@@ -36,6 +36,8 @@ namespace margelo::nitro::rnmediamediasession {
     SKIPTOPREVIOUS      SWIFT_NAME(skiptoprevious) = 4,
     FASTFORWARD      SWIFT_NAME(fastforward) = 5,
     REWIND      SWIFT_NAME(rewind) = 6,
+    REPEATMODE      SWIFT_NAME(repeatmode) = 7,
+    SHUFFLE      SWIFT_NAME(shuffle) = 8,
   } CLOSED_ENUM;
 
 } // namespace margelo::nitro::rnmediamediasession
@@ -55,6 +57,8 @@ namespace margelo::nitro {
         case hashString("skipToPrevious"): return margelo::nitro::rnmediamediasession::MediaControl::SKIPTOPREVIOUS;
         case hashString("fastForward"): return margelo::nitro::rnmediamediasession::MediaControl::FASTFORWARD;
         case hashString("rewind"): return margelo::nitro::rnmediamediasession::MediaControl::REWIND;
+        case hashString("repeatMode"): return margelo::nitro::rnmediamediasession::MediaControl::REPEATMODE;
+        case hashString("shuffle"): return margelo::nitro::rnmediamediasession::MediaControl::SHUFFLE;
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert \"" + unionValue + "\" to enum MediaControl - invalid value!");
       }
@@ -68,6 +72,8 @@ namespace margelo::nitro {
         case margelo::nitro::rnmediamediasession::MediaControl::SKIPTOPREVIOUS: return JSIConverter<std::string>::toJSI(runtime, "skipToPrevious");
         case margelo::nitro::rnmediamediasession::MediaControl::FASTFORWARD: return JSIConverter<std::string>::toJSI(runtime, "fastForward");
         case margelo::nitro::rnmediamediasession::MediaControl::REWIND: return JSIConverter<std::string>::toJSI(runtime, "rewind");
+        case margelo::nitro::rnmediamediasession::MediaControl::REPEATMODE: return JSIConverter<std::string>::toJSI(runtime, "repeatMode");
+        case margelo::nitro::rnmediamediasession::MediaControl::SHUFFLE: return JSIConverter<std::string>::toJSI(runtime, "shuffle");
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert MediaControl to JS - invalid value: "
                                     + std::to_string(static_cast<int>(arg)) + "!");
@@ -86,6 +92,8 @@ namespace margelo::nitro {
         case hashString("skipToPrevious"):
         case hashString("fastForward"):
         case hashString("rewind"):
+        case hashString("repeatMode"):
+        case hashString("shuffle"):
           return true;
         default:
           return false;

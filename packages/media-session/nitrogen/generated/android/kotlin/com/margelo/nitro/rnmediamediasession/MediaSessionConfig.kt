@@ -23,7 +23,13 @@ data class MediaSessionConfig(
   val android: AndroidMediaSessionConfig?,
   @DoNotStrip
   @Keep
-  val ios: IosMediaSessionConfig?
+  val ios: IosMediaSessionConfig?,
+  @DoNotStrip
+  @Keep
+  val jumpForwardSeconds: Double,
+  @DoNotStrip
+  @Keep
+  val jumpBackwardSeconds: Double
 ) {
   /* primary constructor */
 
@@ -32,12 +38,16 @@ data class MediaSessionConfig(
     if (other !is MediaSessionConfig) return false
     return Objects.deepEquals(this.android, other.android)
       && Objects.deepEquals(this.ios, other.ios)
+      && Objects.deepEquals(this.jumpForwardSeconds, other.jumpForwardSeconds)
+      && Objects.deepEquals(this.jumpBackwardSeconds, other.jumpBackwardSeconds)
   }
 
   override fun hashCode(): Int {
     return arrayOf<Any?>(
       android,
-      ios
+      ios,
+      jumpForwardSeconds,
+      jumpBackwardSeconds
     ).contentDeepHashCode()
   }
 
@@ -49,8 +59,8 @@ data class MediaSessionConfig(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(android: AndroidMediaSessionConfig?, ios: IosMediaSessionConfig?): MediaSessionConfig {
-      return MediaSessionConfig(android, ios)
+    private fun fromCpp(android: AndroidMediaSessionConfig?, ios: IosMediaSessionConfig?, jumpForwardSeconds: Double, jumpBackwardSeconds: Double): MediaSessionConfig {
+      return MediaSessionConfig(android, ios, jumpForwardSeconds, jumpBackwardSeconds)
     }
   }
 }

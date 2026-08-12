@@ -15,6 +15,8 @@
 
 // Forward declaration of `PlaylistEntry` to properly resolve imports.
 namespace margelo::nitro::rnmediaplayer { struct PlaylistEntry; }
+// Forward declaration of `ChapterEntry` to properly resolve imports.
+namespace margelo::nitro::rnmediaplayer { struct ChapterEntry; }
 // Forward declaration of `MpvFormat` to properly resolve imports.
 namespace margelo::nitro::rnmediaplayer { enum class MpvFormat; }
 // Forward declaration of `MpvEvent` to properly resolve imports.
@@ -32,6 +34,7 @@ namespace margelo::nitro::rnmediaplayer { struct PrefetchStartedEvent; }
 #include <vector>
 #include <optional>
 #include "PlaylistEntry.hpp"
+#include "ChapterEntry.hpp"
 #include "MpvFormat.hpp"
 #include "MpvEvent.hpp"
 #include <functional>
@@ -78,6 +81,7 @@ namespace margelo::nitro::rnmediaplayer {
       virtual std::optional<bool> getPropertyBool(const std::string& name) = 0;
       virtual std::optional<std::unordered_map<std::string, std::string>> getPropertyMap(const std::string& name) = 0;
       virtual std::vector<PlaylistEntry> getPlaylistEntries() = 0;
+      virtual std::vector<ChapterEntry> getChapters() = 0;
       virtual void setPropertyString(const std::string& name, const std::string& value) = 0;
       virtual void setPropertyNumber(const std::string& name, double value) = 0;
       virtual void setPropertyBool(const std::string& name, bool value) = 0;

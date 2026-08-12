@@ -37,8 +37,10 @@ import type { HybridObject } from 'react-native-nitro-modules'
  * constant `true`. See the class comment on
  * `cpp/HybridRnMediaScreenState.hpp`.
  */
-export interface RnMediaScreenState
-  extends HybridObject<{ android: 'kotlin'; ios: 'c++' }> {
+export interface RnMediaScreenState extends HybridObject<{
+  android: 'kotlin'
+  ios: 'c++'
+}> {
   /**
    * `true` while the display is on.
    *

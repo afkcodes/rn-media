@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { BaseMediaHandler, CompositeMediaHandler } from '../handler'
+import type { MediaHandler } from '../types'
 import { RecordingHandler } from './fakes'
 
 describe('BaseMediaHandler', () => {
@@ -86,5 +87,35 @@ describe('CompositeMediaHandler', () => {
     const doubled = new CompositeMediaHandler(new CompositeMediaHandler(inner))
     doubled.seekTo(9)
     expect(inner.calls).toEqual(['seekTo(9)'])
+  })
+})
+
+describe('repeat and shuffle on the handler bases (B2)', () => {
+  it('BaseMediaHandler supplies no-ops so subclasses need not', () => {
+    const base = new BaseMediaHandler()
+    expect(() => base.onSetRepeatMode('all')).not.toThrow()
+    expect(() => base.onSetShuffle(true)).not.toThrow()
+  })
+
+  it('CompositeMediaHandler forwards both to the inner handler', () => {
+    const inner = new RecordingHandler()
+    const composite = new CompositeMediaHandler(inner)
+
+    composite.onSetRepeatMode('one')
+    composite.onSetShuffle(false)
+
+    expect(inner.calls).toEqual(['onSetRepeatMode(one)', 'onSetShuffle(false)'])
+  })
+
+  it('CompositeMediaHandler tolerates an inner handler that omits them', () => {
+    // The interface marks both optional so that adding them was not a breaking
+    // change for structural implementors — the decorator has to honour that.
+    const inner = new BaseMediaHandler()
+    delete (inner as Partial<MediaHandler>).onSetRepeatMode
+    delete (inner as Partial<MediaHandler>).onSetShuffle
+    const composite = new CompositeMediaHandler(inner)
+
+    expect(() => composite.onSetRepeatMode('off')).not.toThrow()
+    expect(() => composite.onSetShuffle(true)).not.toThrow()
   })
 })

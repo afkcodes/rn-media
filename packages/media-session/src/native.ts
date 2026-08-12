@@ -13,7 +13,8 @@ let instance: RnMediaMediaSession | undefined
  * up a media session).
  */
 export function getNativeMediaSession(): RnMediaMediaSession {
-  instance ??=
-    NitroModules.createHybridObject<RnMediaMediaSession>('RnMediaMediaSession')
+  instance ??= NitroModules.createHybridObject<RnMediaMediaSession>(
+    'RnMediaMediaSession'
+  )
   return instance
 }

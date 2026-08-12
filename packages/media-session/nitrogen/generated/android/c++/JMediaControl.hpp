@@ -63,6 +63,12 @@ namespace margelo::nitro::rnmediamediasession {
         case MediaControl::REWIND:
           static const auto fieldREWIND = clazz->getStaticField<JMediaControl>("REWIND");
           return clazz->getStaticFieldValue(fieldREWIND);
+        case MediaControl::REPEATMODE:
+          static const auto fieldREPEATMODE = clazz->getStaticField<JMediaControl>("REPEATMODE");
+          return clazz->getStaticFieldValue(fieldREPEATMODE);
+        case MediaControl::SHUFFLE:
+          static const auto fieldSHUFFLE = clazz->getStaticField<JMediaControl>("SHUFFLE");
+          return clazz->getStaticFieldValue(fieldSHUFFLE);
         default:
           std::string stringValue = std::to_string(static_cast<int>(value));
           throw std::invalid_argument("Invalid enum value (" + stringValue + "!");

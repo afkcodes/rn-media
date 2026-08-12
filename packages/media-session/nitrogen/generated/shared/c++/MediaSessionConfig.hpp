@@ -46,10 +46,12 @@ namespace margelo::nitro::rnmediamediasession {
   public:
     std::optional<AndroidMediaSessionConfig> android     SWIFT_PRIVATE;
     std::optional<IosMediaSessionConfig> ios     SWIFT_PRIVATE;
+    double jumpForwardSeconds     SWIFT_PRIVATE;
+    double jumpBackwardSeconds     SWIFT_PRIVATE;
 
   public:
     MediaSessionConfig() = default;
-    explicit MediaSessionConfig(std::optional<AndroidMediaSessionConfig> android, std::optional<IosMediaSessionConfig> ios): android(android), ios(ios) {}
+    explicit MediaSessionConfig(std::optional<AndroidMediaSessionConfig> android, std::optional<IosMediaSessionConfig> ios, double jumpForwardSeconds, double jumpBackwardSeconds): android(android), ios(ios), jumpForwardSeconds(jumpForwardSeconds), jumpBackwardSeconds(jumpBackwardSeconds) {}
 
   public:
     friend bool operator==(const MediaSessionConfig& lhs, const MediaSessionConfig& rhs) = default;
@@ -66,13 +68,17 @@ namespace margelo::nitro {
       jsi::Object obj = arg.asObject(runtime);
       return margelo::nitro::rnmediamediasession::MediaSessionConfig(
         JSIConverter<std::optional<margelo::nitro::rnmediamediasession::AndroidMediaSessionConfig>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "android"))),
-        JSIConverter<std::optional<margelo::nitro::rnmediamediasession::IosMediaSessionConfig>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "ios")))
+        JSIConverter<std::optional<margelo::nitro::rnmediamediasession::IosMediaSessionConfig>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "ios"))),
+        JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "jumpForwardSeconds"))),
+        JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "jumpBackwardSeconds")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::rnmediamediasession::MediaSessionConfig& arg) {
       jsi::Object obj(runtime);
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "android"), JSIConverter<std::optional<margelo::nitro::rnmediamediasession::AndroidMediaSessionConfig>>::toJSI(runtime, arg.android));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "ios"), JSIConverter<std::optional<margelo::nitro::rnmediamediasession::IosMediaSessionConfig>>::toJSI(runtime, arg.ios));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "jumpForwardSeconds"), JSIConverter<double>::toJSI(runtime, arg.jumpForwardSeconds));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "jumpBackwardSeconds"), JSIConverter<double>::toJSI(runtime, arg.jumpBackwardSeconds));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -85,6 +91,8 @@ namespace margelo::nitro {
       }
       if (!JSIConverter<std::optional<margelo::nitro::rnmediamediasession::AndroidMediaSessionConfig>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "android")))) return false;
       if (!JSIConverter<std::optional<margelo::nitro::rnmediamediasession::IosMediaSessionConfig>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "ios")))) return false;
+      if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "jumpForwardSeconds")))) return false;
+      if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "jumpBackwardSeconds")))) return false;
       return true;
     }
   };

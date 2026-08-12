@@ -10,9 +10,12 @@ import android.util.Log
 import androidx.media3.common.Player
 import com.margelo.nitro.rnmediamediasession.AndroidMediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
+import com.margelo.nitro.rnmediamediasession.MediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaSessionHandlers
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import com.margelo.nitro.rnmediamediasession.NativePlaybackState
+import com.margelo.nitro.rnmediamediasession.NativeSleepTimerState
+import com.margelo.nitro.rnmediamediasession.SleepTimerMode
 
 /**
  * The process-wide join between JavaScript and the media3 service.
@@ -51,6 +54,22 @@ internal object MediaSessionController : CommandDispatcher {
 
   @Volatile
   var androidConfig: AndroidMediaSessionConfig? = null
+    private set
+
+  /**
+   * The cross-platform jump intervals, in milliseconds.
+   *
+   * Held next to [androidConfig] rather than inside it because they are not an
+   * Android option: they exist so `fastForward`/`rewind` mean the same thing on
+   * both platforms, and they are mirrored for a cold start alongside the Android
+   * config for the same reason it is (see [MirroredConfig]).
+   */
+  @Volatile
+  var jumpForwardMs: Long = DEFAULT_JUMP_MS
+    private set
+
+  @Volatile
+  var jumpBackwardMs: Long = DEFAULT_JUMP_MS
     private set
 
   @Volatile
@@ -113,18 +132,21 @@ internal object MediaSessionController : CommandDispatcher {
    */
   fun initialize(
     context: Context,
-    config: AndroidMediaSessionConfig?,
+    sessionConfig: MediaSessionConfig,
     handlers: MediaSessionHandlers,
     onReady: () -> Unit,
   ) {
     val application = context.applicationContext
+    val config = sessionConfig.android
     appContext = application
     androidConfig = config
+    jumpForwardMs = sessionConfig.jumpForwardSeconds.toJumpMs()
+    jumpBackwardMs = sessionConfig.jumpBackwardSeconds.toJumpMs()
     this.handlers = handlers
     // Mirror the config for a future cold start. A service created with no JS
     // has to build the same notification channel, small icon and grace period
     // this call configured, and it cannot ask JavaScript for them.
-    ResumptionStore.putConfig(application, config)
+    ResumptionStore.putConfig(application, sessionConfig)
     // Turning the feature off must also forget what it would have resumed:
     // an opted-out app should not leave a session behind for a service created
     // by something else to find.
@@ -157,7 +179,11 @@ internal object MediaSessionController : CommandDispatcher {
       // never captured handlers in the first place (it asks `dispatch` per
       // command), so reusing it *is* the handover — there is nothing to
       // transfer.
-      if (player == null) player = BroadcastPlayer(this)
+      // A revived player was built from the *mirrored* intervals; the app's
+      // live config is the more authoritative statement, so it is applied to
+      // whichever player we end up with rather than only to a fresh one.
+      val facade = player ?: BroadcastPlayer(this, jumpForwardMs, jumpBackwardMs).also { player = it }
+      facade.setSeekIncrements(jumpForwardMs, jumpBackwardMs)
       onReady()
       handover(handlers)
     }
@@ -212,6 +238,7 @@ internal object MediaSessionController : CommandDispatcher {
       // any more. (`stop` is also the dev-reload hook — see above.)
       deferred.clear()
       revivalPending = false
+      clearTrackEndLatch()
       player?.releasePending()
       service?.releaseAndStop()
       // `service` is nulled by `detachService` when the OS actually destroys
@@ -233,6 +260,7 @@ internal object MediaSessionController : CommandDispatcher {
       current = next
       player?.update(next, acknowledgesCommands = true)
       service?.refresh(next)
+      retargetTrackEndTimer(next)
       // Only a play-shaped broadcast may start the service. `paused` and
       // `stopped` never stop it either: media3 demotes it by itself once
       // playWhenReady goes false, and `stopService()` is the only thing that
@@ -246,6 +274,9 @@ internal object MediaSessionController : CommandDispatcher {
       val next = current.copy(item = item)
       current = next
       player?.update(next, acknowledgesCommands = false)
+      // This channel is where a duration usually arrives, and where a track
+      // change usually shows up first — both move an end-of-track deadline.
+      retargetTrackEndTimer(next)
     }
   }
 
@@ -254,6 +285,7 @@ internal object MediaSessionController : CommandDispatcher {
       val next = current.copy(queue = items)
       current = next
       player?.update(next, acknowledgesCommands = false)
+      retargetTrackEndTimer(next)
     }
   }
 
@@ -300,15 +332,19 @@ internal object MediaSessionController : CommandDispatcher {
    */
   fun attachRevivedService(
     service: RnMediaMediaSessionService,
-    config: AndroidMediaSessionConfig,
+    config: MirroredConfig,
     seed: Snapshot,
   ): BroadcastPlayer {
     appContext = service.applicationContext
-    androidConfig = config
+    androidConfig = config.android
+    jumpForwardMs = config.jumpForwardMs
+    jumpBackwardMs = config.jumpBackwardMs
     current = seed
     this.service = service
     serviceRequested = true
-    val facade = player ?: BroadcastPlayer(this).also { player = it }
+    val facade = player
+      ?: BroadcastPlayer(this, jumpForwardMs, jumpBackwardMs).also { player = it }
+    facade.setSeekIncrements(jumpForwardMs, jumpBackwardMs)
     facade.update(seed, acknowledgesCommands = false)
     return facade
   }
@@ -371,15 +407,103 @@ internal object MediaSessionController : CommandDispatcher {
   /** Arm (or re-arm) the sleep timer. Called from the JS thread. */
   fun setSleepTimer(seconds: Double) {
     sleepTimer.arm(seconds)
+    // A countdown is not an end-of-track timer, so the latch must go with it —
+    // posted rather than cleared here, because the latch is main-thread state
+    // and posting is what keeps arm-then-cancel and cancel-then-arm both
+    // ordered against the broadcast blocks already queued behind them.
+    main.post { clearTrackEndLatch() }
+  }
+
+  /**
+   * Arm the end-of-current-track timer. Called from the JS thread.
+   *
+   * Two steps and both are needed: the timer is marked armed *synchronously*
+   * (so a `getSleepTimer()` on the very next line reports it, and so a broadcast
+   * racing in cannot be ignored as "not armed"), and the deadline is computed on
+   * the main thread, where the snapshot lives.
+   */
+  fun setSleepTimerToTrackEnd() {
+    sleepTimer.armAtTrackEnd()
+    main.post {
+      // `null` here means "armed, nothing latched yet" — arming over silence
+      // latches onto the first item to appear rather than firing because the
+      // item changed from nothing to something. See [trackEndAction].
+      trackEndItemKey = current.currentItemKey
+      sleepTimer.scheduleTrackEnd(current.trackEndDelayMs())
+    }
   }
 
   /** Disarm. Called from the JS thread. */
   fun cancelSleepTimer() {
     sleepTimer.cancel()
+    main.post { clearTrackEndLatch() }
   }
 
   /** Seconds remaining, or `null`. Called from the JS thread; must not block. */
   fun sleepTimerRemaining(): Double? = sleepTimer.remainingSeconds()
+
+  /** Mode + remaining, or `null`. Called from the JS thread; must not block. */
+  fun sleepTimerState(): NativeSleepTimerState? = sleepTimer.state()
+
+  /**
+   * Which item the end-of-track timer is waiting on, as
+   * [Snapshot.currentItemKey], or `null` for "not latched / not a track-end
+   * timer". Main thread only.
+   *
+   * **The latch is cleared everywhere the timer stops being a track-end timer**
+   * — when it fires ([onSleepTimerFired]), when it is cancelled, when a
+   * *countdown* replaces it, and in [stop]. A latch that outlives its timer is
+   * not inert: the next `setSleepTimerToTrackEnd` marks the mode armed
+   * synchronously on the JS thread while the re-latch is only posted, so a
+   * broadcast block already queued on the main looper can run in between, see a
+   * stale key, decide "the item changed" and pause playback *at the instant of
+   * arming*. The synchronous arm is deliberate (it closes the opposite race — a
+   * broadcast must never be ignored as "not armed"), so the fix is on this side.
+   *
+   * One benign case remains and is benign by construction: re-arming while a
+   * track-end timer is *still* armed keeps the previous latch for the gap
+   * between the sync arm and the posted re-latch. That latch is necessarily
+   * current — had the item changed while the old timer was armed,
+   * [retargetTrackEndTimer] would already have fired it and cleared the latch.
+   */
+  private var trackEndItemKey: String? = null
+
+  /** Main thread only. */
+  private fun clearTrackEndLatch() {
+    trackEndItemKey = null
+  }
+
+  /**
+   * Re-aim the end-of-track timer at whatever the broadcast just changed. Main
+   * thread only; called from every channel.
+   *
+   * This is the whole update mechanism, and it is deliberately the *existing*
+   * one: broadcasts are discontinuity-only, so a seek, a pause, a rate change,
+   * a late-arriving duration and a track change are exactly the events that
+   * move an end-of-track deadline, and there is nothing else to subscribe to and
+   * no timer to run.
+   *
+   * The branching lives in [trackEndAction], which is pure and unit-tested; what
+   * is left here is the part that needs a looper and is therefore
+   * device-verified only.
+   */
+  private fun retargetTrackEndTimer(next: Snapshot) {
+    if (sleepTimer.mode() != SleepTimerMode.TRACKEND) return
+
+    when (val action = trackEndAction(trackEndItemKey, next.currentItemKey)) {
+      TrackEndAction.Fire -> {
+        // Firing here rather than waiting for the computed deadline is what
+        // makes the feature work at all on a live stream or an unknown duration.
+        sleepTimer.cancel()
+        onSleepTimerFired()
+      }
+
+      is TrackEndAction.Wait -> {
+        action.latchTo?.let { trackEndItemKey = it }
+        sleepTimer.scheduleTrackEnd(next.trackEndDelayMs())
+      }
+    }
+  }
 
   /**
    * The sleep timer elapsed. Main thread (see [SleepTimer]).
@@ -400,6 +524,12 @@ internal object MediaSessionController : CommandDispatcher {
    * done, never a request to do it (see `MediaSessionHandlers.onSleepTimer`).
    */
   private fun onSleepTimerFired() {
+    // First, and before anything that can produce a broadcast: the pause below
+    // routes through the app and comes back as a `setPlaybackState`, and every
+    // later arm reads this field. A fired timer that leaves its latch behind is
+    // the defect [trackEndItemKey] documents.
+    clearTrackEndLatch()
+
     val facade = player
     when {
       facade == null ->
@@ -540,3 +670,25 @@ internal object MediaSessionController : CommandDispatcher {
    */
   private const val MAX_DEFERRED_COMMANDS = 8
 }
+
+/**
+ * The shared jump interval, in milliseconds.
+ *
+ * Must equal `DEFAULT_JUMP_SECONDS` in `src/validate.ts`; the TS layer always
+ * sends a concrete value, so this is only reached by a cold start whose mirrored
+ * config predates the option. It is deliberately **not** media3's
+ * `C.DEFAULT_SEEK_BACK_INCREMENT_MS` (5 s) — inheriting that asymmetry from the
+ * platform is the defect this whole option exists to fix.
+ */
+internal const val DEFAULT_JUMP_MS = 15_000L
+
+/**
+ * Seconds → milliseconds for a jump interval.
+ *
+ * Non-positive and non-finite values are rejected in TS; a value that arrives
+ * here some other way (a mirrored config written by a different version) falls
+ * back to the default rather than producing a zero-length jump, which is a
+ * button that looks broken.
+ */
+internal fun Double.toJumpMs(): Long =
+  if (!isFinite() || this <= 0.0) DEFAULT_JUMP_MS else (this * 1000.0).toLong()

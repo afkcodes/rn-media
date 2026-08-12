@@ -100,7 +100,10 @@ describe('onSleepTimer', () => {
 
     native.fireSleepTimer()
 
-    expect(onHandlerError).toHaveBeenCalledWith('onSleepTimer', handler.throwWith)
+    expect(onHandlerError).toHaveBeenCalledWith(
+      'onSleepTimer',
+      handler.throwWith
+    )
   })
 
   it('is a no-op on BaseMediaHandler, and delegates through a decorator', () => {
@@ -178,5 +181,96 @@ describe('onPlaybackResumption', () => {
     class Decorated extends CompositeMediaHandler {}
     new Decorated(inner).onPlaybackResumption()
     expect(inner.calls).toEqual(['onPlaybackResumption'])
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                     End-of-track mode + structured state (B5)              */
+/* -------------------------------------------------------------------------- */
+
+describe('setSleepTimerToTrackEnd', () => {
+  it('arms the native timer with no duration of its own', async () => {
+    // The deadline is not JS's to compute: it comes out of the broadcast
+    // channels and moves whenever they do, so native owns it.
+    const { native, service } = await ready()
+    service.setSleepTimerToTrackEnd()
+
+    expect(native.setSleepTimerToTrackEndCalls).toBe(1)
+    expect(native.sleepTimers).toEqual([])
+  })
+
+  it('replaces a countdown rather than running alongside it', async () => {
+    const { native, service } = await ready()
+    service.setSleepTimer(600)
+    service.setSleepTimerToTrackEnd()
+
+    expect(service.getSleepTimer()?.mode).toBe('trackEnd')
+    expect(native.setSleepTimerToTrackEndCalls).toBe(1)
+  })
+
+  it('is cancelled by cancelSleepTimer like any other timer', async () => {
+    const { service } = await ready()
+    service.setSleepTimerToTrackEnd()
+    service.cancelSleepTimer()
+
+    expect(service.getSleepTimer()).toBeUndefined()
+  })
+
+  it('refuses to arm before init() resolved', () => {
+    const service = createMediaService(new FakeNativeMediaSession())
+    expect(() => service.setSleepTimerToTrackEnd()).toThrowError(
+      /setSleepTimerToTrackEnd\(\)/
+    )
+    expect(() => service.getSleepTimer()).toThrowError(/getSleepTimer\(\)/)
+  })
+})
+
+describe('getSleepTimer', () => {
+  it('is undefined when nothing is armed', async () => {
+    const { service } = await ready()
+    expect(service.getSleepTimer()).toBeUndefined()
+  })
+
+  it('reports a countdown with its remaining seconds', async () => {
+    const { service } = await ready()
+    service.setSleepTimer(45)
+
+    expect(service.getSleepTimer()).toEqual({
+      mode: 'duration',
+      remainingSeconds: 45,
+    })
+  })
+
+  it('reports an armed end-of-track timer that has NO computable deadline', async () => {
+    // The whole reason this method exists. A live stream, a paused player or a
+    // duration that has not arrived yet all leave the timer armed with nothing
+    // to count down — and `getSleepTimerRemaining()` cannot tell that apart
+    // from "not armed", which would make a UI badge disappear.
+    const { service } = await ready()
+    service.setSleepTimerToTrackEnd()
+
+    expect(service.getSleepTimer()).toEqual({ mode: 'trackEnd' })
+    expect(service.getSleepTimerRemaining()).toBeUndefined()
+  })
+
+  it('reports an end-of-track deadline once native can compute one', async () => {
+    const { native, service } = await ready()
+    native.trackEndRemaining = 92
+    service.setSleepTimerToTrackEnd()
+
+    expect(service.getSleepTimer()).toEqual({
+      mode: 'trackEnd',
+      remainingSeconds: 92,
+    })
+    expect(service.getSleepTimerRemaining()).toBe(92)
+  })
+
+  it('fires onSleepTimer through the same path as a countdown', async () => {
+    const { native, handler, service } = await ready()
+    service.setSleepTimerToTrackEnd()
+    native.fireSleepTimer()
+
+    expect(handler.calls).toEqual(['onSleepTimer'])
+    expect(service.getSleepTimer()).toBeUndefined()
   })
 })

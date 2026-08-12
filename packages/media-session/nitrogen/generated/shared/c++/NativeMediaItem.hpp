@@ -32,6 +32,7 @@
 
 #include <string>
 #include <optional>
+#include <unordered_map>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -47,10 +48,17 @@ namespace margelo::nitro::rnmediamediasession {
     std::optional<std::string> artworkUri     SWIFT_PRIVATE;
     std::optional<double> duration     SWIFT_PRIVATE;
     std::optional<std::string> genre     SWIFT_PRIVATE;
+    std::optional<std::string> albumArtist     SWIFT_PRIVATE;
+    std::optional<double> trackNumber     SWIFT_PRIVATE;
+    std::optional<double> discNumber     SWIFT_PRIVATE;
+    std::optional<double> year     SWIFT_PRIVATE;
+    std::optional<std::string> subtitle     SWIFT_PRIVATE;
+    std::optional<bool> isLive     SWIFT_PRIVATE;
+    std::optional<std::unordered_map<std::string, std::string>> extras     SWIFT_PRIVATE;
 
   public:
     NativeMediaItem() = default;
-    explicit NativeMediaItem(std::string id, std::string title, std::optional<std::string> artist, std::optional<std::string> album, std::optional<std::string> artworkUri, std::optional<double> duration, std::optional<std::string> genre): id(id), title(title), artist(artist), album(album), artworkUri(artworkUri), duration(duration), genre(genre) {}
+    explicit NativeMediaItem(std::string id, std::string title, std::optional<std::string> artist, std::optional<std::string> album, std::optional<std::string> artworkUri, std::optional<double> duration, std::optional<std::string> genre, std::optional<std::string> albumArtist, std::optional<double> trackNumber, std::optional<double> discNumber, std::optional<double> year, std::optional<std::string> subtitle, std::optional<bool> isLive, std::optional<std::unordered_map<std::string, std::string>> extras): id(id), title(title), artist(artist), album(album), artworkUri(artworkUri), duration(duration), genre(genre), albumArtist(albumArtist), trackNumber(trackNumber), discNumber(discNumber), year(year), subtitle(subtitle), isLive(isLive), extras(extras) {}
 
   public:
     friend bool operator==(const NativeMediaItem& lhs, const NativeMediaItem& rhs) = default;
@@ -72,7 +80,14 @@ namespace margelo::nitro {
         JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "album"))),
         JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "artworkUri"))),
         JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "duration"))),
-        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "genre")))
+        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "genre"))),
+        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "albumArtist"))),
+        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "trackNumber"))),
+        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "discNumber"))),
+        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "year"))),
+        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "subtitle"))),
+        JSIConverter<std::optional<bool>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "isLive"))),
+        JSIConverter<std::optional<std::unordered_map<std::string, std::string>>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "extras")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::rnmediamediasession::NativeMediaItem& arg) {
@@ -84,6 +99,13 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "artworkUri"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.artworkUri));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "duration"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.duration));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "genre"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.genre));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "albumArtist"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.albumArtist));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "trackNumber"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.trackNumber));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "discNumber"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.discNumber));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "year"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.year));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "subtitle"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.subtitle));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "isLive"), JSIConverter<std::optional<bool>>::toJSI(runtime, arg.isLive));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "extras"), JSIConverter<std::optional<std::unordered_map<std::string, std::string>>>::toJSI(runtime, arg.extras));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -101,6 +123,13 @@ namespace margelo::nitro {
       if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "artworkUri")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "duration")))) return false;
       if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "genre")))) return false;
+      if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "albumArtist")))) return false;
+      if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "trackNumber")))) return false;
+      if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "discNumber")))) return false;
+      if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "year")))) return false;
+      if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "subtitle")))) return false;
+      if (!JSIConverter<std::optional<bool>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "isLive")))) return false;
+      if (!JSIConverter<std::optional<std::unordered_map<std::string, std::string>>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "extras")))) return false;
       return true;
     }
   };

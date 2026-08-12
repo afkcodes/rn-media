@@ -215,7 +215,6 @@ export function useVisualizer(
       setFrame(undefined)
     }
     // `key` stands in for `options` by value; `optionsRef` carries the object.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player, live, key])
 
   return { frame, error, active }

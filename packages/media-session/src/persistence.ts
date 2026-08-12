@@ -4,7 +4,12 @@ import {
   validateMediaItem,
   validateQueue,
 } from './validate'
-import type { MediaItem, MediaServiceApi, PlaybackState } from './types'
+import type {
+  MediaItem,
+  MediaServiceApi,
+  PlaybackState,
+  SleepTimerState,
+} from './types'
 
 /* -------------------------------------------------------------------------- */
 /*                                  Storage                                   */
@@ -53,8 +58,24 @@ export interface MediaSessionStorage {
  * mis-read. A reader that finds a version it does not know returns
  * {@link RestoreResult} `unsupportedVersion` rather than guessing — the whole
  * point of the field.
+ *
+ * ## Version history
+ * - **1** — `{playbackState, mediaItem, queue}` with 6-field media items.
+ * - **2** — `playbackState` gained `repeatMode` / `shuffleEnabled`, and media
+ *   items gained `albumArtist`, `trackNumber`, `discNumber`, `year`,
+ *   `subtitle`, `isLive` and `extras`.
+ *
+ *   Bumped even though the change is *additive*, because the reader that
+ *   matters here is not this one. `ResumptionStore` on Android reads the same
+ *   record with no JavaScript in the process, and the version is the only thing
+ *   it can check; leaving it at 1 would let a v1-era native reader in a
+ *   half-upgraded install (an app update that replaced the JS bundle but is
+ *   still running the previous service) rebuild a session that silently drops
+ *   repeat, shuffle and the extended tags. `unsupportedVersion` — "I will not
+ *   guess" — is the answer this field exists to give, and the cost of it is one
+ *   session's resumption card, which the next broadcast rewrites.
  */
-export const PERSISTENCE_SCHEMA_VERSION = 1
+export const PERSISTENCE_SCHEMA_VERSION = 2
 
 /** Default storage key. Namespaced so it cannot collide with the app's own. */
 export const DEFAULT_PERSISTENCE_KEY = 'rn-media.media-session.session'
@@ -134,14 +155,12 @@ export interface PersistenceOptions {
 }
 
 function defaultOnError(error: unknown): void {
-  // eslint-disable-next-line no-console
   console.error('[media-session] persisting the session failed:', error)
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
   return (
-    value != null &&
-    typeof (value as PromiseLike<unknown>).then === 'function'
+    value != null && typeof (value as PromiseLike<unknown>).then === 'function'
   )
 }
 
@@ -184,7 +203,11 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
  * every implementor to notice would make it a bug in most apps rather than a
  * decision in one place (ARCHITECTURE §13, honest state for live streams).
  */
-function freeze(state: PlaybackState, now: number, durationMs?: number): PlaybackState {
+function freeze(
+  state: PlaybackState,
+  now: number,
+  durationMs?: number
+): PlaybackState {
   const { value, at, rate } = state.position
   const elapsed = Math.max(0, now - at)
   let projected = rate > 0 ? value + elapsed * rate : value
@@ -487,11 +510,17 @@ export function withPersistence(
     setSleepTimer(seconds: number): void {
       service.setSleepTimer(seconds)
     },
+    setSleepTimerToTrackEnd(): void {
+      service.setSleepTimerToTrackEnd()
+    },
     cancelSleepTimer(): void {
       service.cancelSleepTimer()
     },
     getSleepTimerRemaining(): number | undefined {
       return service.getSleepTimerRemaining()
+    },
+    getSleepTimer(): SleepTimerState | undefined {
+      return service.getSleepTimer()
     },
 
     flush(): Promise<void> {
@@ -581,7 +610,8 @@ export async function restorePersisted(
       record.mediaItem === undefined
         ? undefined
         : validateMediaItem(record.mediaItem)
-    const queue = record.queue === undefined ? undefined : validateQueue(record.queue)
+    const queue =
+      record.queue === undefined ? undefined : validateQueue(record.queue)
 
     return {
       status: 'restored',

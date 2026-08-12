@@ -14,10 +14,19 @@
  * The clock is `useProgress`, which projects the position locally from the
  * player's anchor: nothing is polled across the bridge, and the ticker stops
  * itself while paused, buffering or seeking.
+ *
+ * Two more, both conditional on the entry rather than always drawn:
+ *
+ * - **the chapter line**, for entries that have chapters (m4b audiobooks,
+ *   chaptered podcasts). `state.chapter` is the cursor and `getChapters()` is
+ *   the one-node-read list; nothing shows when a plain music track is playing,
+ *   which is the common case.
+ * - **the buffering percentage**, which `PlayerState` publishes *only* while
+ *   `status === 'buffering'` — i.e. only while there is a spinner to label.
  */
 import React from 'react'
 import { Image, StyleSheet, Text, View } from 'react-native'
-import type { Progress } from '@rn-media/player'
+import type { ChapterEntry, Progress } from '@rn-media/player'
 import { COLORS, RADIUS, SHADOW, SPACE, TYPE } from '../theme'
 import type { Track } from '../data/tracks'
 import type { ShellState } from '../playback/shell'
@@ -42,6 +51,7 @@ export function NowPlaying({
   durationMs,
   live,
   ready,
+  chapters,
   onSeek,
 }: {
   track: Track | undefined
@@ -54,9 +64,24 @@ export function NowPlaying({
   durationMs: number | undefined
   live: boolean
   ready: boolean
+  /**
+   * The current entry's chapters, pulled by the composition root when the
+   * player says they may have changed — a list, not a subscription.
+   */
+  chapters: readonly ChapterEntry[]
   onSeek: (seconds: number) => void
 }): React.JSX.Element {
   const durationSeconds = durationMs === undefined ? undefined : durationMs / 1000
+  // `chapter` is `undefined` on an entry with no chapters and `-1` before the
+  // first one starts; both mean "nothing to name here".
+  const chapter =
+    shell.chapter === undefined || shell.chapter < 0
+      ? undefined
+      : chapters[shell.chapter]
+  const chapterLabel =
+    chapter === undefined
+      ? undefined
+      : (chapter.title ?? `Chapter ${String((shell.chapter ?? 0) + 1)}`)
 
   return (
     <View style={styles.container}>
@@ -80,11 +105,26 @@ export function NowPlaying({
             {station}
           </Text>
         )}
+        {chapterLabel === undefined ? null : (
+          <Text numberOfLines={1} style={styles.chapter}>
+            ▸ {chapterLabel}
+            <Text style={styles.chapterCount}>
+              {'  '}
+              {String((shell.chapter ?? 0) + 1)}/{String(chapters.length)}
+            </Text>
+          </Text>
+        )}
       </View>
 
       <View style={styles.statusRow}>
         <Dot color={STATUS_COLOR[shell.status]} />
-        <Text style={styles.status}>{shell.status}</Text>
+        <Text style={styles.status}>
+          {shell.status}
+          {/* Present only while stalled — mpv's own "% until we unpause". */}
+          {shell.bufferingPercent === undefined
+            ? ''
+            : ` ${String(Math.round(shell.bufferingPercent))}%`}
+        </Text>
         <Text style={styles.clock}>
           {formatTime(progress.position)}
           <Text style={styles.clockDim}>
@@ -218,6 +258,8 @@ const styles = StyleSheet.create({
     color: COLORS.accentBright,
   },
   station: { fontSize: TYPE.micro, color: COLORS.muted, letterSpacing: 0.3 },
+  chapter: { fontSize: TYPE.micro, color: COLORS.text, letterSpacing: 0.3 },
+  chapterCount: { color: COLORS.muted },
   statusRow: {
     alignSelf: 'stretch',
     flexDirection: 'row',

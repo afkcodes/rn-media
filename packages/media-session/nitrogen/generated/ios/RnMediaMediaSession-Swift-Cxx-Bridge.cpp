@@ -38,6 +38,22 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     };
   }
   
+  // pragma MARK: std::function<void(MediaRepeatMode /* mode */)>
+  Func_void_MediaRepeatMode create_Func_void_MediaRepeatMode(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_void_MediaRepeatMode::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](MediaRepeatMode mode) mutable -> void {
+      swiftClosure.call(static_cast<int>(mode));
+    };
+  }
+  
+  // pragma MARK: std::function<void(bool /* enabled */)>
+  Func_void_bool create_Func_void_bool(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_void_bool::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](bool enabled) mutable -> void {
+      swiftClosure.call(enabled);
+    };
+  }
+  
   // pragma MARK: std::function<void(const std::string& /* name */, const std::string& /* extras */)>
   Func_void_std__string_std__string create_Func_void_std__string_std__string(void* NON_NULL swiftClosureWrapper) noexcept {
     auto swiftClosure = RnMediaMediaSession::Func_void_std__string_std__string::fromUnsafe(swiftClosureWrapper);

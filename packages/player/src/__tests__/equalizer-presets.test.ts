@@ -53,7 +53,9 @@ describe('peakResponseDb', () => {
   })
 
   it('is negative for a cut-only curve', () => {
-    expect(peakResponseDb(EQUALIZER_PRESETS.bassReducer.gainsDb)).toBeLessThanOrEqual(0)
+    expect(
+      peakResponseDb(EQUALIZER_PRESETS.bassReducer.gainsDb)
+    ).toBeLessThanOrEqual(0)
   })
 })
 
@@ -92,7 +94,10 @@ describe('built-in presets', () => {
     for (const preset of presets) {
       for (const gain of preset.gainsDb) {
         expect(Number.isFinite(gain), `${preset.id} ${String(gain)}`).toBe(true)
-        expect(Math.abs(gain), `${preset.id} ${String(gain)}`).toBeLessThanOrEqual(9)
+        expect(
+          Math.abs(gain),
+          `${preset.id} ${String(gain)}`
+        ).toBeLessThanOrEqual(9)
       }
     }
   })
@@ -179,9 +184,9 @@ describe('built-in presets', () => {
 describe('equalizerPresetChain', () => {
   it('compiles a flat preset to nothing at all', () => {
     expect(equalizerPresetChain(EQUALIZER_PRESETS.flat)).toEqual([])
-    expect(compileAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.flat))).toBe(
-      ''
-    )
+    expect(
+      compileAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.flat))
+    ).toBe('')
   })
 
   it('omits bands sitting at 0 dB instead of emitting no-op filters', () => {
@@ -277,7 +282,9 @@ describe('equalizerPresetChain', () => {
   })
 
   it('compiles Rock to the exact expected chain', () => {
-    expect(compileAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.rock))).toBe(
+    expect(
+      compileAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.rock))
+    ).toBe(
       'volume=volume=%6%-4.8dB,' +
         'equalizer=f=31:t=o:w=1:g=2,' +
         'equalizer=f=62:t=o:w=1:g=4,' +
@@ -355,7 +362,9 @@ describe('presets through the Player', () => {
   it('applies and then clears a preset', async () => {
     const player = await Player.create({ createClient: () => client })
     player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.jazz))
-    expect(client.written.get(MpvProperty.audioFilters)).toContain('equalizer=f=31')
+    expect(client.written.get(MpvProperty.audioFilters)).toContain(
+      'equalizer=f=31'
+    )
 
     player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.flat))
     expect(client.written.get(MpvProperty.audioFilters)).toBe('')

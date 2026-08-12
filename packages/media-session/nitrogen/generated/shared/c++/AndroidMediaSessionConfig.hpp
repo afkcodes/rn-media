@@ -46,10 +46,11 @@ namespace margelo::nitro::rnmediamediasession {
     bool stopForegroundOnPause     SWIFT_PRIVATE;
     std::optional<double> stopForegroundTimeoutMs     SWIFT_PRIVATE;
     bool playbackResumption     SWIFT_PRIVATE;
+    std::optional<double> notificationColor     SWIFT_PRIVATE;
 
   public:
     AndroidMediaSessionConfig() = default;
-    explicit AndroidMediaSessionConfig(std::string notificationChannelId, std::string notificationChannelName, std::optional<std::string> notificationIcon, bool stopForegroundOnPause, std::optional<double> stopForegroundTimeoutMs, bool playbackResumption): notificationChannelId(notificationChannelId), notificationChannelName(notificationChannelName), notificationIcon(notificationIcon), stopForegroundOnPause(stopForegroundOnPause), stopForegroundTimeoutMs(stopForegroundTimeoutMs), playbackResumption(playbackResumption) {}
+    explicit AndroidMediaSessionConfig(std::string notificationChannelId, std::string notificationChannelName, std::optional<std::string> notificationIcon, bool stopForegroundOnPause, std::optional<double> stopForegroundTimeoutMs, bool playbackResumption, std::optional<double> notificationColor): notificationChannelId(notificationChannelId), notificationChannelName(notificationChannelName), notificationIcon(notificationIcon), stopForegroundOnPause(stopForegroundOnPause), stopForegroundTimeoutMs(stopForegroundTimeoutMs), playbackResumption(playbackResumption), notificationColor(notificationColor) {}
 
   public:
     friend bool operator==(const AndroidMediaSessionConfig& lhs, const AndroidMediaSessionConfig& rhs) = default;
@@ -70,7 +71,8 @@ namespace margelo::nitro {
         JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "notificationIcon"))),
         JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundOnPause"))),
         JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundTimeoutMs"))),
-        JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "playbackResumption")))
+        JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "playbackResumption"))),
+        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "notificationColor")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::rnmediamediasession::AndroidMediaSessionConfig& arg) {
@@ -81,6 +83,7 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundOnPause"), JSIConverter<bool>::toJSI(runtime, arg.stopForegroundOnPause));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundTimeoutMs"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.stopForegroundTimeoutMs));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "playbackResumption"), JSIConverter<bool>::toJSI(runtime, arg.playbackResumption));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "notificationColor"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.notificationColor));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -97,6 +100,7 @@ namespace margelo::nitro {
       if (!JSIConverter<bool>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundOnPause")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "stopForegroundTimeoutMs")))) return false;
       if (!JSIConverter<bool>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "playbackResumption")))) return false;
+      if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "notificationColor")))) return false;
       return true;
     }
   };

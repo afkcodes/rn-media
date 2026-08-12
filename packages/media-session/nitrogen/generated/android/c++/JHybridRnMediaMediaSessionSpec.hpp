@@ -61,8 +61,10 @@ namespace margelo::nitro::rnmediamediasession {
     void setResumptionSnapshot(const std::optional<std::string>& snapshot) override;
     std::shared_ptr<Promise<void>> stopService() override;
     void setSleepTimer(double seconds) override;
+    void setSleepTimerToTrackEnd() override;
     void cancelSleepTimer() override;
     std::optional<double> getSleepTimerRemaining() override;
+    std::optional<NativeSleepTimerState> getSleepTimer() override;
 
   private:
     jni::global_ref<JHybridRnMediaMediaSessionSpec::JavaPart> _javaPart;

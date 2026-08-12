@@ -17,6 +17,7 @@ import type {
   MediaServiceApi,
   MediaServiceConfig,
   PlaybackState,
+  SleepTimerState,
 } from './types'
 
 /** {@link MediaServiceApi} plus the one-time wiring call. */
@@ -43,7 +44,6 @@ function defaultOnHandlerError(
   method: keyof MediaHandler,
   error: unknown
 ): void {
-  // eslint-disable-next-line no-console
   console.error(`[media-session] handler.${String(method)}() failed:`, error)
 }
 
@@ -101,7 +101,11 @@ export function createMediaService(
       onHandlerError('customAction', error)
       return undefined
     }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
       onHandlerError(
         'customAction',
         new Error(`extras must be a JSON object, got ${raw}`)
@@ -121,6 +125,10 @@ export function createMediaService(
     skipToQueueItem: (index) =>
       dispatch('skipToQueueItem', (h) => h.skipToQueueItem(index)),
     setRate: (rate) => dispatch('setRate', (h) => h.setRate(rate)),
+    setRepeatMode: (mode) =>
+      dispatch('onSetRepeatMode', (h) => h.onSetRepeatMode?.(mode)),
+    setShuffle: (enabled) =>
+      dispatch('onSetShuffle', (h) => h.onSetShuffle?.(enabled)),
     onTaskRemoved: () => dispatch('onTaskRemoved', (h) => h.onTaskRemoved()),
     customAction: (name, extras) => {
       const parsed = parseExtras(extras)
@@ -148,7 +156,9 @@ export function createMediaService(
 
     setMediaItem(item?: MediaItem): void {
       assertReady('setMediaItem()')
-      native.setMediaItem(item === undefined ? undefined : validateMediaItem(item))
+      native.setMediaItem(
+        item === undefined ? undefined : validateMediaItem(item)
+      )
     },
 
     setQueue(items: MediaItem[]): void {
@@ -172,6 +182,11 @@ export function createMediaService(
       native.setSleepTimer(validateSleepTimerSeconds(seconds))
     },
 
+    setSleepTimerToTrackEnd(): void {
+      assertReady('setSleepTimerToTrackEnd()')
+      native.setSleepTimerToTrackEnd()
+    },
+
     cancelSleepTimer(): void {
       assertReady('cancelSleepTimer()')
       native.cancelSleepTimer()
@@ -180,6 +195,19 @@ export function createMediaService(
     getSleepTimerRemaining(): number | undefined {
       assertReady('getSleepTimerRemaining()')
       return native.getSleepTimerRemaining()
+    },
+
+    getSleepTimer(): SleepTimerState | undefined {
+      assertReady('getSleepTimer()')
+      const timer = native.getSleepTimer()
+      if (timer === undefined) return undefined
+      // Widened into the discriminated union by hand rather than cast: the
+      // bridge struct has an optional `remainingSeconds` for *both* modes
+      // because a nitro struct cannot be a union, and the `duration` arm's
+      // number is not optional in the API this package publishes.
+      return timer.mode === 'duration'
+        ? { mode: 'duration', remainingSeconds: timer.remainingSeconds ?? 0 }
+        : { mode: 'trackEnd', remainingSeconds: timer.remainingSeconds }
     },
 
     async stopService(): Promise<void> {
@@ -248,7 +276,9 @@ export const MediaService: MediaServiceController = {
   setResumptionSnapshot: (snapshot) =>
     resolveSingleton().setResumptionSnapshot(snapshot),
   setSleepTimer: (seconds) => resolveSingleton().setSleepTimer(seconds),
+  setSleepTimerToTrackEnd: () => resolveSingleton().setSleepTimerToTrackEnd(),
   cancelSleepTimer: () => resolveSingleton().cancelSleepTimer(),
   getSleepTimerRemaining: () => resolveSingleton().getSleepTimerRemaining(),
+  getSleepTimer: () => resolveSingleton().getSleepTimer(),
   stopService: () => resolveSingleton().stopService(),
 }

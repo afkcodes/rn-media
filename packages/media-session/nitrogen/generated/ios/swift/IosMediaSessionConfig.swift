@@ -18,10 +18,22 @@ public extension IosMediaSessionConfig {
   /**
    * Create a new instance of `IosMediaSessionConfig`.
    */
-  init(artworkCacheSize: Double?) {
+  init(artworkCacheSize: Double?, supportedPlaybackRates: [Double]?) {
     self.init({ () -> bridge.std__optional_double_ in
       if let __unwrappedValue = artworkCacheSize {
         return bridge.create_std__optional_double_(__unwrappedValue)
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_std__vector_double__ in
+      if let __unwrappedValue = supportedPlaybackRates {
+        return bridge.create_std__optional_std__vector_double__({ () -> bridge.std__vector_double_ in
+          var __vector = bridge.create_std__vector_double_(__unwrappedValue.count)
+          for __item in __unwrappedValue {
+            __vector.push_back(__item)
+          }
+          return __vector
+        }())
       } else {
         return .init()
       }
@@ -34,6 +46,18 @@ public extension IosMediaSessionConfig {
       if bridge.has_value_std__optional_double_(self.__artworkCacheSize) {
         let __unwrapped = bridge.get_std__optional_double_(self.__artworkCacheSize)
         return __unwrapped
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var supportedPlaybackRates: [Double]? {
+    return { () -> [Double]? in
+      if bridge.has_value_std__optional_std__vector_double__(self.__supportedPlaybackRates) {
+        let __unwrapped = bridge.get_std__optional_std__vector_double__(self.__supportedPlaybackRates)
+        return __unwrapped.map({ __item in __item })
       } else {
         return nil
       }

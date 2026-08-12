@@ -44,7 +44,7 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 |---|---|---|---|---|---|
 | Engine | ExoPlayer / AVPlayer | ExoPlayer / AVPlayer | ExoPlayer / AVPlayer | not documented | **libmpv 0.41.0 + FFmpeg 8.1.2 — our own build** |
 | One identical engine on both platforms | ❌ two engines | ❌ | ❌ | — | ✅ same sources, same flags: 103 mpv options a side, **101 identical** (the two that differ are the platform's audio device) |
-| Formats | platform codecs | platform codecs | platform codecs | not documented | everything FFmpeg decodes — MP3, AAC/M4A, FLAC, OGG/Opus, HLS, ICY/Icecast, TrueHD, cover art, legacy-charset tags |
+| Formats | platform codecs | platform codecs | platform codecs | not documented | everything FFmpeg decodes — MP3, AAC/M4A, FLAC, OGG/Opus, HLS, ICY/Icecast, TrueHD, embedded cover-art streams (decoded, extraction API planned), legacy-charset tags |
 | Multiple players | ❌ singleton | ✅ | ✅ | ❌ singleton | ✅ one mpv core each |
 | Background + media session | ✅ best-in-class | ✅ lock screen + notification | ⚠️ notification controls | ✅ | ✅ media3 `MediaLibraryService`, native-first commands |
 | Session layer works with *any* player | ❌ | ❌ | ❌ | ❌ | ✅ (`@rn-media/media-session` is player-agnostic) |
@@ -625,6 +625,19 @@ development build. [Plugin reference](packages/media-session/README.md#expo-conf
   on top of it was not good enough to ship. Loudness-aware fade points are
   recorded as the one revisit worth making. A competitor ships crossfade; we do
   not, and would rather say that than pretend the row does not exist.
+- **Embedded cover art decodes, but cannot be extracted yet.** The eight
+  cover-art decoders (bmp, gif, jpeg2000, jpegls, mjpeg, png, tiff, webp) are
+  compiled into both binaries and mpv reports an attached picture through
+  `track-list/N/albumart` — but there is **no API to get the bytes**, and the
+  audio-only core is why: it runs `audio-display=no`, under which mpv never
+  selects the attached-picture track at all (`player/loadfile.c:617`), and the
+  only image-returning command in the client API, `screenshot-raw`, needs a
+  configured video output, which this core deliberately never creates
+  (`vid=no`, `force-window=no`). So the formats row above means "the stream
+  decodes", not "you can render the artwork". Until this ships, read artwork
+  from your own library/API and pass it as `MediaItem.artworkUri`. Local-file
+  extraction is the gap to close, and it is native work rather than a
+  TypeScript wrapper.
 - **Persistence has two honest edges**: writes happen on broadcasts, so a track
   played straight through saves nothing until you call `service.save()`; and a
   live stream saves position `0`, because an offset into it has nothing to seek

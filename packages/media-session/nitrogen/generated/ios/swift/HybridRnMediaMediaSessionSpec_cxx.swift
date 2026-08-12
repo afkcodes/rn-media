@@ -225,6 +225,17 @@ open class HybridRnMediaMediaSessionSpec_cxx {
   }
   
   @inline(__always)
+  public final func setSleepTimerToTrackEnd() -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setSleepTimerToTrackEnd()
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
   public final func cancelSleepTimer() -> bridge.Result_void_ {
     do {
       try self.__implementation.cancelSleepTimer()
@@ -250,6 +261,24 @@ open class HybridRnMediaMediaSessionSpec_cxx {
     } catch (let __error) {
       let __exceptionPtr = __error.toCpp()
       return bridge.create_Result_std__optional_double__(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func getSleepTimer() -> bridge.Result_std__optional_NativeSleepTimerState__ {
+    do {
+      let __result = try self.__implementation.getSleepTimer()
+      let __resultCpp = { () -> bridge.std__optional_NativeSleepTimerState_ in
+        if let __unwrappedValue = __result {
+          return bridge.create_std__optional_NativeSleepTimerState_(__unwrappedValue)
+        } else {
+          return .init()
+        }
+      }()
+      return bridge.create_Result_std__optional_NativeSleepTimerState__(__resultCpp)
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_std__optional_NativeSleepTimerState__(__exceptionPtr)
     }
   }
 }

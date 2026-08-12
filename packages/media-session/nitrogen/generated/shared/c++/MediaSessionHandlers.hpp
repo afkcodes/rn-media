@@ -28,9 +28,11 @@
 #error NitroModules cannot be found! Are you sure you installed NitroModules properly?
 #endif
 
-
+// Forward declaration of `MediaRepeatMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 
 #include <functional>
+#include "MediaRepeatMode.hpp"
 #include <string>
 
 namespace margelo::nitro::rnmediamediasession {
@@ -48,6 +50,8 @@ namespace margelo::nitro::rnmediamediasession {
     std::function<void()> skipToPrevious     SWIFT_PRIVATE;
     std::function<void(double /* index */)> skipToQueueItem     SWIFT_PRIVATE;
     std::function<void(double /* rate */)> setRate     SWIFT_PRIVATE;
+    std::function<void(MediaRepeatMode /* mode */)> setRepeatMode     SWIFT_PRIVATE;
+    std::function<void(bool /* enabled */)> setShuffle     SWIFT_PRIVATE;
     std::function<void()> onTaskRemoved     SWIFT_PRIVATE;
     std::function<void(const std::string& /* name */, const std::string& /* extras */)> customAction     SWIFT_PRIVATE;
     std::function<void()> onSleepTimer     SWIFT_PRIVATE;
@@ -55,10 +59,10 @@ namespace margelo::nitro::rnmediamediasession {
 
   public:
     MediaSessionHandlers() = default;
-    explicit MediaSessionHandlers(std::function<void()> play, std::function<void()> pause, std::function<void()> stop, std::function<void(double /* position */)> seekTo, std::function<void()> skipToNext, std::function<void()> skipToPrevious, std::function<void(double /* index */)> skipToQueueItem, std::function<void(double /* rate */)> setRate, std::function<void()> onTaskRemoved, std::function<void(const std::string& /* name */, const std::string& /* extras */)> customAction, std::function<void()> onSleepTimer, std::function<void()> onPlaybackResumption): play(play), pause(pause), stop(stop), seekTo(seekTo), skipToNext(skipToNext), skipToPrevious(skipToPrevious), skipToQueueItem(skipToQueueItem), setRate(setRate), onTaskRemoved(onTaskRemoved), customAction(customAction), onSleepTimer(onSleepTimer), onPlaybackResumption(onPlaybackResumption) {}
+    explicit MediaSessionHandlers(std::function<void()> play, std::function<void()> pause, std::function<void()> stop, std::function<void(double /* position */)> seekTo, std::function<void()> skipToNext, std::function<void()> skipToPrevious, std::function<void(double /* index */)> skipToQueueItem, std::function<void(double /* rate */)> setRate, std::function<void(MediaRepeatMode /* mode */)> setRepeatMode, std::function<void(bool /* enabled */)> setShuffle, std::function<void()> onTaskRemoved, std::function<void(const std::string& /* name */, const std::string& /* extras */)> customAction, std::function<void()> onSleepTimer, std::function<void()> onPlaybackResumption): play(play), pause(pause), stop(stop), seekTo(seekTo), skipToNext(skipToNext), skipToPrevious(skipToPrevious), skipToQueueItem(skipToQueueItem), setRate(setRate), setRepeatMode(setRepeatMode), setShuffle(setShuffle), onTaskRemoved(onTaskRemoved), customAction(customAction), onSleepTimer(onSleepTimer), onPlaybackResumption(onPlaybackResumption) {}
 
   public:
-    // MediaSessionHandlers is not equatable because these properties are not equatable: play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption
+    // MediaSessionHandlers is not equatable because these properties are not equatable: play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, setRepeatMode, setShuffle, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption
   };
 
 } // namespace margelo::nitro::rnmediamediasession
@@ -79,6 +83,8 @@ namespace margelo::nitro {
         JSIConverter<std::function<void()>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "skipToPrevious"))),
         JSIConverter<std::function<void(double)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "skipToQueueItem"))),
         JSIConverter<std::function<void(double)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRate"))),
+        JSIConverter<std::function<void(margelo::nitro::rnmediamediasession::MediaRepeatMode)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRepeatMode"))),
+        JSIConverter<std::function<void(bool)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setShuffle"))),
         JSIConverter<std::function<void()>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onTaskRemoved"))),
         JSIConverter<std::function<void(const std::string&, const std::string&)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "customAction"))),
         JSIConverter<std::function<void()>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onSleepTimer"))),
@@ -95,6 +101,8 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "skipToPrevious"), JSIConverter<std::function<void()>>::toJSI(runtime, arg.skipToPrevious));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "skipToQueueItem"), JSIConverter<std::function<void(double)>>::toJSI(runtime, arg.skipToQueueItem));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "setRate"), JSIConverter<std::function<void(double)>>::toJSI(runtime, arg.setRate));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "setRepeatMode"), JSIConverter<std::function<void(margelo::nitro::rnmediamediasession::MediaRepeatMode)>>::toJSI(runtime, arg.setRepeatMode));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "setShuffle"), JSIConverter<std::function<void(bool)>>::toJSI(runtime, arg.setShuffle));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "onTaskRemoved"), JSIConverter<std::function<void()>>::toJSI(runtime, arg.onTaskRemoved));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "customAction"), JSIConverter<std::function<void(const std::string&, const std::string&)>>::toJSI(runtime, arg.customAction));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "onSleepTimer"), JSIConverter<std::function<void()>>::toJSI(runtime, arg.onSleepTimer));
@@ -117,6 +125,8 @@ namespace margelo::nitro {
       if (!JSIConverter<std::function<void()>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "skipToPrevious")))) return false;
       if (!JSIConverter<std::function<void(double)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "skipToQueueItem")))) return false;
       if (!JSIConverter<std::function<void(double)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRate")))) return false;
+      if (!JSIConverter<std::function<void(margelo::nitro::rnmediamediasession::MediaRepeatMode)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRepeatMode")))) return false;
+      if (!JSIConverter<std::function<void(bool)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setShuffle")))) return false;
       if (!JSIConverter<std::function<void()>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onTaskRemoved")))) return false;
       if (!JSIConverter<std::function<void(const std::string&, const std::string&)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "customAction")))) return false;
       if (!JSIConverter<std::function<void()>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onSleepTimer")))) return false;

@@ -22,6 +22,8 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaControl; }
 namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
 // Forward declaration of `MediaPlaybackStatus` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class MediaPlaybackStatus; }
+// Forward declaration of `MediaRepeatMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 // Forward declaration of `MediaSessionConfig` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct MediaSessionConfig; }
 // Forward declaration of `MediaSessionHandlers` to properly resolve imports.
@@ -30,8 +32,12 @@ namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
+// Forward declaration of `NativeSleepTimerState` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 // Forward declaration of `PositionAnchor` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct PositionAnchor; }
+// Forward declaration of `SleepTimerMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 
 // Include C++ defined types
 #include "AndroidMediaSessionConfig.hpp"
@@ -41,11 +47,14 @@ namespace margelo::nitro::rnmediamediasession { struct PositionAnchor; }
 #include "MediaControl.hpp"
 #include "MediaCustomAction.hpp"
 #include "MediaPlaybackStatus.hpp"
+#include "MediaRepeatMode.hpp"
 #include "MediaSessionConfig.hpp"
 #include "MediaSessionHandlers.hpp"
 #include "NativeMediaItem.hpp"
 #include "NativePlaybackState.hpp"
+#include "NativeSleepTimerState.hpp"
 #include "PositionAnchor.hpp"
+#include "SleepTimerMode.hpp"
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/Result.hpp>
 #include <exception>
@@ -53,6 +62,7 @@ namespace margelo::nitro::rnmediamediasession { struct PositionAnchor; }
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // C++ helpers for Swift

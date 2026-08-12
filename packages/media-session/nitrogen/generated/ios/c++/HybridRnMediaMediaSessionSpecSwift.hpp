@@ -20,6 +20,8 @@ namespace margelo::nitro::rnmediamediasession { struct AndroidMediaSessionConfig
 namespace margelo::nitro::rnmediamediasession { struct IosMediaSessionConfig; }
 // Forward declaration of `MediaSessionHandlers` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
+// Forward declaration of `MediaRepeatMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
 // Forward declaration of `MediaPlaybackStatus` to properly resolve imports.
@@ -34,6 +36,10 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaCapability; }
 namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
+// Forward declaration of `NativeSleepTimerState` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
+// Forward declaration of `SleepTimerMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 
 #include <NitroModules/Promise.hpp>
 #include "MediaSessionConfig.hpp"
@@ -41,16 +47,20 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include <optional>
 #include <string>
 #include "IosMediaSessionConfig.hpp"
+#include <vector>
 #include "MediaSessionHandlers.hpp"
 #include <functional>
+#include "MediaRepeatMode.hpp"
 #include "NativePlaybackState.hpp"
 #include "MediaPlaybackStatus.hpp"
 #include "PositionAnchor.hpp"
 #include "MediaControl.hpp"
-#include <vector>
 #include "MediaCapability.hpp"
 #include "MediaCustomAction.hpp"
 #include "NativeMediaItem.hpp"
+#include <unordered_map>
+#include "NativeSleepTimerState.hpp"
+#include "SleepTimerMode.hpp"
 
 #include "RnMediaMediaSession-Swift-Cxx-Umbrella.hpp"
 
@@ -148,6 +158,12 @@ namespace margelo::nitro::rnmediamediasession {
         std::rethrow_exception(__result.error());
       }
     }
+    inline void setSleepTimerToTrackEnd() override {
+      auto __result = _swiftPart.setSleepTimerToTrackEnd();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
     inline void cancelSleepTimer() override {
       auto __result = _swiftPart.cancelSleepTimer();
       if (__result.hasError()) [[unlikely]] {
@@ -156,6 +172,14 @@ namespace margelo::nitro::rnmediamediasession {
     }
     inline std::optional<double> getSleepTimerRemaining() override {
       auto __result = _swiftPart.getSleepTimerRemaining();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+      auto __value = std::move(__result.value());
+      return __value;
+    }
+    inline std::optional<NativeSleepTimerState> getSleepTimer() override {
+      auto __result = _swiftPart.getSleepTimer();
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }

@@ -17,6 +17,7 @@ import androidx.media3.session.MediaSession.ConnectionResult
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
@@ -84,7 +85,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * the *deadline*: a revival that stalls must end, and end loudly enough that
    * the app author knows which of the two things went wrong.
    */
-  private class Revival(val config: AndroidMediaSessionConfig) {
+  private class Revival(val config: MirroredConfig) {
     var started = false
     var startedAtMs = 0L
     /** `0` until the `ReactContext` exists — which of the two stages timed out. */
@@ -129,7 +130,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
 
     val (config, seed) = prepared
     revival = Revival(config)
-    configureNotification(config)
+    configureNotification(config.android)
     openSession(controller.attachRevivedService(this, config, seed))
     refresh(seed)
     Log.i(
@@ -150,7 +151,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   private fun configureNotification(config: AndroidMediaSessionConfig?) {
     createNotificationChannel(config?.notificationChannelId, config?.notificationChannelName)
 
-    val provider = DefaultMediaNotificationProvider.Builder(this)
+    val defaults = DefaultMediaNotificationProvider.Builder(this)
       .apply { config?.notificationChannelId?.let { setChannelId(it) } }
       .build()
     // `setChannelName` takes a *string resource id*, which a runtime-configured
@@ -164,8 +165,8 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       // not name one, or named one that does not resolve: an unset/invalid
       // small icon makes `Notification` throw, which would take the
       // foreground-service start down with it.
-      ?.let(provider::setSmallIcon)
-    setMediaNotificationProvider(provider)
+      ?.let(defaults::setSmallIcon)
+    setMediaNotificationProvider(tinted(defaults, config?.notificationColor))
     applyForegroundServiceTimeout(config?.stopForegroundTimeoutMs)
 
     setListener(object : Listener {
@@ -182,6 +183,63 @@ class RnMediaMediaSessionService : MediaLibraryService() {
         )
       }
     })
+  }
+
+  /**
+   * `notificationColor` → `Notification.color`.
+   *
+   * A decorator rather than a subclass, and not by preference:
+   * `DefaultMediaNotificationProvider.createNotification` and
+   * `handleCustomCommand` are both **`final`** in media3 1.11.0 (`javap` on the
+   * shipped `media3-session` AAR), and the provider's `Builder` exposes channel
+   * id, channel name, notification id and small icon — no colour. So the only
+   * public lever is to let media3 build the notification exactly as it always
+   * does and set the field on the result. Setting it *after* the build is also
+   * what makes it stick: nothing media3 does afterwards rewrites it.
+   *
+   * `getNotificationChannelInfo()` is delegated rather than reimplemented — it
+   * is how media3 knows which channel to create, and answering it ourselves
+   * would fork a decision the provider already owns.
+   *
+   * Returns the provider unchanged when no colour was configured, so an app that
+   * does not use this feature has exactly the object graph it had before.
+   */
+  private fun tinted(
+    delegate: MediaNotification.Provider,
+    color: Double?,
+  ): MediaNotification.Provider {
+    // `toLong().toInt()` rather than `toInt()`: an ARGB value with the alpha bit
+    // set (0xFF1DB954 = 4_278_202_708) is larger than Int.MAX_VALUE, and
+    // `Double.toInt()` saturates at Int.MAX_VALUE — silently turning opaque
+    // green into white. Going through Long truncates to the low 32 bits, which
+    // is the signed colour int Android wants.
+    val argb = color?.toLong()?.toInt() ?: return delegate
+    return object : MediaNotification.Provider {
+      override fun createNotification(
+        mediaSession: MediaSession,
+        customLayout: ImmutableList<androidx.media3.session.CommandButton>,
+        actionFactory: MediaNotification.ActionFactory,
+        onNotificationChangedCallback: MediaNotification.Provider.Callback,
+      ): MediaNotification {
+        val built = delegate.createNotification(
+          mediaSession,
+          customLayout,
+          actionFactory,
+          onNotificationChangedCallback,
+        )
+        built.notification.color = argb
+        return built
+      }
+
+      override fun handleCustomCommand(
+        session: MediaSession,
+        action: String,
+        extras: Bundle,
+      ): Boolean = delegate.handleCustomCommand(session, action, extras)
+
+      override fun getNotificationChannelInfo(): MediaNotification.Provider.NotificationChannelInfo =
+        delegate.notificationChannelInfo
+    }
   }
 
   private fun openSession(player: BroadcastPlayer) {
@@ -215,9 +273,9 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * - there is no persisted session to resume (no `withPersistence`, or it was
    *   cleared).
    */
-  private fun prepareRevival(): Pair<AndroidMediaSessionConfig, Snapshot>? {
+  private fun prepareRevival(): Pair<MirroredConfig, Snapshot>? {
     val config = ResumptionStore.readConfig(this) ?: return null
-    if (!config.playbackResumption) return null
+    if (!config.android.playbackResumption) return null
 
     if (!ReactRuntime.canRevive(this)) {
       // One line, once, and then the pre-existing behaviour. A brownfield app
@@ -280,7 +338,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       pending.started = true
       pending.startedAtMs = SystemClock.elapsedRealtime()
 
-      postResumptionNotification(pending.config)
+      postResumptionNotification(pending.config.android)
 
       if (!ReactRuntime.startRuntime(this) { onRuntimeReady() }) {
         abandonRevival("ReactHost.start() could not be issued")

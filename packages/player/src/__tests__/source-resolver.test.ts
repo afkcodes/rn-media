@@ -91,7 +91,9 @@ describe('setSourceResolver lifecycle', () => {
   it('honours `resolverTimeoutMs`', async () => {
     const player = await createPlayer({ resolverTimeoutMs: 2_500 })
     player.setSourceResolver((request) => request.uri)
-    expect(client.resolverCalls).toEqual([{ kind: 'install', timeoutMs: 2_500 }])
+    expect(client.resolverCalls).toEqual([
+      { kind: 'install', timeoutMs: 2_500 },
+    ])
     player.destroy()
   })
 
@@ -256,15 +258,20 @@ describe('resolve-ahead', () => {
     const reads = vi.spyOn(client, 'getPropertyString')
 
     moveCursor(0, 2)
-    // Synchronously after the batch: nothing has asked mpv for a filename.
+    // Synchronously after the batch: exactly one filename read, and it is not
+    // resolve-ahead's. The player reads the *current* entry's URI inline on a
+    // cursor change (error classification is keyed on it, and the boundary is
+    // already paid for); resolve-ahead's pair of reads is what must not be
+    // here, and would show up as entry 1's filename alongside it.
     expect(
       reads.mock.calls.filter(([name]) => name.startsWith('playlist/'))
-    ).toEqual([])
+    ).toEqual([['playlist/0/filename']])
 
     await settle()
+    // Two more: resolve-ahead asking for the current and the next entry.
     expect(
       reads.mock.calls.filter(([name]) => name.startsWith('playlist/')).length
-    ).toBe(2)
+    ).toBe(3)
     expect(client.resolvedSources.get('library://a')).toBe('library://a?sig')
     player.destroy()
   })
@@ -669,8 +676,6 @@ describe('generation guarding', () => {
     release?.('https://cdn/late')
     await settle()
 
-    expect(
-      client.resolverCalls.some((call) => call.kind === 'set')
-    ).toBe(false)
+    expect(client.resolverCalls.some((call) => call.kind === 'set')).toBe(false)
   })
 })

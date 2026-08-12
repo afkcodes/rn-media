@@ -19,11 +19,7 @@ import type { HybridObject } from 'react-native-nitro-modules'
  * the same constraint that forced `defaultMode` in `@rn-media/audio-session`.
  */
 export type MediaPlaybackStatus =
-  | 'playing'
-  | 'paused'
-  | 'buffering'
-  | 'stopped'
-  | 'error'
+  'playing' | 'paused' | 'buffering' | 'stopped' | 'error'
 
 /**
  * A button the app wants offered on remote surfaces.
@@ -49,6 +45,33 @@ export type MediaControl =
    */
   | 'fastForward'
   | 'rewind'
+  /**
+   * The repeat toggle, drawn with the icon for the **current**
+   * {@link NativePlaybackState.repeatMode} — media3's `ICON_REPEAT_OFF` /
+   * `ICON_REPEAT_ONE` / `ICON_REPEAT_ALL`.
+   *
+   * Listing it here is what actually puts the button on the Android
+   * notification: `DefaultMediaNotificationProvider` draws previous / play-pause
+   * / next and nothing else, so the {@link MediaCapability} alone lights up
+   * Android Auto, Wear and third-party controllers (which read
+   * `Player.repeatMode` directly) but leaves the phone's shade unchanged.
+   *
+   * Pressing it does not cycle anything by itself — it delivers
+   * `setRepeatMode(next)` to the app, and the app's next broadcast is what moves
+   * the state and the icon.
+   *
+   * Named `repeatMode` rather than the obvious `repeat` because a member becomes
+   * a native enumerator verbatim, and `repeat` is a **Swift keyword** — the same
+   * collision that forced `defaultMode` in `@rn-media/audio-session`. Swift may
+   * well accept `.repeat` after a dot; "may well" is not something to discover
+   * on a macOS CI box that this Linux dev machine cannot run.
+   */
+  | 'repeatMode'
+  /**
+   * The shuffle toggle (`ICON_SHUFFLE_ON` / `ICON_SHUFFLE_OFF`, chosen from
+   * {@link NativePlaybackState.shuffleEnabled}). See {@link repeatMode}.
+   */
+  | 'shuffle'
 
 /**
  * A capability the app is willing to service, independent of whether it wants a
@@ -68,6 +91,49 @@ export type MediaCapability =
   | 'skipToPrevious'
   | 'skipToQueueItem'
   | 'setRate'
+  /**
+   * The repeat button every notification-shade music player shows.
+   *
+   * Android: `Player.COMMAND_SET_REPEAT_MODE` (= 15, media3 1.11.0) on the
+   * facade's available commands, which is what makes media3 call
+   * `SimpleBasePlayer.handleSetRepeatMode(int)` and draw the button at all.
+   * iOS: `MPRemoteCommandCenter.changeRepeatModeCommand`.
+   *
+   * The *current* mode travels on {@link NativePlaybackState.repeatMode}; this
+   * only says the app is willing to be asked to change it.
+   */
+  | 'setRepeatMode'
+  /**
+   * The shuffle button. Android: `Player.COMMAND_SET_SHUFFLE_MODE` (= 14) →
+   * `handleSetShuffleModeEnabled(boolean)`. iOS:
+   * `MPRemoteCommandCenter.changeShuffleModeCommand`.
+   *
+   * Current state travels on {@link NativePlaybackState.shuffleEnabled}.
+   */
+  | 'setShuffle'
+
+/**
+ * Repeat mode as every remote surface understands it.
+ *
+ * Deliberately three members and no integer count: this is the *session's*
+ * vocabulary, and it is exactly what both platforms can express —
+ * media3's `Player.REPEAT_MODE_OFF/_ONE/_ALL` (0/1/2) and MediaPlayer's
+ * `MPRepeatType.off/.one/.all`. `@rn-media/player`'s richer `loopRaw` (mpv
+ * accepts a repeat *count*) does not fit on a notification button and is not
+ * flattened into a lie here — an app playing "repeat this track 3×" broadcasts
+ * whichever of these three is the honest summary.
+ */
+export type MediaRepeatMode = 'off' | 'one' | 'all'
+
+/**
+ * Which shape of sleep timer is armed. See
+ * {@link RnMediaMediaSession.getSleepTimer}.
+ */
+export type SleepTimerMode =
+  /** {@link RnMediaMediaSession.setSleepTimer} — a wall-clock countdown. */
+  | 'duration'
+  /** {@link RnMediaMediaSession.setSleepTimerToTrackEnd}. */
+  | 'trackEnd'
 
 /* -------------------------------------------------------------------------- */
 /*                                   Config                                   */
@@ -172,6 +238,31 @@ export interface AndroidMediaSessionConfig {
    * ever changes.
    */
   playbackResumption: boolean
+  /**
+   * Notification accent colour, as an **ARGB integer** (`0xFF1DB954`).
+   *
+   * Written straight onto `Notification.color` through a thin
+   * `MediaNotification.Provider` decorator, because
+   * `DefaultMediaNotificationProvider.createNotification` is `final` in media3
+   * 1.11.0 (`javap` on the shipped AAR) and its `Builder` exposes channel id,
+   * channel name, notification id and small icon — but no colour. Decorating
+   * the provider and setting the field on the notification it returns is the
+   * only public lever, and it is applied after media3 has finished building, so
+   * nothing media3 does can overwrite it.
+   *
+   * Alpha is part of the value and is not optional: `0x1DB954` (alpha `0x00`)
+   * is transparent black on some OEM shades. Write the full `0xFFRRGGBB`.
+   *
+   * Whether the system *uses* it is the system's decision, and it changed twice:
+   * pre-Android-12 shades tint the small icon and action text with it, Android
+   * 12+ media notifications derive their own palette from the artwork and may
+   * ignore it entirely. It is therefore a hint, never a guarantee — the same
+   * status it has in every other library that exposes it.
+   *
+   * Ignored on iOS: `MPNowPlayingInfoCenter` has no colour surface at all. The
+   * lock screen's palette comes from the artwork, which is not ours to tint.
+   */
+  notificationColor?: number
 }
 
 /**
@@ -201,12 +292,73 @@ export interface IosMediaSessionConfig {
    * @default 8
    */
   artworkCacheSize?: number
+  /**
+   * Playback rates offered to the lock screen's rate control, ascending.
+   *
+   * `MPChangePlaybackRateCommand.supportedPlaybackRates` is a *fixed list*: iOS
+   * shows the control only when there is something to show, and it snaps the
+   * user's choice to a member of this array. An audiobook app that offers
+   * 1.0/1.25/1.5/1.75/2.0/3.0 has no way to say so without this.
+   *
+   * @default [0.5, 0.75, 1, 1.25, 1.5, 2]
+   *
+   * ## Why there is no Android twin (checked, not assumed)
+   * Nothing on the Android side takes a list. media3's speed lever is
+   * `Player.COMMAND_SET_SPEED_AND_PITCH` → `setPlaybackParameters(...)`, which
+   * accepts an arbitrary float; there is no "supported rates" concept anywhere
+   * in `Player`, `MediaSession` or `PlaybackStateCompat` (`javap` over the
+   * shipped `media3-common`/`media3-session` 1.11.0 AARs finds no such API),
+   * and media3's notification draws no rate control at all — a controller that
+   * wants one builds its own UI and picks its own numbers. So this is a genuine
+   * platform asymmetry rather than a missing mapping, and it is namespaced under
+   * `ios` for the same reason `playbackResumption` is namespaced under
+   * `android`: the shape of the config should say which platform can honour it.
+   *
+   * Setting it on Android is harmless and does nothing.
+   */
+  supportedPlaybackRates?: number[]
 }
 
-/** Both halves optional — supply only the platform you care about. */
+/**
+ * Both platform halves optional — supply only the platform you care about. The
+ * cross-platform options sit at the top level.
+ */
 export interface MediaSessionConfig {
   android?: AndroidMediaSessionConfig
   ios?: IosMediaSessionConfig
+  /**
+   * How far the `fastForward` control jumps, in seconds.
+   *
+   * Cross-platform on purpose, and the reason this option exists at all: before
+   * it, the two platforms disagreed from the same JS call. iOS pinned 15 s in
+   * both directions (`RemoteCommandBinding.skipInterval`) while Android set
+   * neither increment and therefore inherited media3's defaults —
+   * `C.DEFAULT_SEEK_BACK_INCREMENT_MS = 5000`,
+   * `C.DEFAULT_SEEK_FORWARD_INCREMENT_MS = 15000` (verified by `javap` on the
+   * shipped media3 1.11.0 AAR) — so the same app skipped back 5 s on Android and
+   * 15 s on iOS.
+   *
+   * Android: `SimpleBasePlayer.State.Builder.setSeekForwardIncrementMs(long)`,
+   * which is what `COMMAND_SEEK_FORWARD` resolves against before it reaches us
+   * as an absolute seek. iOS: `MPSkipIntervalCommand.preferredIntervals`.
+   *
+   * @default 15
+   */
+  jumpForwardSeconds: number
+  /**
+   * How far the `rewind` control jumps, in seconds. See
+   * {@link jumpForwardSeconds}.
+   *
+   * **The shared default is 15, not media3's 5.** Picked deliberately: 15/15 is
+   * what RNTP V4 (`forwardJumpInterval`/`backwardJumpInterval`) and RNTP V5
+   * (`forwardInterval`/`backwardInterval`) both default to, it is what this
+   * package already did on iOS, and a symmetric pair is the only default that
+   * cannot surprise someone who sets one and forgets the other. Podcast and
+   * audiobook apps then set 30/15 or 30/30 explicitly, which is the whole point.
+   *
+   * @default 15
+   */
+  jumpBackwardSeconds: number
 }
 
 /* -------------------------------------------------------------------------- */
@@ -292,6 +444,22 @@ export interface NativePlaybackState {
   queueIndex?: number
   /** Only meaningful when `status === 'error'`. Shown by some surfaces. */
   errorMessage?: string
+  /**
+   * Current repeat mode, as the remote surfaces should draw it.
+   *
+   * Additive field: it rides the existing `playbackState` channel rather than
+   * introducing a fourth one, because it is state a surface renders next to the
+   * transport controls and it changes on exactly the same discontinuities.
+   *
+   * Only *drawn* when the app also advertises `setRepeatMode` in
+   * {@link capabilities} — media3 greys out a control whose command is missing,
+   * and iOS never enables a command with no target. Broadcasting a mode without
+   * the capability is legal and means "this is my state, but do not offer to
+   * change it".
+   */
+  repeatMode: MediaRepeatMode
+  /** Current shuffle state. Same rules as {@link repeatMode}. */
+  shuffleEnabled: boolean
 }
 
 /** Metadata for the item currently playing. */
@@ -350,6 +518,135 @@ export interface NativeMediaItem {
    */
   duration?: number
   genre?: string
+
+  /* ----------------------------- Extended tags ---------------------------- */
+
+  /**
+   * Album artist — the compilation/various-artists discriminator, and a
+   * different field from {@link artist} in every tag format there is.
+   *
+   * Android: `MediaMetadata.Builder.setAlbumArtist(CharSequence)`.
+   *
+   * iOS: published as `MPMediaItemPropertyAlbumArtist`, with a caveat worth
+   * stating rather than hiding. `MPNowPlayingInfoCenter`'s documentation lists
+   * the *subset* of `MPMediaItem` keys it supports (album title, track
+   * number/count, artist, artwork, composer, disc number/count, genre, media
+   * type, persistent id, duration, title) and album artist is **not** on it. The
+   * key itself is real and passing it is harmless — unknown keys are ignored —
+   * so it is sent for the surfaces that do read it, and no promise is made that
+   * the lock screen will show it.
+   */
+  albumArtist?: string
+  /**
+   * 1-based track number within the album.
+   *
+   * Android: `MediaMetadata.Builder.setTrackNumber(Integer)`.
+   * iOS: `MPMediaItemPropertyAlbumTrackNumber`.
+   */
+  trackNumber?: number
+  /**
+   * 1-based disc number for multi-disc releases.
+   *
+   * Android: `MediaMetadata.Builder.setDiscNumber(Integer)`.
+   * iOS: `MPMediaItemPropertyDiscNumber`.
+   */
+  discNumber?: number
+  /**
+   * Release year, e.g. `1997`.
+   *
+   * Android maps to `MediaMetadata.Builder.setReleaseYear(Integer)` rather than
+   * `setRecordingYear`: media3 carries both, tag formats mostly carry one, and
+   * "the year on the cover" is the release year. `setRecordingYear` is left
+   * unset instead of being filled with the same number, because inventing a
+   * recording date we were never told is exactly the kind of quiet lie this
+   * package refuses elsewhere.
+   *
+   * **iOS has no year key at all**, checked rather than assumed: there is no
+   * `MPMediaItemPropertyYear` in any MediaPlayer header, and the one date-shaped
+   * key — `MPMediaItemPropertyReleaseDate` — is an `NSDate` (a bare year is not
+   * a date) *and* is absent from `MPNowPlayingInfoCenter`'s documented supported
+   * subset. So on iOS this field is carried through the session and through
+   * persistence and is simply not published. A synthesised `NSDate` of
+   * "1 January <year>" would be a fabricated precision, which is worse than the
+   * gap.
+   */
+  year?: number
+  /**
+   * A secondary line — podcast episode subtitle, audiobook chapter name, radio
+   * show name.
+   *
+   * Android: `MediaMetadata.Builder.setSubtitle(CharSequence)`, which media3's
+   * own notification reads through `getNotificationContentText`.
+   * **iOS has no third line.** The complete `MPMediaItemProperty*` /
+   * `MPNowPlayingInfoProperty*` key set was read for one:
+   * `MPMediaItemPropertyComments` is not in the supported subset, and
+   * `MPNowPlayingInfoPropertyServiceIdentifier` is documented as an opaque
+   * provider-coordination id that is never displayed. The ecosystem's usual
+   * workaround is to fold the subtitle into `artist` or `album`; doing that here
+   * would corrupt two fields the app also sets, so this is carried through the
+   * session and through persistence and not published (same as {@link year}).
+   */
+  subtitle?: string
+  /**
+   * `true` for a live stream (radio, a live event) whose position is not a
+   * place in a finite thing.
+   *
+   * Until now the *absence of a duration* was this package's only live/unknown
+   * discriminator, which conflated two different facts: "this is live" and "I do
+   * not know the duration yet". This makes the first one sayable. When it is
+   * `true` the surfaces stop offering a scrubber even if a duration is also
+   * present — Android sets `MediaItemData.isDynamic` and drops seekability, iOS
+   * sets `MPNowPlayingInfoPropertyIsLiveStream`.
+   *
+   * Omitted is *not* `false`: omitted keeps the old rule (live iff there is no
+   * duration), so nothing that worked before changes.
+   */
+  isLive?: boolean
+  /**
+   * Opaque, app-owned key/value payload, round-tripped through the session and
+   * through persistence untouched.
+   *
+   * Every competitor has this and the absence forces an app to keep a side table
+   * keyed by {@link id} — which then has to be rebuilt after process death,
+   * exactly when the app has least to work with.
+   *
+   * **String values only**, deliberately. Nitro would happily carry
+   * `Record<string, AnyValue>`, but the two destinations cannot: Android puts
+   * these in a `MediaMetadata` `Bundle` that crosses a binder to third-party
+   * controllers, and the record is serialized to JSON by `withPersistence`.
+   * A string map survives both without a type-erasure story; anything richer
+   * would need one and would still arrive back as `unknown`. Stringify at the
+   * edge and the round trip is total.
+   *
+   * On iOS this is carried and persisted but not published: MediaPlayer has no
+   * arbitrary-payload key (the two opaque string keys it does have —
+   * `MPNowPlayingInfoPropertyExternalContentIdentifier` and
+   * `MPNowPlayingInfoCollectionIdentifier` — both have defined system meanings
+   * and are not extras). That is the *point* of the field either way: it exists
+   * so the app gets its own data back, not so the OS renders it.
+   */
+  extras?: Record<string, string>
+}
+
+/**
+ * What the sleep timer is doing right now.
+ *
+ * Returned instead of a bare number so the two modes stay distinguishable: a
+ * `trackEnd` timer with an unknown deadline (a live stream, or a track whose
+ * duration the app has not broadcast yet) is armed and *will* fire, and there is
+ * no number that says that — `undefined` would read as "not armed" and `0` as
+ * "about to fire".
+ */
+export interface NativeSleepTimerState {
+  mode: SleepTimerMode
+  /**
+   * Seconds until it fires, when that is knowable.
+   *
+   * Always present for `duration`. Present for `trackEnd` only while the current
+   * item has a duration and playback is advancing; omitted otherwise, which
+   * means "armed, deadline not computable yet".
+   */
+  remainingSeconds?: number
 }
 
 /* -------------------------------------------------------------------------- */
@@ -390,6 +687,18 @@ export interface MediaSessionHandlers {
   /** @param index index into the last broadcast queue */
   skipToQueueItem: (index: number) => void
   setRate: (rate: number) => void
+  /**
+   * A remote surface asked for a different repeat mode.
+   *
+   * A *request*, not a notification: nothing has changed until the app changes
+   * it and says so with a `setPlaybackState` carrying the new
+   * {@link NativePlaybackState.repeatMode}. Same contract as `play`/`pause` —
+   * the app's next broadcast is the acknowledgement, which is also what
+   * completes media3's pending-operation future.
+   */
+  setRepeatMode: (mode: MediaRepeatMode) => void
+  /** A remote surface asked to turn shuffle on or off. See {@link setRepeatMode}. */
+  setShuffle: (enabled: boolean) => void
   /**
    * Android only: the app's task was swiped out of Recents.
    *
@@ -446,8 +755,10 @@ export interface MediaSessionHandlers {
  * Named `initialize` rather than `init` because `init` is a Swift keyword and
  * nitrogen emits the method name verbatim into the generated Swift protocol.
  */
-export interface RnMediaMediaSession
-  extends HybridObject<{ ios: 'swift'; android: 'kotlin' }> {
+export interface RnMediaMediaSession extends HybridObject<{
+  ios: 'swift'
+  android: 'kotlin'
+}> {
   /**
    * Install the handlers and platform configuration.
    *
@@ -546,6 +857,37 @@ export interface RnMediaMediaSession
    */
   setSleepTimer(seconds: number): void
 
+  /**
+   * Pause when the **current item finishes**. Replaces any timer already armed.
+   *
+   * The mode most sleep-timer users actually want, and the one a JS timer
+   * cannot express even in the foreground: "30 minutes" cuts a track in half,
+   * "end of this track" does not.
+   *
+   * ## How a package with no playback engine knows when a track ends
+   * From the three broadcast channels, which is all it ever knows — and that is
+   * enough, because they already carry the two numbers involved: the position
+   * anchor (`{value, at, rate}`) and the current item's `duration`. The deadline
+   * is `(duration - projectedPosition) / rate`, computed natively and **re-armed
+   * on every broadcast**, so a seek, a pause, a rate change or a duration that
+   * arrives late all move it. No polling, no timer on the JS side, nothing
+   * streamed across the bridge — the existing discontinuity-only contract is
+   * exactly the update rate this needs.
+   *
+   * Two cases it handles without a duration at all:
+   * - **The current item changes** (the track ended and the app advanced, or the
+   *   user skipped) — the timer fires immediately. That is the honest reading of
+   *   "stop after this one", and it is what makes the feature work on a live
+   *   stream or before a duration is known.
+   * - **The app never broadcasts a duration** — armed with no deadline, waiting
+   *   for the item change above. {@link getSleepTimer} reports `trackEnd` with
+   *   no `remainingSeconds` rather than pretending.
+   *
+   * When it fires the behaviour is identical to {@link setSleepTimer}: playback
+   * is paused natively first, then {@link MediaSessionHandlers.onSleepTimer}.
+   */
+  setSleepTimerToTrackEnd(): void
+
   /** Disarm the sleep timer. A no-op when none is armed. */
   cancelSleepTimer(): void
 
@@ -560,4 +902,14 @@ export interface RnMediaMediaSession
    * which is the one place a JS timer *does* work.
    */
   getSleepTimerRemaining(): number | undefined
+
+  /**
+   * The armed timer's mode and — when knowable — its remaining seconds, or
+   * `undefined` when none is armed.
+   *
+   * The structured form of {@link getSleepTimerRemaining}, which cannot describe
+   * a `trackEnd` timer whose deadline is not yet computable. Same clock, same
+   * synchronous cheapness.
+   */
+  getSleepTimer(): NativeSleepTimerState | undefined
 }

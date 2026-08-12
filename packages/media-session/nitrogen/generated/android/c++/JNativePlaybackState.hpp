@@ -14,11 +14,13 @@
 #include "JMediaControl.hpp"
 #include "JMediaCustomAction.hpp"
 #include "JMediaPlaybackStatus.hpp"
+#include "JMediaRepeatMode.hpp"
 #include "JPositionAnchor.hpp"
 #include "MediaCapability.hpp"
 #include "MediaControl.hpp"
 #include "MediaCustomAction.hpp"
 #include "MediaPlaybackStatus.hpp"
+#include "MediaRepeatMode.hpp"
 #include "PositionAnchor.hpp"
 #include <optional>
 #include <string>
@@ -61,6 +63,10 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<jni::JDouble> queueIndex = this->getFieldValue(fieldQueueIndex);
       static const auto fieldErrorMessage = clazz->getField<jni::JString>("errorMessage");
       jni::local_ref<jni::JString> errorMessage = this->getFieldValue(fieldErrorMessage);
+      static const auto fieldRepeatMode = clazz->getField<JMediaRepeatMode>("repeatMode");
+      jni::local_ref<JMediaRepeatMode> repeatMode = this->getFieldValue(fieldRepeatMode);
+      static const auto fieldShuffleEnabled = clazz->getField<jboolean>("shuffleEnabled");
+      jboolean shuffleEnabled = this->getFieldValue(fieldShuffleEnabled);
       return NativePlaybackState(
         status->toCpp(),
         position->toCpp(),
@@ -102,7 +108,9 @@ namespace margelo::nitro::rnmediamediasession {
           return __vector;
         }()) : std::nullopt,
         queueIndex != nullptr ? std::make_optional(queueIndex->value()) : std::nullopt,
-        errorMessage != nullptr ? std::make_optional(errorMessage->toStdString()) : std::nullopt
+        errorMessage != nullptr ? std::make_optional(errorMessage->toStdString()) : std::nullopt,
+        repeatMode->toCpp(),
+        static_cast<bool>(shuffleEnabled)
       );
     }
 
@@ -112,7 +120,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JNativePlaybackState::javaobject> fromCpp(const NativePlaybackState& value) {
-      using JSignature = JNativePlaybackState(jni::alias_ref<JMediaPlaybackStatus>, jni::alias_ref<JPositionAnchor>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JArrayClass<JMediaControl>>, jni::alias_ref<jni::JArrayClass<JMediaCapability>>, jni::alias_ref<jni::JArrayClass<JMediaCustomAction>>, jni::alias_ref<jni::JArrayDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JString>);
+      using JSignature = JNativePlaybackState(jni::alias_ref<JMediaPlaybackStatus>, jni::alias_ref<JPositionAnchor>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JArrayClass<JMediaControl>>, jni::alias_ref<jni::JArrayClass<JMediaCapability>>, jni::alias_ref<jni::JArrayClass<JMediaCustomAction>>, jni::alias_ref<jni::JArrayDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JString>, jni::alias_ref<JMediaRepeatMode>, jboolean);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -157,7 +165,9 @@ namespace margelo::nitro::rnmediamediasession {
           return __array;
         }() : nullptr,
         value.queueIndex.has_value() ? jni::JDouble::valueOf(value.queueIndex.value()) : nullptr,
-        value.errorMessage.has_value() ? jni::make_jstring(value.errorMessage.value()) : nullptr
+        value.errorMessage.has_value() ? jni::make_jstring(value.errorMessage.value()) : nullptr,
+        JMediaRepeatMode::fromCpp(value.repeatMode),
+        value.shuffleEnabled
       );
     }
   };

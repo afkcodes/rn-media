@@ -38,6 +38,8 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaControl; }
 namespace margelo::nitro::rnmediamediasession { enum class MediaCapability; }
 // Forward declaration of `MediaCustomAction` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
+// Forward declaration of `MediaRepeatMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 
 #include "MediaPlaybackStatus.hpp"
 #include "PositionAnchor.hpp"
@@ -47,6 +49,7 @@ namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
 #include "MediaCapability.hpp"
 #include "MediaCustomAction.hpp"
 #include <string>
+#include "MediaRepeatMode.hpp"
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -64,10 +67,12 @@ namespace margelo::nitro::rnmediamediasession {
     std::optional<std::vector<double>> compactControlIndices     SWIFT_PRIVATE;
     std::optional<double> queueIndex     SWIFT_PRIVATE;
     std::optional<std::string> errorMessage     SWIFT_PRIVATE;
+    MediaRepeatMode repeatMode     SWIFT_PRIVATE;
+    bool shuffleEnabled     SWIFT_PRIVATE;
 
   public:
     NativePlaybackState() = default;
-    explicit NativePlaybackState(MediaPlaybackStatus status, PositionAnchor position, std::optional<double> bufferedPosition, std::vector<MediaControl> controls, std::vector<MediaCapability> capabilities, std::vector<MediaCustomAction> customActions, std::optional<std::vector<double>> compactControlIndices, std::optional<double> queueIndex, std::optional<std::string> errorMessage): status(status), position(position), bufferedPosition(bufferedPosition), controls(controls), capabilities(capabilities), customActions(customActions), compactControlIndices(compactControlIndices), queueIndex(queueIndex), errorMessage(errorMessage) {}
+    explicit NativePlaybackState(MediaPlaybackStatus status, PositionAnchor position, std::optional<double> bufferedPosition, std::vector<MediaControl> controls, std::vector<MediaCapability> capabilities, std::vector<MediaCustomAction> customActions, std::optional<std::vector<double>> compactControlIndices, std::optional<double> queueIndex, std::optional<std::string> errorMessage, MediaRepeatMode repeatMode, bool shuffleEnabled): status(status), position(position), bufferedPosition(bufferedPosition), controls(controls), capabilities(capabilities), customActions(customActions), compactControlIndices(compactControlIndices), queueIndex(queueIndex), errorMessage(errorMessage), repeatMode(repeatMode), shuffleEnabled(shuffleEnabled) {}
 
   public:
     friend bool operator==(const NativePlaybackState& lhs, const NativePlaybackState& rhs) = default;
@@ -91,7 +96,9 @@ namespace margelo::nitro {
         JSIConverter<std::vector<margelo::nitro::rnmediamediasession::MediaCustomAction>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "customActions"))),
         JSIConverter<std::optional<std::vector<double>>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "compactControlIndices"))),
         JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "queueIndex"))),
-        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "errorMessage")))
+        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "errorMessage"))),
+        JSIConverter<margelo::nitro::rnmediamediasession::MediaRepeatMode>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "repeatMode"))),
+        JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "shuffleEnabled")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::rnmediamediasession::NativePlaybackState& arg) {
@@ -105,6 +112,8 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "compactControlIndices"), JSIConverter<std::optional<std::vector<double>>>::toJSI(runtime, arg.compactControlIndices));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "queueIndex"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.queueIndex));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "errorMessage"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.errorMessage));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "repeatMode"), JSIConverter<margelo::nitro::rnmediamediasession::MediaRepeatMode>::toJSI(runtime, arg.repeatMode));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "shuffleEnabled"), JSIConverter<bool>::toJSI(runtime, arg.shuffleEnabled));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -124,6 +133,8 @@ namespace margelo::nitro {
       if (!JSIConverter<std::optional<std::vector<double>>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "compactControlIndices")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "queueIndex")))) return false;
       if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "errorMessage")))) return false;
+      if (!JSIConverter<margelo::nitro::rnmediamediasession::MediaRepeatMode>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "repeatMode")))) return false;
+      if (!JSIConverter<bool>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "shuffleEnabled")))) return false;
       return true;
     }
   };

@@ -7,6 +7,10 @@
 
 #include "JHybridRnMediaMediaSessionSpec.hpp"
 
+// Forward declaration of `NativeSleepTimerState` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
+// Forward declaration of `SleepTimerMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 // Forward declaration of `MediaSessionConfig` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct MediaSessionConfig; }
 // Forward declaration of `AndroidMediaSessionConfig` to properly resolve imports.
@@ -15,6 +19,8 @@ namespace margelo::nitro::rnmediamediasession { struct AndroidMediaSessionConfig
 namespace margelo::nitro::rnmediamediasession { struct IosMediaSessionConfig; }
 // Forward declaration of `MediaSessionHandlers` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
+// Forward declaration of `MediaRepeatMode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
 // Forward declaration of `MediaPlaybackStatus` to properly resolve imports.
@@ -34,6 +40,10 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include <NitroModules/JPromise.hpp>
 #include <NitroModules/JUnit.hpp>
 #include <optional>
+#include "NativeSleepTimerState.hpp"
+#include "JNativeSleepTimerState.hpp"
+#include "SleepTimerMode.hpp"
+#include "JSleepTimerMode.hpp"
 #include "MediaSessionConfig.hpp"
 #include "JMediaSessionConfig.hpp"
 #include "AndroidMediaSessionConfig.hpp"
@@ -41,12 +51,17 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include <string>
 #include "IosMediaSessionConfig.hpp"
 #include "JIosMediaSessionConfig.hpp"
+#include <vector>
 #include "MediaSessionHandlers.hpp"
 #include "JMediaSessionHandlers.hpp"
 #include <functional>
 #include "JFunc_void.hpp"
 #include <NitroModules/JNICallable.hpp>
 #include "JFunc_void_double.hpp"
+#include "MediaRepeatMode.hpp"
+#include "JFunc_void_MediaRepeatMode.hpp"
+#include "JMediaRepeatMode.hpp"
+#include "JFunc_void_bool.hpp"
 #include "JFunc_void_std__string_std__string.hpp"
 #include "NativePlaybackState.hpp"
 #include "JNativePlaybackState.hpp"
@@ -55,7 +70,6 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include "PositionAnchor.hpp"
 #include "JPositionAnchor.hpp"
 #include "MediaControl.hpp"
-#include <vector>
 #include "JMediaControl.hpp"
 #include "MediaCapability.hpp"
 #include "JMediaCapability.hpp"
@@ -63,6 +77,7 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include "JMediaCustomAction.hpp"
 #include "NativeMediaItem.hpp"
 #include "JNativeMediaItem.hpp"
+#include <unordered_map>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -156,6 +171,10 @@ namespace margelo::nitro::rnmediamediasession {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* seconds */)>("setSleepTimer");
     method(_javaPart, seconds);
   }
+  void JHybridRnMediaMediaSessionSpec::setSleepTimerToTrackEnd() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void()>("setSleepTimerToTrackEnd");
+    method(_javaPart);
+  }
   void JHybridRnMediaMediaSessionSpec::cancelSleepTimer() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void()>("cancelSleepTimer");
     method(_javaPart);
@@ -164,6 +183,11 @@ namespace margelo::nitro::rnmediamediasession {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<jni::JDouble>()>("getSleepTimerRemaining");
     auto __result = method(_javaPart);
     return __result != nullptr ? std::make_optional(__result->value()) : std::nullopt;
+  }
+  std::optional<NativeSleepTimerState> JHybridRnMediaMediaSessionSpec::getSleepTimer() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<JNativeSleepTimerState>()>("getSleepTimer");
+    auto __result = method(_javaPart);
+    return __result != nullptr ? std::make_optional(__result->toCpp()) : std::nullopt;
   }
 
 } // namespace margelo::nitro::rnmediamediasession

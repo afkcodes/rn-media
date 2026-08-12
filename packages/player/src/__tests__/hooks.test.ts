@@ -48,6 +48,8 @@ vi.mock('react-native', () => ({
 
 import { usePlayer } from '../hooks/usePlayer'
 import { usePlayerState } from '../hooks/usePlayerState'
+import type { Milestone } from '../hooks/useMilestones'
+import { useMilestones } from '../hooks/useMilestones'
 import { useProgress } from '../hooks/useProgress'
 import { useVisualizer } from '../hooks/useVisualizer'
 import type { Player } from '../player'
@@ -60,6 +62,7 @@ import {
   FakeMpvClient,
   playbackRestartEvent,
   propertyEvent,
+  seekEvent,
   startFileEvent,
   toneCapture,
 } from './fake-mpv-client'
@@ -707,5 +710,227 @@ describe('useVisualizer', () => {
     // A later transition has nobody left to notify.
     act(() => appState.change('active'))
     expect(starts()).toBe(1)
+  })
+})
+
+describe('useMilestones', () => {
+  /**
+   * A 12-second entry, so the marks land at 3 / 6 / 9 / 10.8 s and a test can
+   * tick through a whole playthrough in a handful of intervals.
+   */
+  function startShortTrack(): void {
+    startPlayback()
+    act(() => {
+      client.emit([propertyEvent(MpvProperty.duration, 12)])
+    })
+  }
+
+  /**
+   * Advance playback by `seconds`, one 250 ms render at a time — the way the
+   * ticker actually delivers them. Advancing in one lump would hand the hook a
+   * single sample and prove nothing about crossing a mark.
+   */
+  async function play(seconds: number): Promise<void> {
+    for (let elapsed = 0; elapsed < seconds * 1000; elapsed += 250) {
+      await act(async () => {
+        now += 250
+        vi.advanceTimersByTime(250)
+      })
+    }
+  }
+
+  /** Seek, exactly as mpv reports one: a seek event, then a restart. */
+  async function seekTo(seconds: number): Promise<void> {
+    client.readable.set(MpvProperty.timePos, seconds)
+    await act(async () => {
+      client.emit([seekEvent()])
+      client.emit([playbackRestartEvent()])
+    })
+  }
+
+  it('fires each mark once, in order, as playback passes it', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const fired: number[] = []
+    renderHook(() =>
+      useMilestones(player, ({ percent }) => fired.push(percent))
+    )
+
+    await play(2.5)
+    expect(fired).toEqual([])
+    await play(1)
+    expect(fired).toEqual([25])
+    await play(3)
+    expect(fired).toEqual([25, 50])
+    await play(3)
+    expect(fired).toEqual([25, 50, 75])
+    await play(2)
+    expect(fired).toEqual([25, 50, 75, 90])
+  })
+
+  it('reports the position and entry the mark was reached at', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const fired: Milestone[] = []
+    renderHook(() =>
+      useMilestones(player, (milestone) => fired.push(milestone))
+    )
+
+    await play(3.5)
+    expect(fired).toHaveLength(1)
+    expect(fired[0]?.percent).toBe(25)
+    expect(fired[0]?.duration).toBe(12)
+    expect(fired[0]?.index).toBe(0)
+    expect(fired[0]?.position).toBeGreaterThanOrEqual(3)
+  })
+
+  it('does not fire the same mark twice', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const fired: number[] = []
+    renderHook(() =>
+      useMilestones(player, ({ percent }) => fired.push(percent))
+    )
+
+    await play(4)
+    expect(fired).toEqual([25])
+    await play(1)
+    expect(fired).toEqual([25])
+  })
+
+  it('consumes a mark jumped over by a seek, silently', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const fired: number[] = []
+    renderHook(() =>
+      useMilestones(player, ({ percent }) => fired.push(percent))
+    )
+
+    await play(1)
+    // A scrub from 1 s to 10 s crosses 25 %, 50 % and 75 % without listening.
+    await seekTo(10)
+    await play(0.5)
+    expect(fired).toEqual([])
+
+    // …and the mark still ahead of the position fires normally.
+    await play(1.5)
+    expect(fired).toEqual([90])
+  })
+
+  it('re-arms after seeking back to the start', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const fired: number[] = []
+    renderHook(() =>
+      useMilestones(player, ({ percent }) => fired.push(percent))
+    )
+
+    await play(4)
+    expect(fired).toEqual([25])
+    await seekTo(0)
+    await play(4)
+    expect(fired).toEqual([25, 25])
+  })
+
+  it('starts a fresh playthrough on a new entry', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const fired: Array<{ percent: number; index: number }> = []
+    renderHook(() =>
+      useMilestones(player, ({ percent, index }) =>
+        fired.push({ percent, index })
+      )
+    )
+
+    await play(4)
+    expect(fired).toEqual([{ percent: 25, index: 0 }])
+
+    client.readable.set(MpvProperty.timePos, 0)
+    client.readable.set(MpvProperty.duration, 12)
+    await act(async () => {
+      client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+      client.emit([playbackRestartEvent()])
+    })
+    await play(4)
+    expect(fired).toEqual([
+      { percent: 25, index: 0 },
+      { percent: 25, index: 1 },
+    ])
+  })
+
+  it('does not replay marks already behind a mid-track mount', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    await seekTo(8)
+
+    const fired: number[] = []
+    renderHook(() =>
+      useMilestones(player, ({ percent }) => fired.push(percent))
+    )
+    await play(0.5)
+    // Mounting two thirds of the way through must not fire 25 % and 50 % for
+    // audio this listener never heard.
+    expect(fired).toEqual([])
+    // What it does still hear, it reports.
+    await play(3)
+    expect(fired).toEqual([75, 90])
+  })
+
+  it('takes custom marks', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const fired: number[] = []
+    renderHook(() =>
+      useMilestones(player, ({ percent }) => fired.push(percent), {
+        marks: [10],
+      })
+    )
+    await play(2)
+    expect(fired).toEqual([10])
+  })
+
+  it('stays silent on a live stream, which has no percentage', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    client.readable.set(MpvProperty.timePos, 0)
+    act(() => {
+      client.emit([
+        propertyEvent(MpvProperty.idleActive, false),
+        startFileEvent(),
+        propertyEvent(MpvProperty.playlistPos, 0),
+        propertyEvent(MpvProperty.seekable, false),
+        playbackRestartEvent(),
+        propertyEvent(MpvProperty.pause, false),
+        propertyEvent(MpvProperty.coreIdle, false),
+      ])
+    })
+    const fired: number[] = []
+    renderHook(() =>
+      useMilestones(player, ({ percent }) => fired.push(percent))
+    )
+    await play(20)
+    expect(fired).toEqual([])
+  })
+
+  it('adds no timer of its own', async () => {
+    vi.useFakeTimers()
+    const player = await makePlayer()
+    startShortTrack()
+    const progressOnly = renderHook(() => useProgress(player, 250))
+    const baseline = vi.getTimerCount()
+    progressOnly.unmount()
+
+    renderHook(() => useMilestones(player, () => {}))
+    // The whole justification for this being a hook rather than a Player
+    // feature: it rides `useProgress`'s tick and starts nothing.
+    expect(vi.getTimerCount()).toBe(baseline)
   })
 })

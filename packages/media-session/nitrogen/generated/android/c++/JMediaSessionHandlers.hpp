@@ -11,8 +11,12 @@
 #include "MediaSessionHandlers.hpp"
 
 #include "JFunc_void.hpp"
+#include "JFunc_void_MediaRepeatMode.hpp"
+#include "JFunc_void_bool.hpp"
 #include "JFunc_void_double.hpp"
 #include "JFunc_void_std__string_std__string.hpp"
+#include "JMediaRepeatMode.hpp"
+#include "MediaRepeatMode.hpp"
 #include <NitroModules/JNICallable.hpp>
 #include <functional>
 #include <string>
@@ -52,6 +56,10 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<JFunc_void_double::javaobject> skipToQueueItem = this->getFieldValue(fieldSkipToQueueItem);
       static const auto fieldSetRate = clazz->getField<JFunc_void_double::javaobject>("setRate");
       jni::local_ref<JFunc_void_double::javaobject> setRate = this->getFieldValue(fieldSetRate);
+      static const auto fieldSetRepeatMode = clazz->getField<JFunc_void_MediaRepeatMode::javaobject>("setRepeatMode");
+      jni::local_ref<JFunc_void_MediaRepeatMode::javaobject> setRepeatMode = this->getFieldValue(fieldSetRepeatMode);
+      static const auto fieldSetShuffle = clazz->getField<JFunc_void_bool::javaobject>("setShuffle");
+      jni::local_ref<JFunc_void_bool::javaobject> setShuffle = this->getFieldValue(fieldSetShuffle);
       static const auto fieldOnTaskRemoved = clazz->getField<JFunc_void::javaobject>("onTaskRemoved");
       jni::local_ref<JFunc_void::javaobject> onTaskRemoved = this->getFieldValue(fieldOnTaskRemoved);
       static const auto fieldCustomAction = clazz->getField<JFunc_void_std__string_std__string::javaobject>("customAction");
@@ -133,6 +141,24 @@ namespace margelo::nitro::rnmediamediasession {
             return JNICallable<JFunc_void_double, void(double)>(std::move(setRateRef));
           }
         }(),
+        [&]() -> std::function<void(MediaRepeatMode /* mode */)> {
+          if (setRepeatMode->isInstanceOf(JFunc_void_MediaRepeatMode_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_MediaRepeatMode_cxx::javaobject>(setRepeatMode);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto setRepeatModeRef = jni::make_global(setRepeatMode);
+            return JNICallable<JFunc_void_MediaRepeatMode, void(MediaRepeatMode)>(std::move(setRepeatModeRef));
+          }
+        }(),
+        [&]() -> std::function<void(bool /* enabled */)> {
+          if (setShuffle->isInstanceOf(JFunc_void_bool_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_bool_cxx::javaobject>(setShuffle);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto setShuffleRef = jni::make_global(setShuffle);
+            return JNICallable<JFunc_void_bool, void(bool)>(std::move(setShuffleRef));
+          }
+        }(),
         [&]() -> std::function<void()> {
           if (onTaskRemoved->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
             auto downcast = jni::static_ref_cast<JFunc_void_cxx::javaobject>(onTaskRemoved);
@@ -178,7 +204,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JMediaSessionHandlers::javaobject> fromCpp(const MediaSessionHandlers& value) {
-      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>);
+      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_MediaRepeatMode::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -191,6 +217,8 @@ namespace margelo::nitro::rnmediamediasession {
         JFunc_void_cxx::fromCpp(value.skipToPrevious),
         JFunc_void_double_cxx::fromCpp(value.skipToQueueItem),
         JFunc_void_double_cxx::fromCpp(value.setRate),
+        JFunc_void_MediaRepeatMode_cxx::fromCpp(value.setRepeatMode),
+        JFunc_void_bool_cxx::fromCpp(value.setShuffle),
         JFunc_void_cxx::fromCpp(value.onTaskRemoved),
         JFunc_void_std__string_std__string_cxx::fromCpp(value.customAction),
         JFunc_void_cxx::fromCpp(value.onSleepTimer),

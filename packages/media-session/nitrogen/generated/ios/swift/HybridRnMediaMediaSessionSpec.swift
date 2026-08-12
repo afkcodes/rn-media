@@ -20,8 +20,10 @@ public protocol HybridRnMediaMediaSessionSpec_protocol: HybridObject {
   func setResumptionSnapshot(snapshot: String?) throws -> Void
   func stopService() throws -> Promise<Void>
   func setSleepTimer(seconds: Double) throws -> Void
+  func setSleepTimerToTrackEnd() throws -> Void
   func cancelSleepTimer() throws -> Void
   func getSleepTimerRemaining() throws -> Double?
+  func getSleepTimer() throws -> NativeSleepTimerState?
 }
 
 public extension HybridRnMediaMediaSessionSpec_protocol {

@@ -168,6 +168,5 @@ export function wireAudioSession(
 }
 
 function defaultOnError(error: unknown): void {
-  // eslint-disable-next-line no-console
   console.error('[audio-session] configure() failed while wiring:', error)
 }

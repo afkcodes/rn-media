@@ -20,6 +20,8 @@ enum RemoteCommandKind: CaseIterable {
   case changePlaybackRate
   case skipForward
   case skipBackward
+  case changeRepeatMode
+  case changeShuffleMode
 }
 
 /// What a command does when it fires. Injected so the binding is pure plumbing.
@@ -32,10 +34,71 @@ struct RemoteCommandActions {
   /// Absolute seek, in **milliseconds** (the bridge's unit).
   let seekTo: (Double) -> Void
   let setRate: (Double) -> Void
+  let setRepeatMode: (MediaRepeatMode) -> Void
+  let setShuffle: (Bool) -> Void
   /// `true` while the broadcast status is `playing`. Drives togglePlayPause.
   let isPlaying: () -> Bool
   /// Projected position **in seconds**, for turning skip intervals into seeks.
   let currentPositionSeconds: () -> TimeInterval
+}
+
+/**
+ * The configurable parts of the command centre.
+ *
+ * Built once from `MediaSessionConfig` and handed in, rather than read from
+ * static constants the way these values used to be. The jump intervals in
+ * particular are *not* an iOS preference: they are the cross-platform option
+ * that exists because pinning 15 s here while Android inherited media3's 5 s /
+ * 15 s defaults meant the same JS call behaved differently per platform.
+ */
+struct RemoteCommandConfig {
+  /// `MPSkipIntervalCommand.preferredIntervals` for `skipForwardCommand`, in seconds.
+  let jumpForwardSeconds: TimeInterval
+  /// …and for `skipBackwardCommand`.
+  let jumpBackwardSeconds: TimeInterval
+  /// `MPChangePlaybackRateCommand.supportedPlaybackRates`.
+  let supportedPlaybackRates: [NSNumber]
+
+  /// The shared cross-platform default. Must equal `DEFAULT_JUMP_SECONDS` in `validate.ts`.
+  static let defaultJumpSeconds: TimeInterval = 15
+
+  /// Unchanged from the constant this replaced, so configuring nothing changes nothing.
+  static let defaultPlaybackRates: [NSNumber] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+
+  static let `default` = RemoteCommandConfig(
+    jumpForwardSeconds: defaultJumpSeconds,
+    jumpBackwardSeconds: defaultJumpSeconds,
+    supportedPlaybackRates: defaultPlaybackRates
+  )
+
+  /// Build from the bridge config, falling back per field.
+  init(config: MediaSessionConfig) {
+    // The TS layer validates and defaults both, so a non-positive value here
+    // means the struct arrived some other way. A zero-length jump is a button
+    // that looks broken, so it falls back rather than being honoured.
+    let forward = config.jumpForwardSeconds
+    let backward = config.jumpBackwardSeconds
+    self.jumpForwardSeconds =
+      forward.isFinite && forward > 0 ? forward : Self.defaultJumpSeconds
+    self.jumpBackwardSeconds =
+      backward.isFinite && backward > 0 ? backward : Self.defaultJumpSeconds
+
+    if let rates = config.ios?.supportedPlaybackRates, !rates.isEmpty {
+      self.supportedPlaybackRates = rates.map { NSNumber(value: $0) }
+    } else {
+      self.supportedPlaybackRates = Self.defaultPlaybackRates
+    }
+  }
+
+  init(
+    jumpForwardSeconds: TimeInterval,
+    jumpBackwardSeconds: TimeInterval,
+    supportedPlaybackRates: [NSNumber]
+  ) {
+    self.jumpForwardSeconds = jumpForwardSeconds
+    self.jumpBackwardSeconds = jumpBackwardSeconds
+    self.supportedPlaybackRates = supportedPlaybackRates
+  }
 }
 
 /**
@@ -56,18 +119,14 @@ struct RemoteCommandActions {
  * on the main queue (`HybridRnMediaMediaSession` guarantees that).
  */
 final class RemoteCommandBinding {
-  /// Skip interval offered for `fastForward` / `rewind`, in seconds.
-  static let skipInterval: TimeInterval = 15
-  /// Rates offered to `changePlaybackRateCommand`. Negative rates are not
-  /// supported by MediaPlayer, so none are listed.
-  static let supportedRates: [NSNumber] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-
   private let center = MPRemoteCommandCenter.shared()
   private var targets: [RemoteCommandKind: Any] = [:]
   private let actions: RemoteCommandActions
+  private let config: RemoteCommandConfig
 
-  init(actions: RemoteCommandActions) {
+  init(actions: RemoteCommandActions, config: RemoteCommandConfig = .default) {
     self.actions = actions
+    self.config = config
   }
 
   deinit {
@@ -117,6 +176,8 @@ final class RemoteCommandBinding {
     case .changePlaybackRate: return center.changePlaybackRateCommand
     case .skipForward: return center.skipForwardCommand
     case .skipBackward: return center.skipBackwardCommand
+    case .changeRepeatMode: return center.changeRepeatModeCommand
+    case .changeShuffleMode: return center.changeShuffleModeCommand
     }
   }
 
@@ -127,14 +188,37 @@ final class RemoteCommandBinding {
       // Without this the rate control has nothing to offer and the system hides
       // it: "The playbackRate property is equal to a value stored in the
       // supportedPlaybackRates array."
-      center.changePlaybackRateCommand.supportedPlaybackRates = Self.supportedRates
+      center.changePlaybackRateCommand.supportedPlaybackRates = config.supportedPlaybackRates
     case .skipForward:
-      center.skipForwardCommand.preferredIntervals = [NSNumber(value: Self.skipInterval)]
+      center.skipForwardCommand.preferredIntervals =
+        [NSNumber(value: config.jumpForwardSeconds)]
     case .skipBackward:
-      center.skipBackwardCommand.preferredIntervals = [NSNumber(value: Self.skipInterval)]
+      center.skipBackwardCommand.preferredIntervals =
+        [NSNumber(value: config.jumpBackwardSeconds)]
     default:
       break
     }
+  }
+
+  /**
+   * Push the broadcast repeat/shuffle state onto the two toggle commands.
+   *
+   * Separate from ``apply(_:)`` because it is *state*, not availability: the
+   * commands stay enabled while the mode changes underneath them, and the
+   * system draws the control from `currentRepeatType` / `currentShuffleType`.
+   * Both are read/write (`MPChangeRepeatModeCommand.currentRepeatType`,
+   * `MPChangeShuffleModeCommand.currentShuffleType`; verified against the
+   * iOS SDK's `MPRemoteCommand.h`, which declares both `assign`, i.e.
+   * readwrite — Apple's docs group them under a "Retrieving…" heading that
+   * reads as read-only and is not).
+   *
+   * Written unconditionally rather than only when the command is enabled: an
+   * app can broadcast a repeat mode it does not offer to change, and the lock
+   * screen should still show the truth.
+   */
+  func applyModes(repeatMode: MediaRepeatMode, shuffleEnabled: Bool) {
+    center.changeRepeatModeCommand.currentRepeatType = repeatMode.repeatType
+    center.changeShuffleModeCommand.currentShuffleType = shuffleEnabled ? .items : .off
   }
 
   private func handle(
@@ -171,15 +255,76 @@ final class RemoteCommandBinding {
       // interface deliberately has no fastForward/rewind method: relative moves
       // are expressed as an absolute seek off the projected position, exactly
       // as media3's COMMAND_SEEK_FORWARD/COMMAND_SEEK_BACK are on Android.
-      let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? Self.skipInterval
+      //
+      // The event's own interval wins when the system supplies one — it is the
+      // value the user's control was drawn with — and the configured interval is
+      // the fallback for the direction being asked for. Falling back to a single
+      // shared constant, as this used to, would silently use the forward
+      // interval for a backward skip once the two could differ.
+      let fallback = kind == .skipForward
+        ? config.jumpForwardSeconds
+        : config.jumpBackwardSeconds
+      let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? fallback
       let delta = kind == .skipForward ? interval : -interval
       let target = max(0, actions.currentPositionSeconds() + delta)
       actions.seekTo(target * 1000)
+    case .changeRepeatMode:
+      guard let event = event as? MPChangeRepeatModeCommandEvent else {
+        return .commandFailed
+      }
+      // A request, not a fact: the mode changes when the app changes it and
+      // broadcasts the new state, exactly like play/pause. `currentRepeatType`
+      // is therefore NOT written here — writing it would show the user a state
+      // the app has not agreed to.
+      actions.setRepeatMode(MediaRepeatMode(repeatType: event.repeatType))
+    case .changeShuffleMode:
+      guard let event = event as? MPChangeShuffleModeCommandEvent else {
+        return .commandFailed
+      }
+      // `MPShuffleType` has three members — `.off`, `.items`, `.collections` —
+      // and this package's model is a boolean, matching media3's
+      // `shuffleModeEnabled`. `.collections` (shuffle albums, keep tracks in
+      // order) has no cross-platform twin, so it is read as "on" rather than
+      // being dropped: the user asked for shuffle and gets shuffle.
+      actions.setShuffle(event.shuffleType != .off)
     }
     // Always `.success`: the command was accepted and dispatched to JS. Nitro
     // schedules the JS call on the JS thread and we return immediately, so
     // there is no outcome to report — the acknowledgement the user sees is the
     // app's next `setPlaybackState` broadcast.
     return .success
+  }
+}
+
+/**
+ * The two repeat vocabularies, which happen to line up member for member.
+ *
+ * `MPRepeatType` is `.off` / `.one` / `.all` (`MPRemoteControlTypes.h`,
+ * `NS_ENUM(NSInteger, …)` with implicit 0/1/2) and so is ours — but the mapping
+ * is written out rather than done by raw value, for the same reason the Kotlin
+ * side does not use ordinals: a coincidence of numbering is not a contract.
+ */
+extension MediaRepeatMode {
+  var repeatType: MPRepeatType {
+    switch self {
+    case .off: return .off
+    case .one: return .one
+    case .all: return .all
+    }
+  }
+
+  init(repeatType: MPRepeatType) {
+    switch repeatType {
+    case .one: self = .one
+    case .all: self = .all
+    // `.off` is folded into the default rather than listed. `MPRepeatType` is an
+    // imported Obj-C `NS_ENUM` and Swift's exhaustiveness rules for those have
+    // moved more than once; a `default` that is reachable for a case Swift knows
+    // about cannot draw either "add @unknown default" or "will never be
+    // executed", whichever way the compiler is feeling. It also happens to be
+    // the right behaviour: a value Apple adds later becomes `off`, a mode the
+    // app can render, rather than a dead control.
+    default: self = .off
+    }
   }
 }

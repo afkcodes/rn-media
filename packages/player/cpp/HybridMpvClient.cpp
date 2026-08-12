@@ -13,6 +13,10 @@ namespace {
 /// the TypeScript side passed down).
 constexpr const char* kPlaylistProperty = "playlist";
 
+/// mpv's chapter list. Same reasoning as `kPlaylistProperty`: a property this
+/// layer reads on its own initiative rather than one passed down from TS.
+constexpr const char* kChapterListProperty = "chapter-list";
+
 MpvEventKind toNitroKind(rnmedia::EventKind kind) {
   switch (kind) {
     case rnmedia::EventKind::Property:
@@ -632,6 +636,38 @@ std::vector<PlaylistEntry> HybridMpvClient::getPlaylistEntries() {
                                    });
   // An unavailable property (idle core) and an empty playlist are the same
   // answer to the caller, so `false` needs no separate branch: `out` is empty.
+  return out;
+}
+
+std::vector<ChapterEntry> HybridMpvClient::getChapters() {
+  std::vector<ChapterEntry> out;
+  // One `mpv_get_property("chapter-list", MPV_FORMAT_NODE)`, walked in place —
+  // the same shape as `getPlaylistEntries` above, and for the same reason (the
+  // scalar sub-property walk would be `2N + 1` blocking reads).
+  //
+  // Field names and formats are mpv 0.41.0 `input.rst`, verbatim:
+  //   "title" STRING (optional — "Not always available"), "time" DOUBLE.
+  // A chapter with no title keeps `std::nullopt`, which reaches TypeScript as
+  // an absent field rather than an empty string: "untitled chapter 3" is the
+  // app's wording to choose, not ours.
+  _client->getPropertyNodeMapArray(kChapterListProperty,
+                                   [&out](std::size_t index, const rnmedia::NodeMember& member) {
+                                     if (out.size() <= index) {
+                                       out.resize(index + 1, ChapterEntry(std::nullopt, 0));
+                                     }
+                                     ChapterEntry& entry = out[index];
+                                     if (member.key == "title") {
+                                       if (member.text.has_value()) {
+                                         entry.title = std::string(*member.text);
+                                       }
+                                     } else if (member.key == "time") {
+                                       if (member.number.has_value()) {
+                                         entry.start = *member.number;
+                                       }
+                                     }
+                                   });
+  // An unavailable property (nothing loaded, or an entry with no chapters) and
+  // an empty list are the same answer to the caller: `out` stays empty.
   return out;
 }
 

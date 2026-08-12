@@ -36,12 +36,7 @@ export type MpvEventKind =
  * task report.
  */
 export type MpvEndFileReason =
-  | 'endOfFile'
-  | 'stop'
-  | 'quit'
-  | 'error'
-  | 'redirect'
-  | 'unknown'
+  'endOfFile' | 'stop' | 'quit' | 'error' | 'redirect' | 'unknown'
 
 /**
  * `mpv_log_level` minus `no`/`none` (which are never delivered as messages).
@@ -52,13 +47,7 @@ export type MpvEndFileReason =
  * configurations.
  */
 export type MpvLogLevel =
-  | 'fatal'
-  | 'error'
-  | 'warn'
-  | 'info'
-  | 'verbose'
-  | 'debugging'
-  | 'trace'
+  'fatal' | 'error' | 'warn' | 'info' | 'verbose' | 'debugging' | 'trace'
 
 /** The value of an observed/read property, in its observed {@link MpvFormat}. */
 export type MpvPropertyValue = string | number | boolean
@@ -261,6 +250,35 @@ export interface PlaylistEntry {
 }
 
 /**
+ * One chapter of the current entry, as read from the `chapter-list` node
+ * property.
+ *
+ * @remarks
+ * mpv 0.41.0 `input.rst` documents the node this is built from verbatim:
+ *
+ * ```text
+ * MPV_FORMAT_NODE_ARRAY
+ *     MPV_FORMAT_NODE_MAP (for each chapter)
+ *         "title" MPV_FORMAT_STRING
+ *         "time"  MPV_FORMAT_DOUBLE
+ * ```
+ *
+ * Both members are carried across the bridge because both are the feature:
+ * without `title` a chapter list is a list of numbers, and without `time` it
+ * cannot be seeked to.
+ */
+export interface ChapterEntry {
+  /**
+   * `chapter-list/N/title` — "Chapter title as stored in the file. Not always
+   * available" (`input.rst`), hence optional. Podcast and m4b chapters
+   * generally have one; a DVD-style chapter mark may not.
+   */
+  readonly title?: string
+  /** `chapter-list/N/time` — "Chapter start time in seconds as float". */
+  readonly start: number
+}
+
+/**
  * A thin, complete binding over one `mpv_handle` (one `mpv_create()` core).
  *
  * One instance == one player core; create as many as you need via
@@ -272,8 +290,10 @@ export interface PlaylistEntry {
  * `[mpv:disposed]` for use-after-destroy, `[mpv:<errno>]` for mpv errors —
  * so the TypeScript layer can map them onto the typed error taxonomy.
  */
-export interface MpvClient
-  extends HybridObject<{ android: 'c++'; ios: 'c++' }> {
+export interface MpvClient extends HybridObject<{
+  android: 'c++'
+  ios: 'c++'
+}> {
   /**
    * Apply pre-init options and start the core (`mpv_initialize`).
    *
@@ -372,6 +392,29 @@ export interface MpvClient
    */
   getPlaylistEntries(): PlaylistEntry[]
 
+  /**
+   * Read the current entry's `chapter-list` in **one** `MPV_FORMAT_NODE`
+   * round-trip.
+   *
+   * `[]` when the entry has no chapters or mpv reports the property unavailable
+   * (nothing loaded); the two are indistinguishable to a caller and mean the
+   * same thing.
+   *
+   * @remarks
+   * Same trade as {@link getPlaylistEntries}, for the same reason. mpv also
+   * exposes every field as a scalar sub-property (`chapter-list/count`,
+   * `chapter-list/N/title`, `chapter-list/N/time`), so this *could* be pure
+   * TypeScript — at `2N + 1` blocking round-trips into mpv's core, which for a
+   * 300-chapter audiobook is 601 of them, each of which "[has] to wait until
+   * the playback core is ready […] unbounded time" (`mpv/client.h`). One node
+   * read is constant and, because mpv builds the node under its own lock, it is
+   * also the only *coherent* answer.
+   *
+   * The node is walked in place and freed before this returns; nothing is
+   * retained natively.
+   */
+  getChapters(): ChapterEntry[]
+
   /** Set a property from a string. Throws on mpv error. */
   setPropertyString(name: string, value: string): void
   /** Set a property from a double. Throws on mpv error. */
@@ -403,9 +446,7 @@ export interface MpvClient
    *
    * Calling this again replaces the previous listener.
    */
-  setEventBatchListener(
-    onEventBatch: (events: MpvEvent[]) => boolean
-  ): void
+  setEventBatchListener(onEventBatch: (events: MpvEvent[]) => boolean): void
 
   /**
    * Arm mpv's PCM tap and start delivering analysed windows.

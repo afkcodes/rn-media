@@ -81,6 +81,10 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     handlers: MediaSessionHandlers
   ) throws -> Promise<Void> {
     let cacheSize = config.ios?.artworkCacheSize.map { Int($0) }
+    // Read off the bridge struct here, in the caller's frame: the struct is a
+    // view onto C++ memory owned by the call, and reading it after the hop is
+    // not something the ownership contract promises.
+    let commandConfig = RemoteCommandConfig(config: config)
     let promise = Promise<Void>()
     DispatchQueue.main.async { [weak self] in
       guard let self else {
@@ -90,8 +94,18 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       if let cacheSize {
         self.artworkCache.setCapacity(cacheSize)
       }
+      // Force the lazy timer into existence here, on the main queue, while the
+      // `initialize` promise is still unresolved. Its `lazy` is now reachable
+      // from two threads (the JS thread for `setSleepTimer`, the main queue for
+      // the end-of-track retargeting), and the TS layer's `assertReady` means
+      // no public timer call can arrive before this line has run — which turns
+      // "the lazy init is not racing anything" from a hope into an ordering.
+      _ = self.sleepTimer
       self.handlers = handlers
-      self.binding = RemoteCommandBinding(actions: self.makeActions(handlers))
+      self.binding = RemoteCommandBinding(
+        actions: self.makeActions(handlers),
+        config: commandConfig
+      )
       // Nothing is enabled yet, on purpose: the enabled set is derived from the
       // first `setPlaybackState` broadcast. Advertising commands the app has
       // not claimed would show dead buttons on the lock screen.
@@ -115,7 +129,12 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       self.playbackState = state
       self.projection = projection
       self.binding?.apply(Self.desiredCommands(for: state))
+      self.binding?.applyModes(
+        repeatMode: state.repeatMode,
+        shuffleEnabled: state.shuffleEnabled
+      )
       self.publishNowPlayingInfo()
+      self.retargetTrackEndTimer()
     }
   }
 
@@ -128,6 +147,9 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
         self.artworkGeneration &+= 1
       }
       self.publishNowPlayingInfo()
+      // This channel is where a duration usually arrives and where a track
+      // change usually shows up first — both move an end-of-track deadline.
+      self.retargetTrackEndTimer()
     }
   }
 
@@ -138,6 +160,7 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       // Only the queue index/count fields change; still a full re-post, which
       // re-projects the elapsed time rather than replaying a stale one.
       self.publishNowPlayingInfo()
+      self.retargetTrackEndTimer()
     }
   }
 
@@ -173,6 +196,7 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       self.mediaItem = nil
       self.queue = []
       self.projection = .zero
+      self.clearTrackEndLatch()
       self.artworkGeneration &+= 1
       self.nowPlayingCenter.nowPlayingInfo = nil
       promise.resolve(withResult: ())
@@ -184,14 +208,177 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
 
   func setSleepTimer(seconds: Double) throws {
     sleepTimer.arm(seconds: seconds)
+    // A countdown is not an end-of-track timer, so the latch goes with it —
+    // hopped rather than cleared here, because the latch is main-queue state and
+    // hopping is what keeps arm-then-cancel and cancel-then-arm both ordered
+    // against the broadcast blocks already queued behind them.
+    DispatchQueue.main.async { [weak self] in self?.clearTrackEndLatch() }
+  }
+
+  /**
+   * Arm the end-of-current-track timer.
+   *
+   * Two steps, both needed: the timer is marked armed **synchronously** (so a
+   * `getSleepTimer()` on the very next line reports it, and so a broadcast
+   * racing in is not ignored as "not armed"), and the deadline is computed on
+   * the main queue, where the broadcast state lives.
+   */
+  func setSleepTimerToTrackEnd() throws {
+    sleepTimer.armAtTrackEnd()
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      // `nil` here means "armed, nothing latched yet" — arming over silence
+      // latches onto the first item to appear rather than firing because the
+      // item changed from nothing to something. See ``TrackEndAction/next``.
+      self.trackEndItemKey = self.currentItemKey
+      self.sleepTimer.scheduleTrackEnd(delaySeconds: self.trackEndDelaySeconds())
+    }
   }
 
   func cancelSleepTimer() throws {
     sleepTimer.cancel()
+    DispatchQueue.main.async { [weak self] in self?.clearTrackEndLatch() }
   }
 
   func getSleepTimerRemaining() throws -> Double? {
     sleepTimer.remainingSeconds()
+  }
+
+  func getSleepTimer() throws -> NativeSleepTimerState? {
+    sleepTimer.state()
+  }
+
+  // MARK: - End-of-track sleep timer
+
+  /**
+   * Which item the end-of-track timer is waiting on, as ``currentItemKey``, or
+   * `nil` for "not latched / not an end-of-track timer". Main queue only.
+   *
+   * **The latch is cleared everywhere the timer stops being an end-of-track
+   * timer** — when it fires (``onSleepTimerFired()``), when it is cancelled,
+   * when a countdown replaces it, and in ``stopService()``. A latch that
+   * outlives its timer is not inert: the next `setSleepTimerToTrackEnd` marks
+   * the mode armed *synchronously* on the JS thread while the re-latch is only
+   * hopped to main, so a broadcast block already queued there can run in
+   * between, read a stale key, decide "the item changed" and pause playback at
+   * the instant of arming. The synchronous arm is deliberate — it closes the
+   * opposite race, where a broadcast would be ignored as "not armed" — so the
+   * fix belongs on this side.
+   *
+   * One benign case remains, benign by construction: re-arming while an
+   * end-of-track timer is *still* armed keeps the previous latch for the gap
+   * between the sync arm and the hopped re-latch. That latch is necessarily
+   * current — had the item changed while the old timer was armed,
+   * ``retargetTrackEndTimer()`` would already have fired it and cleared it.
+   */
+  private var trackEndItemKey: String?
+
+  /// Main queue only.
+  private func clearTrackEndLatch() {
+    trackEndItemKey = nil
+  }
+
+  /// The queue entry at the broadcast index, if the index addresses one.
+  private var currentQueueEntry: NativeMediaItem? {
+    guard let index = playbackState?.queueIndex, index >= 0, Int(index) < queue.count else {
+      return nil
+    }
+    return queue[Int(index)]
+  }
+
+  /**
+   * The entry the now-playing surface is currently describing.
+   *
+   * `setMediaItem` is the more specific statement (the same channel-priority
+   * rule Android's `Snapshot.timeline` applies), so it wins; the queue entry at
+   * the broadcast index is the fallback for the window before it arrives.
+   */
+  private var currentItem: NativeMediaItem? {
+    mediaItem ?? currentQueueEntry
+  }
+
+  /**
+   * The duration the timer should count down to, in **milliseconds**, or `nil`
+   * when there is none to count to.
+   *
+   * Merged rather than read off one channel, for the reason
+   * `Snapshot.enrichedWith` exists: apps rarely know a duration up front and
+   * send it through `setMediaItem` once the track is prepared — but the reverse
+   * also happens, a queue built with durations and a `setMediaItem` sent without
+   * one. Taking either channel alone loses half of those cases. The queue entry
+   * only counts as describing the same track when the ids agree, exactly as on
+   * Android; the difference from Android is which side wins on a *mismatch*, and
+   * here it is `setMediaItem`, because that is also what iOS is showing on the
+   * lock screen.
+   *
+   * `isLive` (merged the same way) drops the duration entirely — the iOS twin of
+   * `NativeMediaItem.effectiveDurationMs`.
+   */
+  private var currentEffectiveDurationMs: Double? {
+    let entry = currentQueueEntry
+    guard let item = mediaItem else {
+      // Nothing on channel 2 yet: the queue entry is all there is.
+      if entry?.isLive == true { return nil }
+      return entry?.duration
+    }
+    // The queue entry fills gaps only when it describes the same track.
+    let fallback = entry?.id == item.id ? entry : nil
+    if (item.isLive ?? fallback?.isLive) == true { return nil }
+    return item.duration ?? fallback?.duration
+  }
+
+  /**
+   * A stable identity for "the item the end-of-track timer was armed against".
+   *
+   * Index *and* id, because either alone is wrong: ids legitimately repeat
+   * within a queue, and the index alone changes under a queue edit that did not
+   * change what is playing.
+   */
+  private var currentItemKey: String? {
+    guard let item = currentItem else { return nil }
+    var index = -1
+    if let queueIndex = playbackState?.queueIndex { index = Int(queueIndex) }
+    return "\(index):\(item.id)"
+  }
+
+  /**
+   * Seconds until the current item ends, or `nil` when that is not computable.
+   *
+   * The iOS twin of `Snapshot.trackEndDelayMs`, and deliberately the same three
+   * `nil` cases — no duration, explicitly live, or not advancing — each of which
+   * means "armed, deadline unknown" rather than "fire now".
+   */
+  private func trackEndDelaySeconds() -> Double? {
+    guard projection.rate > 0 else { return nil }
+    guard let durationMs = currentEffectiveDurationMs, durationMs > 0 else { return nil }
+    let remaining = durationMs / 1000 - projection.projectedSeconds()
+    // Divided by the rate: at 2x a minute of audio arrives in thirty seconds,
+    // and a timer that ignores that fires a minute late.
+    return max(0, remaining / projection.rate)
+  }
+
+  /**
+   * Re-aim the end-of-track timer at whatever the broadcast just changed. Main
+   * queue only; called from every channel.
+   *
+   * The whole update mechanism, and deliberately the *existing* one: broadcasts
+   * are discontinuity-only, so a seek, a pause, a rate change, a late-arriving
+   * duration and a track change are exactly the events that move an
+   * end-of-track deadline. There is nothing else to subscribe to and no timer.
+   */
+  private func retargetTrackEndTimer() {
+    guard sleepTimer.mode() == .trackend else { return }
+
+    switch TrackEndAction.next(latched: trackEndItemKey, current: currentItemKey) {
+    case .fire:
+      // Firing here rather than at a computed deadline is what makes the
+      // feature work at all on a live stream or an unknown duration.
+      sleepTimer.cancel()
+      onSleepTimerFired()
+    case .wait(let latchTo):
+      if let latchTo { trackEndItemKey = latchTo }
+      sleepTimer.scheduleTrackEnd(delaySeconds: trackEndDelaySeconds())
+    }
   }
 
   /**
@@ -214,6 +401,12 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
    * local state, exactly like any other command.
    */
   private func onSleepTimerFired() {
+    // First, and before anything that can produce a broadcast: the pause below
+    // routes through the app and comes back as a `setPlaybackState`, and every
+    // later arm reads this field. A fired timer that leaves its latch behind is
+    // the defect ``trackEndItemKey`` documents.
+    clearTrackEndLatch()
+
     if let state = playbackState {
       // The struct's properties are read-only projections of a C++ struct, so
       // "paused" is expressed by rebuilding it rather than mutating it.
@@ -226,7 +419,9 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
         customActions: state.customActions,
         compactControlIndices: state.compactControlIndices,
         queueIndex: state.queueIndex,
-        errorMessage: state.errorMessage
+        errorMessage: state.errorMessage,
+        repeatMode: state.repeatMode,
+        shuffleEnabled: state.shuffleEnabled
       )
       // Freeze the projection where it had actually reached, so re-posting does
       // not rewind the scrubber (see ``PositionProjection``).
@@ -252,6 +447,8 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       skipToPrevious: handlers.skipToPrevious,
       seekTo: handlers.seekTo,
       setRate: handlers.setRate,
+      setRepeatMode: handlers.setRepeatMode,
+      setShuffle: handlers.setShuffle,
       isPlaying: { [weak self] in self?.playbackState?.status == .playing },
       currentPositionSeconds: { [weak self] in
         self?.projection.projectedSeconds() ?? 0
@@ -288,6 +485,12 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       case .skiptoprevious: desired.insert(.previousTrack)
       case .fastforward: desired.insert(.skipForward)
       case .rewind: desired.insert(.skipBackward)
+      // iOS has no notion of button *layout*, so a control and its capability
+      // are the same statement here — which is why `controls` and
+      // `capabilities` are unioned. On Android they differ: the control is what
+      // puts the button in the notification.
+      case .repeatmode: desired.insert(.changeRepeatMode)
+      case .shuffle: desired.insert(.changeShuffleMode)
       }
     }
 
@@ -300,6 +503,8 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       case .skiptonext: desired.insert(.nextTrack)
       case .skiptoprevious: desired.insert(.previousTrack)
       case .setrate: desired.insert(.changePlaybackRate)
+      case .setrepeatmode: desired.insert(.changeRepeatMode)
+      case .setshuffle: desired.insert(.changeShuffleMode)
       case .skiptoqueueitem: break
       }
     }
@@ -333,17 +538,38 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     if let artist = item.artist { info[MPMediaItemPropertyArtist] = artist }
     if let album = item.album { info[MPMediaItemPropertyAlbumTitle] = album }
     if let genre = item.genre { info[MPMediaItemPropertyGenre] = genre }
+    // Extended tags. `AlbumTrackNumber` and `DiscNumber` are both on
+    // `MPNowPlayingInfoCenter`'s documented list of supported `MPMediaItem`
+    // keys; `AlbumArtist` is NOT, and is sent anyway because the key is real,
+    // unknown keys are ignored, and some surfaces do read it — no promise is
+    // made that the lock screen shows it.
+    if let albumArtist = item.albumArtist {
+      info[MPMediaItemPropertyAlbumArtist] = albumArtist
+    }
+    if let trackNumber = item.trackNumber {
+      info[MPMediaItemPropertyAlbumTrackNumber] = NSNumber(value: Int(trackNumber))
+    }
+    if let discNumber = item.discNumber {
+      info[MPMediaItemPropertyDiscNumber] = NSNumber(value: Int(discNumber))
+    }
+    // `year`, `subtitle` and `extras` are deliberately absent: MediaPlayer has
+    // no year key (`MPMediaItemPropertyReleaseDate` is an `NSDate` and is not on
+    // the supported list either), no third display line, and no arbitrary-payload
+    // key. They are carried through the session and through persistence so an
+    // app gets them back; they are not faked into keys that mean other things.
     // `item.id` is deliberately NOT published: the only string-typed identity
     // key MediaPlayer offers is
     // `MPNowPlayingInfoPropertyExternalContentIdentifier`, which is reserved
     // for content shared with external services, and
     // `MPMediaItemPropertyPersistentID` is a `UInt64` our ids are not.
 
-    if let duration = item.duration {
+    if let duration = item.duration, item.isLive != true {
       info[MPMediaItemPropertyPlaybackDuration] = duration / 1000
     } else {
-      // No duration means "we don't know", which for a remote surface is
-      // indistinguishable from a live stream — and marking it live is what
+      // Two ways to get here and they now say different things. `isLive == true`
+      // is the app stating it explicitly, and it wins even when a duration was
+      // also sent. No duration at all means "we don't know", which for a remote
+      // surface is indistinguishable from live — and marking it live is what
       // stops iOS from drawing a scrubber it cannot honour.
       info[MPNowPlayingInfoPropertyIsLiveStream] = true
     }

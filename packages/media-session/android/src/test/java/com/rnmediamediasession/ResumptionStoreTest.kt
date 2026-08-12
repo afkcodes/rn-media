@@ -5,6 +5,8 @@ import com.margelo.nitro.rnmediamediasession.MediaCapability
 import com.margelo.nitro.rnmediamediasession.MediaControl
 import com.margelo.nitro.rnmediamediasession.MediaCustomAction
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
+import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
+import com.margelo.nitro.rnmediamediasession.MediaSessionConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,8 +31,8 @@ import org.junit.Test
 class ResumptionStoreTest {
 
   private companion object {
-    const val KEY_SESSION = "resumption.session.v1"
-    const val KEY_CONFIG = "resumption.config.v1"
+    const val KEY_SESSION = "resumption.session.v2"
+    const val KEY_CONFIG = "resumption.config.v2"
 
     /**
      * A complete record in the shape `persistence.ts` serializes
@@ -39,7 +41,7 @@ class ResumptionStoreTest {
      */
     val FULL_RECORD = """
       {
-        "v": 1,
+        "v": 2,
         "savedAt": 1770000000000,
         "playbackState": {
           "status": "paused",
@@ -48,7 +50,9 @@ class ResumptionStoreTest {
           "capabilities": ["play", "pause", "seek", "skipToNext"],
           "customActions": [{ "name": "like", "title": "Like", "icon": "ic_like" }],
           "compactControlIndices": [0, 1, 2],
-          "queueIndex": 1
+          "queueIndex": 1,
+          "repeatMode": "all",
+          "shuffleEnabled": true
         },
         "mediaItem": {
           "id": "track-2",
@@ -57,7 +61,14 @@ class ResumptionStoreTest {
           "album": "Album",
           "artworkUri": "https://example.test/2.jpg",
           "duration": 240000,
-          "genre": "Ambient"
+          "genre": "Ambient",
+          "albumArtist": "Various Artists",
+          "trackNumber": 7,
+          "discNumber": 2,
+          "year": 1997,
+          "subtitle": "Episode 12",
+          "isLive": false,
+          "extras": { "source": "library", "quality": "flac" }
         },
         "queue": [
           { "id": "track-1", "title": "First" },
@@ -110,6 +121,56 @@ class ResumptionStoreTest {
     assertEquals("https://example.test/2.jpg", item.artworkUri)
     assertEquals(240000.0, requireNotNull(item.duration), 0.0)
     assertEquals("Ambient", item.genre)
+    assertEquals("Various Artists", item.albumArtist)
+    assertEquals(7.0, requireNotNull(item.trackNumber), 0.0)
+    assertEquals(2.0, requireNotNull(item.discNumber), 0.0)
+    assertEquals(1997.0, requireNotNull(item.year), 0.0)
+    assertEquals("Episode 12", item.subtitle)
+    assertEquals(false, item.isLive)
+    assertEquals(mapOf("source" to "library", "quality" to "flac"), item.extras)
+
+    // Schema 2 additions on channel 1. A resumed session that came back with
+    // shuffle silently off would be a worse lie than not resuming at all.
+    assertEquals(MediaRepeatMode.ALL, snapshot.repeatMode)
+    assertTrue(snapshot.shuffleEnabled)
+  }
+
+  @Test
+  fun `a record with no repeat or shuffle reads as off, not as null`() {
+    val snapshot = requireNotNull(
+      readSession("""{ "v": 2, "mediaItem": { "id": "t", "title": "T" } }""")
+    )
+
+    assertEquals(MediaRepeatMode.OFF, snapshot.repeatMode)
+    assertTrue(!snapshot.shuffleEnabled)
+  }
+
+  @Test
+  fun `an unknown repeat mode is read as off rather than dropping the record`() {
+    val snapshot = requireNotNull(
+      readSession(FULL_RECORD.replace("\"repeatMode\": \"all\"", "\"repeatMode\": \"sideways\""))
+    )
+
+    assertEquals(MediaRepeatMode.OFF, snapshot.repeatMode)
+    // The rest of the session is still perfectly resumable.
+    assertEquals("track-2", requireNotNull(snapshot.item).id)
+  }
+
+  @Test
+  fun `extended item fields are all optional`() {
+    val item = requireNotNull(
+      readSession("""{ "v": 2, "mediaItem": { "id": "t", "title": "T" } }""")
+    ).item
+
+    assertNull(requireNotNull(item).albumArtist)
+    assertNull(item.trackNumber)
+    assertNull(item.discNumber)
+    assertNull(item.year)
+    assertNull(item.subtitle)
+    // Absent is NOT false: absent keeps the old rule (live iff no duration),
+    // and `false` is an explicit statement that this is on-demand.
+    assertNull(item.isLive)
+    assertNull(item.extras)
   }
 
   @Test
@@ -170,12 +231,12 @@ class ResumptionStoreTest {
   @Test
   fun `the clearPersisted tombstone is not a resumption`() {
     // What `clearPersisted` writes: current version, no channels.
-    assertNull(readSession("""{ "v": 1, "savedAt": 1770000000000 }"""))
+    assertNull(readSession("""{ "v": 2, "savedAt": 1770000000000 }"""))
   }
 
   @Test
   fun `a record with an empty queue and no item is not a resumption`() {
-    assertNull(readSession("""{ "v": 1, "savedAt": 1, "queue": [] }"""))
+    assertNull(readSession("""{ "v": 2, "savedAt": 1, "queue": [] }"""))
   }
 
   @Test
@@ -199,30 +260,30 @@ class ResumptionStoreTest {
 
   @Test
   fun `a payload that is a JSON array is ignored`() {
-    assertNull(readSession("""[{ "v": 1 }]"""))
+    assertNull(readSession("""[{ "v": 2 }]"""))
   }
 
   @Test
   fun `a future schema version is ignored`() {
-    assertNull(readSession(FULL_RECORD.replace("\"v\": 1", "\"v\": 2")))
+    assertNull(readSession(FULL_RECORD.replace("\"v\": 2", "\"v\": 3")))
   }
 
   @Test
   fun `a missing schema version is ignored`() {
-    assertNull(readSession(FULL_RECORD.replace("\"v\": 1,", "")))
+    assertNull(readSession(FULL_RECORD.replace("\"v\": 2,", "")))
   }
 
   @Test
   fun `a non-numeric schema version is ignored`() {
-    assertNull(readSession(FULL_RECORD.replace("\"v\": 1", "\"v\": \"one\"")))
+    assertNull(readSession(FULL_RECORD.replace("\"v\": 2", "\"v\": \"one\"")))
   }
 
   @Test
   fun `an item missing its required fields is dropped`() {
     // `id` and `title` are the two non-nullable fields of `NativeMediaItem`;
     // there is no honest value to invent for either.
-    assertNull(readSession("""{ "v": 1, "mediaItem": { "title": "No id" } }"""))
-    assertNull(readSession("""{ "v": 1, "mediaItem": { "id": "no-title" } }"""))
+    assertNull(readSession("""{ "v": 2, "mediaItem": { "title": "No id" } }"""))
+    assertNull(readSession("""{ "v": 2, "mediaItem": { "id": "no-title" } }"""))
   }
 
   @Test
@@ -231,7 +292,7 @@ class ResumptionStoreTest {
       readSession(
         """
         {
-          "v": 1,
+          "v": 2,
           "queue": [
             { "id": "ok-1", "title": "Fine" },
             null,
@@ -253,7 +314,7 @@ class ResumptionStoreTest {
       readSession(
         """
         {
-          "v": 1,
+          "v": 2,
           "mediaItem": {
             "id": "t", "title": "T",
             "duration": "not a number",
@@ -279,7 +340,7 @@ class ResumptionStoreTest {
       readSession(
         """
         {
-          "v": 1,
+          "v": 2,
           "mediaItem": { "id": "t", "title": "T" },
           "playbackState": { "position": { "value": "somewhere" } }
         }
@@ -293,7 +354,7 @@ class ResumptionStoreTest {
   @Test
   fun `a record with no playbackState still resumes the metadata`() {
     val snapshot = requireNotNull(
-      readSession("""{ "v": 1, "mediaItem": { "id": "t", "title": "T" } }""")
+      readSession("""{ "v": 2, "mediaItem": { "id": "t", "title": "T" } }""")
     )
 
     assertEquals(0L, snapshot.anchor.valueMs)
@@ -321,7 +382,7 @@ class ResumptionStoreTest {
       readSession(
         """
         {
-          "v": 1,
+          "v": 2,
           "mediaItem": { "id": "t", "title": "T" },
           "playbackState": {
             "position": { "value": 0 },
@@ -343,7 +404,7 @@ class ResumptionStoreTest {
       readSession(
         """
         {
-          "v": 1,
+          "v": 2,
           "mediaItem": { "id": "t", "title": "T" },
           "playbackState": {
             "position": { "value": 0 },
@@ -363,18 +424,29 @@ class ResumptionStoreTest {
 
   // MARK: - Config mirror
 
+  private fun sessionConfig(
+    android: AndroidMediaSessionConfig,
+    jumpForwardSeconds: Double = 15.0,
+    jumpBackwardSeconds: Double = 15.0,
+  ) = MediaSessionConfig(android, null, jumpForwardSeconds, jumpBackwardSeconds)
+
   @Test
   fun `the config mirror survives an encode-decode round trip`() {
-    val config = AndroidMediaSessionConfig(
-      notificationChannelId = "playback",
-      notificationChannelName = "Playback",
-      notificationIcon = "ic_notification",
-      stopForegroundOnPause = false,
-      stopForegroundTimeoutMs = 15000.0,
-      playbackResumption = true,
+    val config = sessionConfig(
+      AndroidMediaSessionConfig(
+        notificationChannelId = "playback",
+        notificationChannelName = "Playback",
+        notificationIcon = "ic_notification",
+        stopForegroundOnPause = false,
+        stopForegroundTimeoutMs = 15000.0,
+        playbackResumption = true,
+        notificationColor = 4280138068.0,
+      ),
+      jumpForwardSeconds = 30.0,
+      jumpBackwardSeconds = 10.0,
     )
 
-    val decoded = requireNotNull(readConfig(ResumptionStore.encodeConfig(config)))
+    val decoded = requireNotNull(readConfig(ResumptionStore.encodeConfig(config))).android
 
     assertEquals("playback", decoded.notificationChannelId)
     assertEquals("Playback", decoded.notificationChannelName)
@@ -382,23 +454,64 @@ class ResumptionStoreTest {
     assertEquals(false, decoded.stopForegroundOnPause)
     assertEquals(15000.0, requireNotNull(decoded.stopForegroundTimeoutMs), 0.0)
     assertEquals(true, decoded.playbackResumption)
+    // 0xFF1DB954 — larger than Int.MAX_VALUE, which is exactly why it travels
+    // as a Double and is truncated through Long on the way to the notification.
+    assertEquals(4280138068.0, requireNotNull(decoded.notificationColor), 0.0)
+  }
+
+  @Test
+  fun `the mirrored jump intervals survive a round trip, in milliseconds`() {
+    // Mirrored because a revived service builds its facade player before any
+    // JavaScript exists, and that player's increments are what a notification's
+    // fast-forward button resolves against.
+    val decoded = requireNotNull(
+      readConfig(
+        ResumptionStore.encodeConfig(
+          sessionConfig(
+            AndroidMediaSessionConfig("playback", "Playback", null, true, null, true, null),
+            jumpForwardSeconds = 30.0,
+            jumpBackwardSeconds = 10.0,
+          )
+        )
+      )
+    )
+
+    assertEquals(30_000L, decoded.jumpForwardMs)
+    assertEquals(10_000L, decoded.jumpBackwardMs)
+  }
+
+  @Test
+  fun `a mirrored config predating the jump option falls back to 15s, not to media3's 5s`() {
+    // The whole point of the option: inheriting media3's asymmetric
+    // DEFAULT_SEEK_BACK_INCREMENT_MS (5 s) is the defect, so even the
+    // no-information path must not reproduce it.
+    val decoded = requireNotNull(
+      readConfig("""{ "channelId": "playback", "channelName": "Playback" }""")
+    )
+
+    assertEquals(15_000L, decoded.jumpForwardMs)
+    assertEquals(15_000L, decoded.jumpBackwardMs)
   }
 
   @Test
   fun `optional config fields round trip as absent`() {
-    val config = AndroidMediaSessionConfig(
-      notificationChannelId = "playback",
-      notificationChannelName = "Playback",
-      notificationIcon = null,
-      stopForegroundOnPause = true,
-      stopForegroundTimeoutMs = null,
-      playbackResumption = false,
+    val config = sessionConfig(
+      AndroidMediaSessionConfig(
+        notificationChannelId = "playback",
+        notificationChannelName = "Playback",
+        notificationIcon = null,
+        stopForegroundOnPause = true,
+        stopForegroundTimeoutMs = null,
+        playbackResumption = false,
+        notificationColor = null,
+      )
     )
 
-    val decoded = requireNotNull(readConfig(ResumptionStore.encodeConfig(config)))
+    val decoded = requireNotNull(readConfig(ResumptionStore.encodeConfig(config))).android
 
     assertNull(decoded.notificationIcon)
     assertNull(decoded.stopForegroundTimeoutMs)
+    assertNull(decoded.notificationColor)
     assertEquals(true, decoded.stopForegroundOnPause)
     assertEquals(false, decoded.playbackResumption)
   }
@@ -429,8 +542,8 @@ class ResumptionStoreTest {
     // `stopForegroundOnPause` defaults on, `playbackResumption` defaults off —
     // resumption starts a foreground service in a process the user did not
     // open, so a config that predates the flag must never turn it on.
-    assertEquals(true, decoded.stopForegroundOnPause)
-    assertEquals(false, decoded.playbackResumption)
-    assertNull(decoded.stopForegroundTimeoutMs)
+    assertEquals(true, decoded.android.stopForegroundOnPause)
+    assertEquals(false, decoded.android.playbackResumption)
+    assertNull(decoded.android.stopForegroundTimeoutMs)
   }
 }

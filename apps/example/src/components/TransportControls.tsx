@@ -18,24 +18,36 @@ import { COLORS, RADIUS, SHADOW, SPACE, TYPE } from '../theme'
 export const TransportControls = React.memo(function TransportControls({
   playing,
   ready,
+  hasNext,
+  hasPrevious,
   onPrevious,
   onToggle,
   onNext,
+  onSeekBy,
   onStop,
 }: {
   playing: boolean
   ready: boolean
+  /** From `PlayerState`, loop-aware and atomic — never recomputed here. */
+  hasNext: boolean
+  hasPrevious: boolean
   onPrevious: () => void
   onToggle: () => void
   onNext: () => void
+  onSeekBy: (deltaSeconds: number) => void
   onStop: () => void
 }): React.JSX.Element {
   return (
     <View style={styles.container}>
       <View style={styles.row}>
+        {/* ⏮ stays enabled at the head of the queue: past three seconds it
+            restarts the entry, which is what every music app does and what
+            `playlist.previous()` implements for us. */}
         <Round
           label="⏮"
-          accessibilityLabel="Previous track"
+          accessibilityLabel={
+            hasPrevious ? 'Previous track' : 'Restart track'
+          }
           disabled={!ready}
           onPress={onPrevious}
         />
@@ -58,11 +70,30 @@ export const TransportControls = React.memo(function TransportControls({
           </Text>
         </Pressable>
 
+        {/* …but ⏭ genuinely has nothing to do at the end of a queue, and
+            `hasNext` already knows about the loop mode. */}
         <Round
           label="⏭"
           accessibilityLabel="Next track"
-          disabled={!ready}
+          disabled={!ready || !hasNext}
           onPress={onNext}
+        />
+      </View>
+
+      {/* Relative jumps. `seekBy` is mpv's own relative seek — deriving an
+          absolute target from the projected position races the projection. */}
+      <View style={styles.row}>
+        <Jump
+          label="⏪ 15"
+          accessibilityLabel="Back 15 seconds"
+          disabled={!ready}
+          onPress={() => onSeekBy(-15)}
+        />
+        <Jump
+          label="30 ⏩"
+          accessibilityLabel="Forward 30 seconds"
+          disabled={!ready}
+          onPress={() => onSeekBy(30)}
         />
       </View>
 
@@ -110,6 +141,34 @@ function Round({
   )
 }
 
+function Jump({
+  label,
+  accessibilityLabel,
+  disabled,
+  onPress,
+}: {
+  label: string
+  accessibilityLabel: string
+  disabled: boolean
+  onPress: () => void
+}): React.JSX.Element {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.jump,
+        disabled && styles.dim,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={styles.jumpLabel}>{label}</Text>
+    </Pressable>
+  )
+}
+
 const PRIMARY = 76
 
 const styles = StyleSheet.create({
@@ -146,6 +205,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surfaceSunken,
   },
   stopLabel: { fontSize: TYPE.label, color: COLORS.muted },
+  jump: {
+    paddingVertical: SPACE.sm,
+    paddingHorizontal: SPACE.lg,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: COLORS.borderSoft,
+    backgroundColor: COLORS.surface,
+  },
+  jumpLabel: { fontSize: TYPE.label, color: COLORS.text },
   dim: { opacity: 0.4 },
   pressed: { opacity: 0.75 },
 })

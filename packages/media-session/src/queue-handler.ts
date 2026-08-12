@@ -63,7 +63,7 @@ export interface QueueHandlerMethods {
  * constructor constraint. It appears in a type position only; no `any` value
  * ever reaches the public API (CLAUDE.md principle 3).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 type MediaHandlerConstructor = new (...args: any[]) => MediaHandler
 
 /**
@@ -88,8 +88,8 @@ export function withQueueHandling<TBase extends MediaHandlerConstructor>(
   // `#private` fields, which a declaration file cannot describe for an
   // anonymous class (TS4094). Spelling the *public* shape here is also the
   // honest contract — the fields are an implementation detail.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): TBase & (abstract new (...args: any[]) => MediaHandler & QueueHandlerMethods) {
+): TBase &
+  (abstract new (...args: any[]) => MediaHandler & QueueHandlerMethods) {
   abstract class WithQueueHandling extends Base implements QueueHandlerMethods {
     #queue: MediaItem[] = []
     #index = -1

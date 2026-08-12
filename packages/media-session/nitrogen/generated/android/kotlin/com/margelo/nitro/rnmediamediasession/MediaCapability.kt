@@ -23,7 +23,9 @@ enum class MediaCapability(@DoNotStrip @Keep val value: Int) {
   SKIPTOPREVIOUS(4),
   SEEK(5),
   SKIPTOQUEUEITEM(6),
-  SETRATE(7);
+  SETRATE(7),
+  SETREPEATMODE(8),
+  SETSHUFFLE(9);
 
   companion object
 }

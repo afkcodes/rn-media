@@ -65,10 +65,7 @@ export type IosAudioSessionCategoryOption =
  * {@link IosAudioSessionMode}.
  */
 export type IosRouteSharingPolicy =
-  | 'defaultPolicy'
-  | 'longFormAudio'
-  | 'longFormVideo'
-  | 'independent'
+  'defaultPolicy' | 'longFormAudio' | 'longFormVideo' | 'independent'
 
 /** iOS half of {@link AudioSessionConfig}. Ignored on Android. */
 export interface IosAudioSessionConfig {
@@ -101,18 +98,11 @@ export type AndroidAudioUsage =
 
 /** `AudioAttributes.CONTENT_TYPE_*`. */
 export type AndroidAudioContentType =
-  | 'unknown'
-  | 'speech'
-  | 'music'
-  | 'movie'
-  | 'sonification'
+  'unknown' | 'speech' | 'music' | 'movie' | 'sonification'
 
 /** `AudioManager.AUDIOFOCUS_GAIN*`, i.e. `AudioFocusRequest.Builder`'s focus gain. */
 export type AndroidAudioFocusGain =
-  | 'gain'
-  | 'gainTransient'
-  | 'gainTransientMayDuck'
-  | 'gainTransientExclusive'
+  'gain' | 'gainTransient' | 'gainTransientMayDuck' | 'gainTransientExclusive'
 
 /** Android half of {@link AudioSessionConfig}. Ignored on iOS. */
 export interface AndroidAudioSessionConfig {
@@ -230,8 +220,10 @@ export interface NativeRouteChangeEvent {
  * the JS thread itself ("Their execution is scheduled on the JS Thread […] you
  * can call the callback from any Thread", nitro.margelo.com/docs/types/callbacks).
  */
-export interface RnMediaAudioSession
-  extends HybridObject<{ ios: 'swift'; android: 'kotlin' }> {
+export interface RnMediaAudioSession extends HybridObject<{
+  ios: 'swift'
+  android: 'kotlin'
+}> {
   /**
    * Apply `config` to the OS session.
    *

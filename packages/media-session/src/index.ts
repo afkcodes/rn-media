@@ -30,8 +30,12 @@ export type {
 } from './persistence'
 
 export {
+  DEFAULT_JUMP_SECONDS,
   DEFAULT_PLAYBACK_RESUMPTION,
+  DEFAULT_REPEAT_MODE,
+  DEFAULT_SHUFFLE_ENABLED,
   DEFAULT_STOP_FOREGROUND_ON_PAUSE,
+  DEFAULT_SUPPORTED_PLAYBACK_RATES,
   MAX_COMPACT_CONTROLS,
   MAX_STOP_FOREGROUND_TIMEOUT_MS,
   normalizeConfig,
@@ -49,10 +53,13 @@ export type {
   MediaHandler,
   MediaItem,
   MediaPlaybackStatus,
+  MediaRepeatMode,
   MediaServiceApi,
   MediaServiceConfig,
   PlaybackState,
   PositionAnchor,
+  SleepTimerMode,
+  SleepTimerState,
 } from './types'
 
 export type {
@@ -62,5 +69,6 @@ export type {
   MediaSessionHandlers,
   NativeMediaItem,
   NativePlaybackState,
+  NativeSleepTimerState,
   RnMediaMediaSession,
 } from './specs/media-session.nitro'

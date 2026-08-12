@@ -4,6 +4,7 @@ import type {
   MediaControl,
   MediaCustomAction,
   MediaPlaybackStatus,
+  MediaRepeatMode,
   MediaSessionConfig,
   NativeMediaItem,
   NativePlaybackState,
@@ -35,6 +36,8 @@ const CONTROLS: readonly MediaControl[] = [
   'skipToPrevious',
   'fastForward',
   'rewind',
+  'repeatMode',
+  'shuffle',
 ]
 
 const CAPABILITIES: readonly MediaCapability[] = [
@@ -46,7 +49,11 @@ const CAPABILITIES: readonly MediaCapability[] = [
   'skipToPrevious',
   'skipToQueueItem',
   'setRate',
+  'setRepeatMode',
+  'setShuffle',
 ]
+
+const REPEAT_MODES: readonly MediaRepeatMode[] = ['off', 'one', 'all']
 
 /* -------------------------------------------------------------------------- */
 /*                                  Helpers                                   */
@@ -54,7 +61,9 @@ const CAPABILITIES: readonly MediaCapability[] = [
 
 function assertFinite(value: unknown, field: string): asserts value is number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw invalidArgument(`${field} must be a finite number, got ${String(value)}.`)
+    throw invalidArgument(
+      `${field} must be a finite number, got ${String(value)}.`
+    )
   }
 }
 
@@ -63,7 +72,10 @@ function assertMember<T extends string>(
   allowed: readonly T[],
   field: string
 ): asserts value is T {
-  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) {
+  if (
+    typeof value !== 'string' ||
+    !(allowed as readonly string[]).includes(value)
+  ) {
     throw invalidArgument(
       `${field} must be one of ${allowed.join(', ')} — got ${JSON.stringify(value)}.`
     )
@@ -120,6 +132,48 @@ export function validateAnchor(
 /*                                 Media item                                 */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * A 1-based ordinal (track/disc number) or a year.
+ *
+ * Rejected rather than rounded: `trackNumber: 2.5` is a bug in the caller, and
+ * media3's `setTrackNumber(Integer)` / `MPMediaItemPropertyAlbumTrackNumber`
+ * would both silently truncate it into a plausible-looking wrong answer.
+ */
+function assertPositiveInteger(value: unknown, field: string): void {
+  assertFinite(value, field)
+  if (!Number.isInteger(value) || value <= 0) {
+    throw invalidArgument(
+      `${field} must be a positive integer, got ${String(value)}.`
+    )
+  }
+}
+
+/**
+ * `extras` is a **string→string** map on purpose (see `NativeMediaItem.extras`):
+ * it has to survive an Android `Bundle` across a binder *and* a JSON round trip
+ * through `withPersistence`. A number or a nested object here would cross the
+ * bridge as something the app did not put in, or not at all — so it is rejected
+ * at the choke point rather than discovered on a device.
+ */
+function validateExtras(
+  extras: Record<string, string>,
+  field: string
+): Record<string, string> {
+  if (extras == null || typeof extras !== 'object' || Array.isArray(extras)) {
+    throw invalidArgument(`${field} must be an object of string values.`)
+  }
+  for (const [key, value] of Object.entries(extras)) {
+    if (typeof value !== 'string') {
+      throw invalidArgument(
+        `${field}["${key}"] must be a string — extras cross a native Bundle and a ` +
+          `JSON round trip, so values are stringified by the app, not by us. ` +
+          `Got ${typeof value}.`
+      )
+    }
+  }
+  return extras
+}
+
 export function validateMediaItem(
   item: MediaItem,
   field = 'mediaItem'
@@ -133,8 +187,28 @@ export function validateMediaItem(
   if (item.duration !== undefined) {
     assertFinite(item.duration, `${field}.duration`)
     if (item.duration < 0) {
-      throw invalidArgument(`${field}.duration must be >= 0, got ${item.duration}.`)
+      throw invalidArgument(
+        `${field}.duration must be >= 0, got ${item.duration}.`
+      )
     }
+  }
+
+  if (item.trackNumber !== undefined) {
+    assertPositiveInteger(item.trackNumber, `${field}.trackNumber`)
+  }
+  if (item.discNumber !== undefined) {
+    assertPositiveInteger(item.discNumber, `${field}.discNumber`)
+  }
+  if (item.year !== undefined) {
+    assertPositiveInteger(item.year, `${field}.year`)
+  }
+  if (item.isLive !== undefined && typeof item.isLive !== 'boolean') {
+    throw invalidArgument(
+      `${field}.isLive must be a boolean, got ${JSON.stringify(item.isLive)}.`
+    )
+  }
+  if (item.extras !== undefined) {
+    validateExtras(item.extras, `${field}.extras`)
   }
   return item
 }
@@ -158,8 +232,14 @@ function validateCustomActions(
   }
   const seen = new Set<string>()
   for (const [index, action] of actions.entries()) {
-    assertNonEmptyString(action?.name, `playbackState.customActions[${index}].name`)
-    assertNonEmptyString(action.title, `playbackState.customActions[${index}].title`)
+    assertNonEmptyString(
+      action?.name,
+      `playbackState.customActions[${index}].name`
+    )
+    assertNonEmptyString(
+      action.title,
+      `playbackState.customActions[${index}].title`
+    )
     if (seen.has(action.name)) {
       // Duplicates make `customAction(name)` ambiguous on the way back in.
       throw invalidArgument(
@@ -176,7 +256,9 @@ function validateCompactIndices(
   controlCount: number
 ): number[] {
   if (!Array.isArray(indices)) {
-    throw invalidArgument('playbackState.compactControlIndices must be an array.')
+    throw invalidArgument(
+      'playbackState.compactControlIndices must be an array.'
+    )
   }
   if (indices.length > MAX_COMPACT_CONTROLS) {
     throw invalidArgument(
@@ -241,6 +323,19 @@ export function normalizePlaybackState(
     }
   }
 
+  if (state.repeatMode !== undefined) {
+    assertMember(state.repeatMode, REPEAT_MODES, 'playbackState.repeatMode')
+  }
+  if (
+    state.shuffleEnabled !== undefined &&
+    typeof state.shuffleEnabled !== 'boolean'
+  ) {
+    throw invalidArgument(
+      `playbackState.shuffleEnabled must be a boolean, got ` +
+        `${JSON.stringify(state.shuffleEnabled)}.`
+    )
+  }
+
   return {
     status: state.status,
     position: validateAnchor(state.position, 'playbackState.position'),
@@ -254,8 +349,20 @@ export function normalizePlaybackState(
         : validateCompactIndices(state.compactControlIndices, controls.length),
     queueIndex: state.queueIndex,
     errorMessage: state.errorMessage,
+    // Defaulted rather than passed through undefined: unlike
+    // `stopForegroundTimeoutMs` there is no platform default to defer to — both
+    // sides need a concrete repeat mode and shuffle flag to build their state,
+    // and "off"/false is what every surface showed before these fields existed.
+    // That makes an app that never sets them behave exactly as it did.
+    repeatMode: state.repeatMode ?? DEFAULT_REPEAT_MODE,
+    shuffleEnabled: state.shuffleEnabled ?? DEFAULT_SHUFFLE_ENABLED,
   }
 }
+
+/** What every surface showed before `repeatMode` existed. */
+export const DEFAULT_REPEAT_MODE: MediaRepeatMode = 'off'
+/** What every surface showed before `shuffleEnabled` existed. */
+export const DEFAULT_SHUFFLE_ENABLED = false
 
 /* -------------------------------------------------------------------------- */
 /*                                 Sleep timer                                */
@@ -311,6 +418,99 @@ export const MAX_STOP_FOREGROUND_TIMEOUT_MS = 600_000
  * exercised on more hardware than the machine this was written on.
  */
 export const DEFAULT_PLAYBACK_RESUMPTION = false
+
+/**
+ * The one jump interval, in seconds, applied identically on both platforms.
+ *
+ * **This constant is the fix for a parity defect, not a preference.** Before it,
+ * iOS pinned 15 s in both directions (`RemoteCommandBinding.skipInterval`) while
+ * Android set neither media3 increment and therefore inherited
+ * `C.DEFAULT_SEEK_BACK_INCREMENT_MS = 5_000` and
+ * `C.DEFAULT_SEEK_FORWARD_INCREMENT_MS = 15_000` (media3 1.11.0, `javap` on the
+ * shipped AAR) — so the same JS call skipped back 5 s on Android and 15 s on
+ * iOS.
+ *
+ * 15 both ways rather than media3's asymmetric pair: it is what RNTP V4
+ * (`forwardJumpInterval`/`backwardJumpInterval`) and V5
+ * (`forwardInterval`/`backwardInterval`) both default to, it is what this
+ * package already did on the platform where the value was deliberate, and a
+ * symmetric default cannot surprise an app that sets one and forgets the other.
+ *
+ * Exported so an app can say "double the default" without hard-coding 15, and so
+ * a test can assert the two platforms are handed the same number.
+ */
+export const DEFAULT_JUMP_SECONDS = 15
+
+/**
+ * `MPChangePlaybackRateCommand.supportedPlaybackRates` when the app names none.
+ *
+ * Unchanged from the constant this replaced (`RemoteCommandBinding.supportedRates`),
+ * so making the list configurable changes nothing for an app that does not
+ * configure it. Negative rates are absent because MediaPlayer does not support
+ * them.
+ */
+export const DEFAULT_SUPPORTED_PLAYBACK_RATES: readonly number[] = [
+  0.5, 0.75, 1, 1.25, 1.5, 2,
+]
+
+/**
+ * Jump intervals are seconds, strictly positive and finite.
+ *
+ * `0` is rejected rather than read as "no jump": a zero interval produces a
+ * button that seeks to exactly where you are, which is indistinguishable from a
+ * broken button. An app that does not want the control omits `fastForward` /
+ * `rewind` from `controls`, which is the way to say it.
+ */
+function validateJumpSeconds(value: unknown, field: string): number {
+  assertFinite(value, field)
+  if (value <= 0) {
+    throw invalidArgument(
+      `${field} must be > 0 seconds, got ${value}. To remove the button, leave ` +
+        `'fastForward'/'rewind' out of playbackState.controls instead.`
+    )
+  }
+  return value
+}
+
+function validateSupportedPlaybackRates(rates: number[]): number[] {
+  if (!Array.isArray(rates) || rates.length === 0) {
+    throw invalidArgument(
+      'config.ios.supportedPlaybackRates must be a non-empty array of rates. ' +
+        'Omit it for the default.'
+    )
+  }
+  for (const rate of rates) {
+    assertFinite(rate, 'config.ios.supportedPlaybackRates[]')
+    if (rate <= 0) {
+      // MediaPlayer has no reverse playback, and `0` is "paused", which is the
+      // transport's job rather than the rate control's.
+      throw invalidArgument(
+        `config.ios.supportedPlaybackRates must contain only rates > 0, got ${rate}.`
+      )
+    }
+  }
+  return rates
+}
+
+/**
+ * `Notification.color` is an ARGB **32-bit** value.
+ *
+ * Both signed (`-16777216`) and unsigned (`0xFF000000` = `4278190080`) spellings
+ * are accepted, because both are what a JS caller naturally has: a hex literal
+ * is unsigned, an Android colour int round-tripped through a theme is signed.
+ * The native side truncates to the low 32 bits, so the two are the same colour.
+ */
+function validateNotificationColor(value: unknown): number {
+  assertFinite(value, 'config.android.notificationColor')
+  if (!Number.isInteger(value) || value < -0x8000_0000 || value > 0xffff_ffff) {
+    throw invalidArgument(
+      `config.android.notificationColor must be a 32-bit ARGB integer such as ` +
+        `0xFF1DB954, got ${String(value)}. Remember the alpha byte — 0x1DB954 is ` +
+        `transparent black.`
+    )
+  }
+  return value
+}
 
 export function normalizeConfig(
   config: MediaServiceConfig = {}
@@ -368,7 +568,24 @@ export function normalizeConfig(
     }
   }
 
+  const jumpForwardSeconds =
+    config.jumpForwardSeconds === undefined
+      ? DEFAULT_JUMP_SECONDS
+      : validateJumpSeconds(
+          config.jumpForwardSeconds,
+          'config.jumpForwardSeconds'
+        )
+  const jumpBackwardSeconds =
+    config.jumpBackwardSeconds === undefined
+      ? DEFAULT_JUMP_SECONDS
+      : validateJumpSeconds(
+          config.jumpBackwardSeconds,
+          'config.jumpBackwardSeconds'
+        )
+
   return {
+    jumpForwardSeconds,
+    jumpBackwardSeconds,
     android:
       android === undefined
         ? undefined
@@ -385,7 +602,24 @@ export function normalizeConfig(
             stopForegroundTimeoutMs: android.stopForegroundTimeoutMs,
             playbackResumption:
               android.playbackResumption ?? DEFAULT_PLAYBACK_RESUMPTION,
+            notificationColor:
+              android.notificationColor === undefined
+                ? undefined
+                : validateNotificationColor(android.notificationColor),
           },
-    ios: ios === undefined ? undefined : { artworkCacheSize: ios.artworkCacheSize },
+    ios:
+      ios === undefined
+        ? undefined
+        : {
+            artworkCacheSize: ios.artworkCacheSize,
+            // Passed through undefined rather than defaulted here: the default
+            // list lives on the Swift side next to the command it configures, so
+            // "the app did not choose" stays distinguishable from "the app chose
+            // exactly the default" all the way down.
+            supportedPlaybackRates:
+              ios.supportedPlaybackRates === undefined
+                ? undefined
+                : validateSupportedPlaybackRates(ios.supportedPlaybackRates),
+          },
   }
 }

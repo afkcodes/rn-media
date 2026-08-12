@@ -73,8 +73,10 @@ export const withMediaButtonReceiver: ConfigPlugin = (config) =>
       application.receiver = [
         ...receivers,
         {
-          $: { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
-          'intent-filter': [{ action: [{ $: { 'android:name': MEDIA_BUTTON_ACTION } }] }],
+          '$': { 'android:name': RECEIVER_NAME, 'android:exported': 'true' },
+          'intent-filter': [
+            { action: [{ $: { 'android:name': MEDIA_BUTTON_ACTION } }] },
+          ],
         },
       ]
       return manifestConfig

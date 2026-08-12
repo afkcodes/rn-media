@@ -42,7 +42,12 @@
 import React from 'react'
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
-import { usePlayerState, useProgress } from '@rn-media/player'
+import {
+  useMilestones,
+  usePlayerState,
+  useProgress,
+  type ChapterEntry,
+} from '@rn-media/player'
 import { COLORS, SPACE, TYPE } from './theme'
 import { usePlayback } from './playback'
 import { durationMs, nowPlaying } from './playback/broadcast'
@@ -70,6 +75,13 @@ function App(): React.JSX.Element {
   const shell = usePlayerState(player, selectShell, sameShell)
   // Its own ticker, so only the clock line and the scrubber re-render.
   const progress = useProgress(player)
+  // Scrobbling, the honest way: milestones are a HOOK, not a player feature,
+  // because a mid-track time event needs a tick and this design has none — a
+  // timer inside the player would freeze with the screen off. This one rides
+  // the ticker `useProgress` already runs and starts nothing of its own.
+  useMilestones(player, ({ percent, index }) => {
+    console.log(`[example] milestone ${String(percent)}% of entry ${String(index)}`)
+  })
 
   const ready = player !== undefined
   // The queue is app state, not player state — it can be edited — so the
@@ -81,6 +93,13 @@ function App(): React.JSX.Element {
   const published = track === undefined ? undefined : durationMs(track, shell)
   const song = track === undefined ? undefined : nowPlaying(track, shell)
   const live = progress.isLive || track?.live === true
+  // Chapters are a PULL, like the queue's contents: one node read, taken when
+  // the entry changes rather than kept in state and pushed on every update.
+  // Most entries have none, and this costs exactly one native call per track.
+  const [chapters, setChapters] = React.useState<readonly ChapterEntry[]>([])
+  React.useEffect(() => {
+    setChapters(ready ? playback.chapters() : [])
+  }, [playback, ready, shell.index, shell.status])
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -103,15 +122,19 @@ function App(): React.JSX.Element {
           durationMs={published}
           live={live}
           ready={ready}
+          chapters={chapters}
           onSeek={(seconds) => playback.seekTo(seconds)}
         />
 
         <TransportControls
           playing={shell.playing}
           ready={ready}
+          hasNext={shell.hasNext}
+          hasPrevious={shell.hasPrevious}
           onPrevious={() => playback.previous()}
           onToggle={() => playback.toggle()}
           onNext={() => playback.next()}
+          onSeekBy={(delta) => playback.seekBy(delta)}
           onStop={() => void playback.stop()}
         />
 
@@ -152,11 +175,15 @@ function App(): React.JSX.Element {
 
         <OutputControls
           rate={shell.rate}
+          pitch={shell.pitch}
           volume={shell.volume}
           muted={shell.muted}
           buffered={formatTime(progress.buffered)}
           ready={ready}
           onRate={(rate) => playback.setRate(rate)}
+          onPitchSemitones={(semitones) =>
+            playback.setPitchSemitones(semitones)
+          }
           onVolume={(volume) => playback.setVolume(volume)}
           onToggleMute={() => playback.toggleMuted()}
         />

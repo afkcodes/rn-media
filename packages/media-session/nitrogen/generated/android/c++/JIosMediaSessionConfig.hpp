@@ -11,6 +11,7 @@
 #include "IosMediaSessionConfig.hpp"
 
 #include <optional>
+#include <vector>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -33,8 +34,16 @@ namespace margelo::nitro::rnmediamediasession {
       static const auto clazz = javaClassStatic();
       static const auto fieldArtworkCacheSize = clazz->getField<jni::JDouble>("artworkCacheSize");
       jni::local_ref<jni::JDouble> artworkCacheSize = this->getFieldValue(fieldArtworkCacheSize);
+      static const auto fieldSupportedPlaybackRates = clazz->getField<jni::JArrayDouble>("supportedPlaybackRates");
+      jni::local_ref<jni::JArrayDouble> supportedPlaybackRates = this->getFieldValue(fieldSupportedPlaybackRates);
       return IosMediaSessionConfig(
-        artworkCacheSize != nullptr ? std::make_optional(artworkCacheSize->value()) : std::nullopt
+        artworkCacheSize != nullptr ? std::make_optional(artworkCacheSize->value()) : std::nullopt,
+        supportedPlaybackRates != nullptr ? std::make_optional([&]() {
+          size_t __size = supportedPlaybackRates->size();
+          std::vector<double> __vector(__size);
+          supportedPlaybackRates->getRegion(0, __size, __vector.data());
+          return __vector;
+        }()) : std::nullopt
       );
     }
 
@@ -44,12 +53,18 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JIosMediaSessionConfig::javaobject> fromCpp(const IosMediaSessionConfig& value) {
-      using JSignature = JIosMediaSessionConfig(jni::alias_ref<jni::JDouble>);
+      using JSignature = JIosMediaSessionConfig(jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JArrayDouble>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
         clazz,
-        value.artworkCacheSize.has_value() ? jni::JDouble::valueOf(value.artworkCacheSize.value()) : nullptr
+        value.artworkCacheSize.has_value() ? jni::JDouble::valueOf(value.artworkCacheSize.value()) : nullptr,
+        value.supportedPlaybackRates.has_value() ? [&]() {
+          size_t __size = value.supportedPlaybackRates.value().size();
+          jni::local_ref<jni::JArrayDouble> __array = jni::JArrayDouble::newArray(__size);
+          __array->setRegion(0, __size, value.supportedPlaybackRates.value().data());
+          return __array;
+        }() : nullptr
       );
     }
   };

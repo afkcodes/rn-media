@@ -26,6 +26,7 @@
  */
 import {
   toPlayerError,
+  type ChapterEntry,
   type Player,
   type PlayerError,
   type PlayerState,
@@ -270,8 +271,27 @@ export class Playback implements PlaybackCommands {
   seekTo(seconds: number): void {
     this.#transport.seekTo(seconds)
   }
+  seekBy(deltaSeconds: number): void {
+    this.#transport.seekBy(deltaSeconds)
+  }
   setRate(rate: number): void {
     this.#transport.setRate(rate)
+  }
+  setPitchSemitones(semitones: number): void {
+    this.#transport.setPitchSemitones(semitones)
+  }
+  nextChapter(): void {
+    this.#transport.nextChapter()
+  }
+  previousChapter(): void {
+    this.#transport.previousChapter()
+  }
+  /**
+   * The current entry's chapters — one node read, pulled when something says
+   * they changed rather than kept in state. See `NowPlaying`.
+   */
+  chapters(): readonly ChapterEntry[] {
+    return this.player?.getChapters() ?? []
   }
   setVolume(volume: number): void {
     this.#transport.setVolume(volume)

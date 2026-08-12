@@ -18,7 +18,7 @@ public extension NativeMediaItem {
   /**
    * Create a new instance of `NativeMediaItem`.
    */
-  init(id: String, title: String, artist: String?, album: String?, artworkUri: String?, duration: Double?, genre: String?) {
+  init(id: String, title: String, artist: String?, album: String?, artworkUri: String?, duration: Double?, genre: String?, albumArtist: String?, trackNumber: Double?, discNumber: Double?, year: Double?, subtitle: String?, isLive: Bool?, extras: Dictionary<String, String>?) {
     self.init(std.string(id), std.string(title), { () -> bridge.std__optional_std__string_ in
       if let __unwrappedValue = artist {
         return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
@@ -46,6 +46,54 @@ public extension NativeMediaItem {
     }(), { () -> bridge.std__optional_std__string_ in
       if let __unwrappedValue = genre {
         return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_std__string_ in
+      if let __unwrappedValue = albumArtist {
+        return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_double_ in
+      if let __unwrappedValue = trackNumber {
+        return bridge.create_std__optional_double_(__unwrappedValue)
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_double_ in
+      if let __unwrappedValue = discNumber {
+        return bridge.create_std__optional_double_(__unwrappedValue)
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_double_ in
+      if let __unwrappedValue = year {
+        return bridge.create_std__optional_double_(__unwrappedValue)
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_std__string_ in
+      if let __unwrappedValue = subtitle {
+        return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_bool_ in
+      if let __unwrappedValue = isLive {
+        return bridge.create_std__optional_bool_(__unwrappedValue)
+      } else {
+        return .init()
+      }
+    }(), { () -> bridge.std__optional_std__unordered_map_std__string__std__string__ in
+      if let __unwrappedValue = extras {
+        return bridge.create_std__optional_std__unordered_map_std__string__std__string__({ () -> bridge.std__unordered_map_std__string__std__string_ in
+          var __map = bridge.create_std__unordered_map_std__string__std__string_(__unwrappedValue.count)
+          for (__k, __v) in __unwrappedValue {
+            bridge.emplace_std__unordered_map_std__string__std__string_(&__map, std.string(__k), std.string(__v))
+          }
+          return __map
+        }())
       } else {
         return .init()
       }
@@ -116,6 +164,98 @@ public extension NativeMediaItem {
       if bridge.has_value_std__optional_std__string_(self.__genre) {
         let __unwrapped = bridge.get_std__optional_std__string_(self.__genre)
         return String(__unwrapped)
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var albumArtist: String? {
+    return { () -> String? in
+      if bridge.has_value_std__optional_std__string_(self.__albumArtist) {
+        let __unwrapped = bridge.get_std__optional_std__string_(self.__albumArtist)
+        return String(__unwrapped)
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var trackNumber: Double? {
+    return { () -> Double? in
+      if bridge.has_value_std__optional_double_(self.__trackNumber) {
+        let __unwrapped = bridge.get_std__optional_double_(self.__trackNumber)
+        return __unwrapped
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var discNumber: Double? {
+    return { () -> Double? in
+      if bridge.has_value_std__optional_double_(self.__discNumber) {
+        let __unwrapped = bridge.get_std__optional_double_(self.__discNumber)
+        return __unwrapped
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var year: Double? {
+    return { () -> Double? in
+      if bridge.has_value_std__optional_double_(self.__year) {
+        let __unwrapped = bridge.get_std__optional_double_(self.__year)
+        return __unwrapped
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var subtitle: String? {
+    return { () -> String? in
+      if bridge.has_value_std__optional_std__string_(self.__subtitle) {
+        let __unwrapped = bridge.get_std__optional_std__string_(self.__subtitle)
+        return String(__unwrapped)
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var isLive: Bool? {
+    return { () -> Bool? in
+      if bridge.has_value_std__optional_bool_(self.__isLive) {
+        let __unwrapped = bridge.get_std__optional_bool_(self.__isLive)
+        return __unwrapped
+      } else {
+        return nil
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var extras: Dictionary<String, String>? {
+    return { () -> Dictionary<String, String>? in
+      if bridge.has_value_std__optional_std__unordered_map_std__string__std__string__(self.__extras) {
+        let __unwrapped = bridge.get_std__optional_std__unordered_map_std__string__std__string__(self.__extras)
+        return { () -> Dictionary<String, String> in
+          var __dictionary = Dictionary<String, String>(minimumCapacity: __unwrapped.size())
+          let __keys = bridge.get_std__unordered_map_std__string__std__string__keys(__unwrapped)
+          for __key in __keys {
+            let __value = bridge.get_std__unordered_map_std__string__std__string__value(__unwrapped, __key)
+            __dictionary[String(__key)] = String(__value)
+          }
+          return __dictionary
+        }()
       } else {
         return nil
       }

@@ -33,6 +33,10 @@ public extension MediaCapability {
         self = .skiptoqueueitem
       case "setRate":
         self = .setrate
+      case "setRepeatMode":
+        self = .setrepeatmode
+      case "setShuffle":
+        self = .setshuffle
       default:
         return nil
     }
@@ -59,6 +63,10 @@ public extension MediaCapability {
         return "skipToQueueItem"
       case .setrate:
         return "setRate"
+      case .setrepeatmode:
+        return "setRepeatMode"
+      case .setshuffle:
+        return "setShuffle"
     }
   }
 }
