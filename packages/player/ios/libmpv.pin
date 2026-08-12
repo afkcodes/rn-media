@@ -223,14 +223,27 @@ LIBMPV_DARWIN_BUILD_REPO=afkcodes/libmpv-darwin-build
 #
 # Flags, pins and patches are GENERATED from afkcodes/rn-media-engine and
 # synced into the fork; `workshop sync --check` fails that repo's CI on drift.
-LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.6
+# --- rnmedia.7 — THE SIZE RELEASE (lockstep with Android v1.1.9-rnmedia.8) --
+# Engine unchanged; Mpv.framework device slice 2,676,512 → 1,756,424 B (−34.4%)
+# from the canonical dead-subsystem strip (rn-media-engine
+# patches/011-strip-mpv-dead, audio variant ONLY — the video variant never
+# receives it) + the overlay filter leaving the audio flag set in the same
+# release as Android dropped it (parity preserved). Verified against the
+# RELEASED asset on this Linux host: 54 exports exactly, zero non-mpv_*, all
+# markers (pcm-tap, prefetch hook), audiounit still the single AO. ld64
+# -dead_strip (the darwin analogue of Android's --gc-sections stage) was
+# DEFERRED — not exercisable from a Linux box; the size parity gap is size-only,
+# never feature; tracked for a CI-verified follow-up. Promoted from beta
+# 2026-08-12 after owner on-device testing (Android evidence; iOS remains
+# CI-verified only, as this file has always said).
+LIBMPV_DARWIN_BUILD_TAG=v0.7.2-rnmedia.7
 LIBMPV_DARWIN_BUILD_VARIANT=ios-universal-audio-default
 
 # SHA-256 of
 # libmpv-xcframeworks_${TAG}_${VARIANT}.tar.gz
 # (computed from the published release asset; re-verified on every download,
 # and a mismatch is a hard build failure rather than a warning).
-LIBMPV_DARWIN_BUILD_SHA256=a596a75e8e3c22b9f66f4a50b56d5ef2c28d736f5d72741d8fd21f2c55f5df5b
+LIBMPV_DARWIN_BUILD_SHA256=72bdab04c4bfde7fbed209ab2e61d371d5b4d3d784262b39eaf4ba0b483a1d99
 
 # --- metadata (informational; verified by inspecting the binaries) -----------
 # mpv                       0.41.0   (MPV_CLIENT_API_VERSION = 2.5)
