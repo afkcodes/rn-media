@@ -3,6 +3,7 @@ import { AppState, type AppStateStatus } from 'react-native'
 import type { Player } from '../player'
 import type { PlayerError } from '../errors'
 import { toVisualizerError } from '../errors'
+import { getScreenStateSource } from '../screen-state'
 import type { VisualizerFrame, VisualizerOptions } from '../visualizer'
 
 /**
@@ -43,9 +44,9 @@ export interface UseVisualizerResult {
   /**
    * Whether a subscription is currently live.
    *
-   * This is `false` while the app is not in the foreground (unless
-   * `pauseWhenInactive` was turned off) — a paused visualizer is genuinely not
-   * subscribed, not merely ignored.
+   * This is `false` while the app is not in the foreground **or** the device's
+   * display is off (unless `pauseWhenInactive` was turned off) — a paused
+   * visualizer is genuinely not subscribed, not merely ignored.
    */
   readonly active: boolean
 }
@@ -61,8 +62,8 @@ export interface UseVisualizerResult {
  * @param enabled - Set `false` to drop the subscription without unmounting —
  * e.g. while the visualizer is off screen. Defaults to `true`.
  * @param pauseWhenInactive - Drop the subscription whenever the app leaves the
- * foreground, and take it back when it returns. **Defaults to `true`**, and
- * should stay that way; see below.
+ * foreground **or the device's display goes off**, and take it back when both
+ * are true again. **Defaults to `true`**, and should stay that way; see below.
  * @returns The newest {@link VisualizerFrame}, plus any typed error.
  *
  * @remarks
@@ -84,9 +85,24 @@ export interface UseVisualizerResult {
  * Left alone through a long screen-off that is tens of thousands of pointless
  * renders and a matching amount of CPU and battery spent drawing to nobody, and
  * the app is busy working through them at the moment the user unlocks. Pausing
- * on `AppState` costs nothing while visible and removes the whole class of
- * problem: because the native tap is *derived from* the listener set, dropping
- * the subscription disarms mpv's ring and stops the sampler thread outright.
+ * costs nothing while visible and removes the whole class of problem: because
+ * the native tap is *derived from* the listener set, dropping the subscription
+ * disarms mpv's ring and stops the sampler thread outright.
+ *
+ * **Why the gate is two signals, not one.** `AppState` alone is not enough on
+ * Android, and the failure is not theoretical: a screen-off soak on a Poco F4
+ * (MIUI, charging) recorded `AppState` reporting the app foreground again
+ * *while the display stayed off* — subscribed 11:25, paused 11:36, **re-subscribed
+ * 11:43 with the screen still off**, paused 11:53 — and the visualizer burned
+ * 65-80 % of a core in the window it was wrongly awake. So the hook ANDs
+ * `AppState` with the platform's own display state
+ * (`ScreenStateSource` — `PowerManager.isInteractive()` +
+ * `ACTION_SCREEN_ON`/`OFF` on Android): **either** signal saying "inactive"
+ * pauses, and **both** must say "active" to resume. On iOS the second signal is
+ * a constant `true` and that is correct — locking an iPhone resigns the app's
+ * active state and backgrounds it, and there is no iOS state where the app is
+ * foreground-active with the display off, so `AppState` is already the display
+ * truth there.
  *
  * **Audio is untouched by this.** Only the visual feed pauses; playback,
  * the media session and everything else keep running in the background exactly
@@ -130,6 +146,9 @@ export function useVisualizer(
   const [foreground, setForeground] = useState(() =>
     pauseWhenInactive ? isForeground(AppState.currentState) : true
   )
+  const [screenOn, setScreenOn] = useState(() =>
+    pauseWhenInactive ? getScreenStateSource().interactive : true
+  )
 
   // Options are compared by value, not identity: callers overwhelmingly pass an
   // object literal, and keying the effect on identity would tear the native
@@ -153,7 +172,23 @@ export function useVisualizer(
     return () => subscription.remove()
   }, [pauseWhenInactive])
 
-  const live = enabled && foreground
+  useEffect(() => {
+    if (!pauseWhenInactive) {
+      setScreenOn(true)
+      return
+    }
+    const source = getScreenStateSource()
+    // Same re-read as above, for the same reason: the display can go off
+    // between the first render and this effect.
+    setScreenOn(source.interactive)
+    return source.subscribe(setScreenOn)
+  }, [pauseWhenInactive])
+
+  // AND, not OR: either signal claiming "not visible" is enough to pause, and
+  // resuming needs both to agree. That asymmetry is the whole fix — the
+  // Android signal exists precisely because `AppState` says "active" during a
+  // screen-off, and an OR would let the wrong one win.
+  const live = enabled && foreground && screenOn
 
   useEffect(() => {
     if (!player || player.destroyed || !live) {

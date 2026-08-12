@@ -322,6 +322,74 @@ function nowPlaying(track: Track, state: PlayerState): string | undefined {
   return title !== undefined && title !== track.title ? title : undefined;
 }
 
+/**
+ * Everything the app shell draws, projected out of `PlayerState`.
+ *
+ * ## Why a selector and not the whole snapshot
+ * `usePlayerState(player)` with no selector re-renders its component on *every*
+ * state change. That is not once per track — `demuxer-cache-time` moves the
+ * buffered position while a track is streaming, and this component is the root
+ * of the screen, so an unfiltered subscription re-renders the entire tree
+ * (queue rows, EQ chips, the visualizer's parent) on a clock rather than on a
+ * discontinuity. The library quantises that clock to whole seconds, which makes
+ * it survivable — it does not make it *news*.
+ *
+ * A selector fixes it at the source: `usePlayerState` compares what the
+ * selector returned (here field by field, because the projection is a fresh
+ * object every call) and bails out of the render entirely when nothing this
+ * screen draws has changed. The rule worth copying: **subscribe to the fields
+ * you draw, not to the state.** Position is the same idea taken further —
+ * `useProgress` owns its own ticker so only the clock line re-renders, and
+ * `SeekBar` reads it directly.
+ */
+interface ShellState {
+  /** The queue entry the cursor is on — a stable `TRACKS` reference. */
+  readonly track: Track | undefined;
+  readonly status: PlayerState['status'];
+  readonly playing: boolean;
+  readonly index: number;
+  readonly count: number;
+  readonly rate: number;
+  readonly volume: number;
+  readonly muted: boolean;
+  /** Published duration in ms — `undefined` on anything live. */
+  readonly durationMs: number | undefined;
+  /** ICY now-playing line, when the current entry is a station sending one. */
+  readonly song: string | undefined;
+  readonly error: PlayerState['error'];
+}
+
+function selectShell(state: PlayerState): ShellState {
+  const track = currentTrack(state);
+  return {
+    track,
+    status: state.status,
+    playing: state.playing,
+    index: state.playlist.index,
+    count: state.playlist.count,
+    rate: state.rate,
+    volume: state.volume,
+    muted: state.muted,
+    durationMs: track === undefined ? undefined : durationMs(track, state),
+    song: track === undefined ? undefined : nowPlaying(track, state),
+    error: state.error,
+  };
+}
+
+/**
+ * Field-by-field comparison for {@link selectShell}.
+ *
+ * Needed because the selector returns a new object every time it runs; without
+ * it `usePlayerState` would see a new identity on every change and the selector
+ * would buy nothing. `error` is compared by identity on purpose — the reducer
+ * only ever replaces it, never edits it.
+ */
+function sameShell(a: ShellState, b: ShellState): boolean {
+  return (Object.keys(a) as Array<keyof ShellState>).every(key =>
+    Object.is(a[key], b[key]),
+  );
+}
+
 function toMediaItem(track: Track, state: PlayerState): MediaItem {
   const song = nowPlaying(track, state);
   return {
@@ -1363,7 +1431,11 @@ function Visualizer({
 
 function App(): React.JSX.Element {
   const { player, error } = usePlayback();
-  const state = usePlayerState(player);
+  // Selector-scoped, not the whole snapshot: see `ShellState`. The selector and
+  // its comparison are module-level functions so their identities are stable
+  // across renders — an inline arrow here would rebuild the subscription every
+  // time and defeat the memoisation inside the hook.
+  const shell = usePlayerState(player, selectShell, sameShell);
   const progress = useProgress(player);
   const sleepRemaining = useSleepTimerCountdown();
   const [eqPreset, setEqPreset] = React.useState('flat');
@@ -1392,13 +1464,13 @@ function App(): React.JSX.Element {
 
   /* --- UI -------------------------------------------------------------- */
 
-  const track = currentTrack(state);
-  const failure = error ?? state.error;
+  const track = shell.track;
+  const failure = error ?? shell.error;
   const ready = player !== undefined;
   // The same duration the media session gets — `undefined` for a live stream,
   // where mpv's raw `state.duration` is just how much it has cached.
-  const published = track === undefined ? undefined : durationMs(track, state);
-  const song = track === undefined ? undefined : nowPlaying(track, state);
+  const published = shell.durationMs;
+  const song = shell.song;
   const live = progress.isLive || track?.live === true;
 
   return (
@@ -1418,7 +1490,7 @@ function App(): React.JSX.Element {
           <Text style={styles.nowPlaying}>♪ {song}</Text>
         )}
 
-        <Text style={styles.status}>{state.status}</Text>
+        <Text style={styles.status}>{shell.status}</Text>
 
         <Text style={styles.time}>
           {formatTime(progress.position)} /{' '}
@@ -1443,9 +1515,9 @@ function App(): React.JSX.Element {
         />
 
         <Text style={styles.detail}>
-          track {state.playlist.index + 1} of {state.playlist.count} · buffered{' '}
-          {formatTime(progress.buffered)} · {state.rate}× · vol{' '}
-          {Math.round(state.volume * 100)}%{state.muted ? ' · muted' : ''}
+          track {shell.index + 1} of {shell.count} · buffered{' '}
+          {formatTime(progress.buffered)} · {shell.rate}× · vol{' '}
+          {Math.round(shell.volume * 100)}%{shell.muted ? ' · muted' : ''}
         </Text>
 
         <View style={styles.row}>
@@ -1469,7 +1541,7 @@ function App(): React.JSX.Element {
             ]}
           >
             <Text style={styles.primaryLabel}>
-              {state.playing ? 'Pause' : 'Play'}
+              {shell.playing ? 'Pause' : 'Play'}
             </Text>
           </Pressable>
 
@@ -1492,7 +1564,7 @@ function App(): React.JSX.Element {
               onPress={() => void playback.jumpTo(index)}
               style={[
                 styles.queueRow,
-                index === state.playlist.index && styles.queueRowCurrent,
+                index === shell.index && styles.queueRowCurrent,
               ]}
             >
               <Text style={styles.queueTitle}>

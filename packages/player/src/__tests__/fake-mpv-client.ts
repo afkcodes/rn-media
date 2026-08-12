@@ -36,6 +36,18 @@ export class FakeMpvClient implements MpvClient {
   readonly readable = new Map<string, MpvPropertyValue>()
 
   /**
+   * Values `getPropertyMap` should return, keyed by property name.
+   *
+   * Separate from {@link readable} because a node-map read is a different mpv
+   * format, not a different rendering of the same value: mpv answers
+   * `metadata` as a map and refuses to answer it as a string.
+   */
+  readonly readableMaps = new Map<string, Record<string, string>>()
+
+  /** How many `getPropertyMap` reads were issued, in order. */
+  readonly mapReads: string[] = []
+
+  /**
    * Property names whose `getProperty*` should throw, keyed to the message.
    *
    * Native distinguishes "unavailable" (→ `undefined`) from every other mpv
@@ -161,6 +173,13 @@ export class FakeMpvClient implements MpvClient {
   getPropertyBool(name: string): boolean | undefined {
     const value = this.#read(name)
     return typeof value === 'boolean' ? value : undefined
+  }
+
+  getPropertyMap(name: string): Record<string, string> | undefined {
+    this.mapReads.push(name)
+    const failure = this.readErrors.get(name)
+    if (failure !== undefined) throw new Error(failure)
+    return this.readableMaps.get(name)
   }
 
   setPropertyString(name: string, value: string): void {

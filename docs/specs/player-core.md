@@ -167,6 +167,69 @@ not. This supersedes the "registered lazily on first install" line above, and th
 ARCHITECTURE.md carries no lazy-registration claim, so nothing there is stale;
 ARCHITECTURE §11's prefetch-patch paragraph is unaffected.
 
+AS-BUILT ADDENDUM (2026-08-12): the play-time hold parks the event thread, and
+three hot-path costs that were measured rather than reasoned about.
+
+**The play-time resolution hold blocks command replies, not just mpv.** The
+`ResolutionGate` wait is taken *on the event thread* (`MpvClient.cpp`,
+`handleHook`), which is the only thread calling `mpv_wait_event`. For its
+duration — up to `resolverTimeoutMs`, default 10 s — no property change and no
+`MPV_EVENT_COMMAND_REPLY` reaches JavaScript, so a `seekTo()`/`play()`/
+`command()` Promise issued during an unresolved play-time load stays pending
+until the hold ends. Bounded, never lost, and it also risks
+`MPV_EVENT_QUEUE_OVERFLOW` on a long hold with a busy core. **Kept as designed**,
+documented at `PlayerOptions.resolverTimeoutMs` and on
+`DEFAULT_RESOLVER_TIMEOUT_MS`: resolve-ahead answers the current and next entry
+as the queue moves, so the play-time path should be cold, and `0` disables
+holding entirely for an app that would rather fail fast. The alternative —
+parking a dedicated waiter so `mpv_wait_event` keeps draining — was considered
+and deferred: a second synchronisation object plus a hook continuation issued
+from a thread that never received the hook, to improve a path the design already
+makes rare.
+
+**A second HybridObject in this package: `RnMediaScreenState`** (`android:
+kotlin`, `ios: c++`, singleton by nature — one display per device). `interactive`
+is `PowerManager.isInteractive()`; `addScreenStateListener` registers an
+`ACTION_SCREEN_ON`/`ACTION_SCREEN_OFF` receiver *derived from the listener set*,
+so a process with nothing observing holds no receiver. The iOS side is a
+constant `true` in C++ — locking an iPhone backgrounds the app and no iOS app is
+foreground-active with the display off, so `AppState` is already the display
+truth there, and a constant does not justify introducing Swift into the pod. It lives in `@rn-media/player`, not
+in `@rn-media/audio-session`, because its only consumer is this package's
+visualizer and a player-only install must not have to add a second native module
+to stop burning battery; the display is also not an audio-session concern.
+Consumed through the `ScreenStateSource` interface (`src/screen-state.ts`), which
+is replaceable via `setScreenStateSource()` for tests and for surfaces that are
+not the device display.
+
+**`getMetadata()` is one node read, not `2N + 1` scalar reads.** New spec method
+`getPropertyMap(name): Record<string, string> | undefined` — one
+`mpv_get_property(MPV_FORMAT_NODE)` converted natively through the existing
+`MpvClient::getPropertyNodeMap` visitor (the same primitive the PCM tap uses),
+with non-string members skipped rather than coerced. The `metadata/list/…` walk
+it replaces cost 41 blocking round-trips for a 20-tag FLAC, issued from inside
+the event-batch handler at a track boundary. `metadataKeyProperty` /
+`metadataValueProperty` / `metadata/list/count` stay public — they are still the
+only way to ask for one entry *by position* — but nothing in the library walks
+them any more.
+
+**Synchronous reads per event batch are now budgeted at 5, worst case**
+(`time-pos` 1 + track-change 3 + `metadata` 1), down from `6 + 2N`. Resolve-ahead
+no longer runs inline from `#handleBatch`: it is dispatched with
+`queueMicrotask`, so its two `playlist/N/filename` reads leave the reducer's turn
+while still running before any timer or native callback — "resolved as soon as
+the queue moves", the only ordering the `SourceResolver` docs promise, is
+unchanged.
+
+**`bufferedPosition` is second-granular.** `demuxer-cache-time` arrives ~4-6 Hz
+in steady playback (and keeps arriving while paused), and each accepted value
+minted a `PlayerState` plus a full listener fan-out — the one property that made
+"state changes only on discontinuities" untrue for a whole session. The reducer
+now adopts a value only when it moved ≥ `BUFFERED_POSITION_STEP` (1 s) or when
+it crosses the current `duration`, the latter so "fully buffered" is always
+observable exactly. The value itself is still mpv's, unrounded; what is
+quantised is how often it changes.
+
 ```ts
 const player = await Player.create({ /* typed options + raw mpv overrides */ });
 

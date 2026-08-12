@@ -34,8 +34,9 @@ target_sources(
   ../nitrogen/generated/android/RnMediaPlayerOnLoad.cpp
   # Shared Nitrogen C++ sources
   ../nitrogen/generated/shared/c++/HybridMpvClientSpec.cpp
+  ../nitrogen/generated/shared/c++/HybridRnMediaScreenStateSpec.cpp
   # Android-specific Nitrogen C++ sources
-  
+  ../nitrogen/generated/android/c++/JHybridRnMediaScreenStateSpec.cpp
 )
 
 # From node_modules/react-native/ReactAndroid/cmake-utils/folly-flags.cmake

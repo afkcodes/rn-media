@@ -53,6 +53,8 @@ import { useVisualizer } from '../hooks/useVisualizer'
 import type { Player } from '../player'
 import { Player as PlayerClass } from '../player'
 import { MpvProperty } from '../properties'
+import type { ScreenStateSource } from '../screen-state'
+import { setScreenStateSource } from '../screen-state'
 import type { PlayerState } from '../state'
 import {
   FakeMpvClient,
@@ -61,6 +63,43 @@ import {
   startFileEvent,
   toneCapture,
 } from './fake-mpv-client'
+
+/**
+ * A controllable stand-in for the platform's display-state signal, the second
+ * half of `useVisualizer`'s pause gate.
+ *
+ * Injected through the package's own seam (`setScreenStateSource`) rather than
+ * mocked, because that seam is public API — an integration presenting to an
+ * external screen is expected to replace the source exactly like this.
+ */
+const display = (() => {
+  const listeners = new Set<(interactive: boolean) => void>()
+  const state = {
+    interactive: true,
+    listeners,
+    source: {
+      get interactive(): boolean {
+        return state.interactive
+      },
+      subscribe(listener: (interactive: boolean) => void): () => void {
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+    } satisfies ScreenStateSource,
+    /** Drive a display transition the way `ACTION_SCREEN_ON/OFF` would. */
+    change(next: boolean): void {
+      state.interactive = next
+      for (const listener of [...listeners]) listener(next)
+    },
+    reset(): void {
+      listeners.clear()
+      state.interactive = true
+    },
+  }
+  return state
+})()
 
 let client: FakeMpvClient
 let now = 1_000_000
@@ -365,6 +404,12 @@ describe('useProgress', () => {
 describe('useVisualizer', () => {
   beforeEach(() => {
     appState.reset()
+    display.reset()
+    setScreenStateSource(display.source)
+  })
+
+  afterEach(() => {
+    setScreenStateSource(undefined)
   })
 
   async function makeVisualizerPlayer(): Promise<Player> {
@@ -562,6 +607,87 @@ describe('useVisualizer', () => {
     act(() => appState.change('background'))
     act(() => appState.change('active'))
     expect(running()).toBe(false)
+    expect(starts()).toBe(1)
+  })
+
+  it('pauses when the display goes off, even while AppState says active', async () => {
+    // The measured failure this gate exists for: on a Poco F4 (MIUI, charging)
+    // the app stayed `active` through a screen-off and the visualizer burned
+    // 65-80 % of a core rendering frames nobody could see.
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() => useVisualizer(player, { bands: 8 }))
+    expect(running()).toBe(true)
+
+    act(() => display.change(false))
+    expect(running()).toBe(false)
+    expect(stops()).toBe(1)
+    expect(result.current.active).toBe(false)
+    // AppState never moved — it is not what paused this.
+    expect(appState.currentState).toBe('active')
+  })
+
+  it('stays paused through an AppState flap while the display is still off', async () => {
+    // The 11:43 event from the soak: AppState went background → active with the
+    // screen still off, and the old `AppState`-only gate re-subscribed.
+    const player = await makeVisualizerPlayer()
+    renderHook(() => useVisualizer(player, { bands: 8 }))
+
+    act(() => display.change(false))
+    expect(running()).toBe(false)
+
+    act(() => appState.change('background'))
+    act(() => appState.change('active'))
+    expect(running()).toBe(false)
+    expect(starts()).toBe(1)
+  })
+
+  it('resumes only when both signals agree', async () => {
+    const player = await makeVisualizerPlayer()
+    renderHook(() => useVisualizer(player, { bands: 8 }))
+
+    act(() => display.change(false))
+    act(() => appState.change('background'))
+    expect(running()).toBe(false)
+
+    // Display back on, app still backgrounded: still nothing to draw to.
+    act(() => display.change(true))
+    expect(running()).toBe(false)
+
+    act(() => appState.change('active'))
+    expect(running()).toBe(true)
+    expect(starts()).toBe(2)
+  })
+
+  it('does not subscribe at all when it mounts with the display off', async () => {
+    display.interactive = false
+    const player = await makeVisualizerPlayer()
+    const { result } = renderHook(() => useVisualizer(player))
+    expect(starts()).toBe(0)
+    expect(result.current.active).toBe(false)
+
+    act(() => display.change(true))
+    expect(starts()).toBe(1)
+  })
+
+  it('registers no display listener when pauseWhenInactive is off', async () => {
+    const player = await makeVisualizerPlayer()
+    renderHook(() => useVisualizer(player, { bands: 8 }, true, false))
+
+    act(() => display.change(false))
+    expect(running()).toBe(true)
+    expect(display.listeners.size).toBe(0)
+  })
+
+  it('releases the display listener on unmount', async () => {
+    const player = await makeVisualizerPlayer()
+    const { unmount } = renderHook(() => useVisualizer(player))
+    expect(display.listeners.size).toBe(1)
+
+    unmount()
+    expect(display.listeners.size).toBe(0)
+    // Nothing left to wake up.
+    act(() => display.change(false))
+    act(() => display.change(true))
     expect(starts()).toBe(1)
   })
 

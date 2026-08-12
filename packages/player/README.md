@@ -260,16 +260,30 @@ out once and never touched, and each frame moves **two** Views per band by
 `transform` only — no per-frame layout. For anything heavier, subscribe
 imperatively and drive an animated value instead of React state.
 
-**The hook pauses itself when your app is not in the foreground**, and takes the
-subscription back when it returns (`pauseWhenInactive`, default `true`). This is
-not a battery nicety, it is a correctness fix: the frames are **native**
-callbacks, so — unlike a JS timer, which the platform freezes for you — they
-keep arriving at full rate behind a locked screen. An ungated visualizer would
-sit there calling `setState` 60 times a second at a display that cannot present
-anything, and the app would have all of that to work through at the moment the
-user unlocks. Because the tap is derived from the listener set, pausing the hook
-really does stop everything: mpv's ring, the sampler thread and the FFT all go
-away for the duration.
+**The hook pauses itself when nothing can be seen**, and takes the subscription
+back when something can (`pauseWhenInactive`, default `true`). This is not a
+battery nicety, it is a correctness fix: the frames are **native** callbacks, so
+— unlike a JS timer, which the platform freezes for you — they keep arriving at
+full rate behind a locked screen. An ungated visualizer would sit there calling
+`setState` 60 times a second at a display that cannot present anything, and the
+app would have all of that to work through at the moment the user unlocks.
+Because the tap is derived from the listener set, pausing the hook really does
+stop everything: mpv's ring, the sampler thread and the FFT tables are all
+released for the duration.
+
+"Can be seen" is **two** signals ANDed together, because on Android one is not
+enough: `AppState` (is the app foreground) *and* the device's display state
+(`PowerManager.isInteractive()` + `ACTION_SCREEN_ON`/`OFF`, via this package's
+own `RnMediaScreenState` native object). A screen-off soak on a Poco F4 (MIUI)
+caught `AppState` reporting the app active again **with the display still off**,
+and the visualizer ran at 65-80 % of a core in that window. Either signal saying
+"inactive" pauses; both must say "active" to resume. On iOS the display signal is
+a constant `true`, and correctly so — locking an iPhone resigns the app's active
+state and backgrounds it, and no iOS app is foreground-active with the display
+off, so there `AppState` already *is* the display truth.
+Presenting somewhere other than the phone's screen (an external display, a head
+unit)? Replace the signal with `setScreenStateSource(yourSource)` rather than
+turning the gate off.
 
 - **Audio is unaffected.** Playback, the media session and the notification
   carry on exactly as before; only the picture stops.
@@ -507,14 +521,16 @@ player.getMetadataValue('icy-title'); // one tag, one read; case-insensitive
 player.on('metadataChanged', metadata => updateNowPlaying(metadata));
 ```
 
-`getMetadata()` walks mpv's documented scalar sub-properties —
-`metadata/list/count`, then `metadata/list/N/key` and `metadata/list/N/value` —
-so **no string parsing is involved**. The `metadata` map property is never read
-for its content: mpv's manual says "Trying to retrieve this property as a raw
-string doesn't work", and a typed API should not rest on behaviour its own
-documentation disclaims. The cost is `2N + 1` synchronous reads, which is why
-this is a pull rather than a field of `PlayerState`; `getMetadataValue(key)` is a
-single read.
+`getMetadata()` is **one** read: mpv's `metadata` fetched as an
+`MPV_FORMAT_NODE` map and converted natively, so **no string parsing is
+involved** anywhere (the manual's "Trying to retrieve this property as a raw
+string doesn't work" is about the *string* format; the node read is the
+documented way, and it is atomic — the map cannot mix two tag generations). It
+walked `metadata/list/count` + `metadata/list/N/key` + `metadata/list/N/value`
+until 2026-08-12, which cost `2N + 1` blocking round-trips into mpv's core — 41
+of them for a 20-tag FLAC, issued at a track boundary. It is still a pull rather
+than a field of `PlayerState`, but a cheap one; `getMetadataValue(key)` remains a
+single read of one tag.
 
 `metadataChanged` fires at most once per native event batch, and only while at
 least one listener is registered — a player nobody is asking pays nothing. It is

@@ -137,6 +137,28 @@ internal class BroadcastPlayer(
   private var warnedMismatch: String? = null
 
   /**
+   * Everything [getState] derives from a snapshot that is not the snapshot
+   * itself — cached, because media3 calls `getState()` many times per broadcast
+   * (see [warnOnce]) and every call used to rebuild all of it.
+   *
+   * The cost this removes is per *entry*: a `MediaItem.Builder` + a
+   * `MediaMetadata.Builder` + a `Uri.parse` + a `MediaItemData.Builder` each,
+   * so a 500-track queue allocated 500 of each, several times per broadcast, on
+   * the main thread. A snapshot is immutable and replaced wholesale, so
+   * identity is a sound cache key and the result cannot go stale.
+   *
+   * Main-thread confined like the rest of this class — `SimpleBasePlayer`
+   * requires its application looper — hence no synchronisation.
+   */
+  private class Rendered(
+    val snapshot: Snapshot,
+    val commands: Player.Commands,
+    val playlist: List<MediaItemData>,
+  )
+
+  private var rendered: Rendered? = null
+
+  /**
    * Publish a new snapshot. Main thread only.
    *
    * @param acknowledgesCommands `true` for a `setPlaybackState` broadcast,
@@ -170,13 +192,12 @@ internal class BroadcastPlayer(
 
   override fun getState(): State {
     val current = snapshot
-    val builder = State.Builder().setAvailableCommands(MediaButtons.commands(current))
+    val derived = renderedFor(current)
+    val builder = State.Builder().setAvailableCommands(derived.commands)
 
     warnOnce(current.itemQueueMismatch)
 
-    // Already carries the `setMediaItem` overlay on the current entry; see
-    // `Snapshot.timeline` / `enrichedWith`.
-    val timeline = current.timeline
+    val timeline = derived.playlist
     if (timeline.isEmpty()) {
       // media3 asserts this pairing: "If the playlist is empty, the state must
       // be either STATE_IDLE or STATE_ENDED."
@@ -187,7 +208,7 @@ internal class BroadcastPlayer(
     }
 
     builder
-      .setPlaylist(timeline.mapIndexed { index, item -> mediaItemData(item, index, current) })
+      .setPlaylist(timeline)
       .setCurrentMediaItemIndex(current.timelineIndex)
       .setContentPositionMs(PositionSupplier { current.anchor.projectMs() })
       .setPlaybackParameters(PlaybackParameters(current.speed))
@@ -232,6 +253,26 @@ internal class BroadcastPlayer(
     }
 
     return builder.build()
+  }
+
+  /**
+   * The cached derivation for [current], rebuilt only when the snapshot itself
+   * changed. See [Rendered].
+   */
+  private fun renderedFor(current: Snapshot): Rendered {
+    val cached = rendered
+    if (cached != null && cached.snapshot === current) return cached
+    // `Snapshot.timeline` already carries the `setMediaItem` overlay on the
+    // current entry (see `Snapshot.timeline` / `enrichedWith`), and is itself
+    // computed once per snapshot.
+    val next =
+      Rendered(
+        snapshot = current,
+        commands = MediaButtons.commands(current),
+        playlist = current.timeline.mapIndexed { index, item -> mediaItemData(item, index, current) },
+      )
+    rendered = next
+    return next
   }
 
   /**

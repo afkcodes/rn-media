@@ -20,6 +20,7 @@ namespace margelo::nitro::rnmediaplayer {
       prototype.registerHybridMethod("getPropertyString", &HybridMpvClientSpec::getPropertyString);
       prototype.registerHybridMethod("getPropertyNumber", &HybridMpvClientSpec::getPropertyNumber);
       prototype.registerHybridMethod("getPropertyBool", &HybridMpvClientSpec::getPropertyBool);
+      prototype.registerHybridMethod("getPropertyMap", &HybridMpvClientSpec::getPropertyMap);
       prototype.registerHybridMethod("setPropertyString", &HybridMpvClientSpec::setPropertyString);
       prototype.registerHybridMethod("setPropertyNumber", &HybridMpvClientSpec::setPropertyNumber);
       prototype.registerHybridMethod("setPropertyBool", &HybridMpvClientSpec::setPropertyBool);

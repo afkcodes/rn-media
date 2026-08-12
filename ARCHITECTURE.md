@@ -758,7 +758,11 @@ tables and mpv's ring are *derived from* the listener set, so they cannot be
 leaked by forgetting to stop them. There is deliberately no free-standing
 `start()` — it could only mean "hold the tap open with nobody looking". Disarmed,
 mpv's write path is a single atomic load per device chunk and nothing is
-allocated; reading `capabilities` allocates nothing either, because the
+allocated — and as of 2026-08-12 that is literally true on our side too: the last
+unsubscribe *frees* the `PcmTap` (tables, Hann window, PCM/mono/real/imag scratch
+and both magnitude buffers — ~75 KB at the default 2048-point transform, ~600 KB
+at the 16384 ceiling, per player) instead of merely stopping its thread. Reading
+`capabilities` allocates nothing either, because the
 capability probe is one property read (`pcm-tap` exists ⇒ this binary carries the
 patch), which is the same code on both platforms and needs no `Platform.OS`.
 
@@ -847,9 +851,28 @@ build is how you conclude the wrong thing about where the ceiling is.
   nobody could see — and unlock delivered the backlog as a freeze. The mirror
   image of the sleep-timer trap (§19): there JS was frozen when it needed to
   run; here it ran when it needed to stop. Native-callback→JS feeds need an
-  explicit AppState gate — `useVisualizer`'s `pauseWhenInactive` (default on)
-  drops the subscription, so the lazy rule disarms the tap for free (fixed:
-  JS thread 0% with screen off, audio pipeline untouched).
+  explicit gate — `useVisualizer`'s `pauseWhenInactive` (default on) drops the
+  subscription, so the lazy rule disarms the tap for free (fixed: JS thread 0%
+  with screen off, audio pipeline untouched).
+- **`AppState` is not the display state on Android, and the difference is
+  measurable** (2026-08-12). The gate above was `AppState`-only, and a screen-off
+  soak on a Poco F4 (MIUI, charging) caught it flapping: subscribed 11:25 →
+  paused 11:36 ("not in the foreground") → **re-subscribed 11:43, screen still
+  off** → paused 11:53. In the window it was wrongly awake the visualizer ran at
+  **65-80% of a core**, against steady screen-off playback of 3.8%. `AppState`
+  answers "is my Activity foreground", which OEM lifecycle policy (a resumed
+  Activity behind the keyguard, a charging/doze overlay) can make true with
+  nothing on screen; `PowerManager.isInteractive()` +
+  `ACTION_SCREEN_ON`/`ACTION_SCREEN_OFF` *is* the display state and cannot
+  disagree with itself. The gate is now the AND of the two — either says
+  inactive → pause, both must say active → resume — with the display signal as a
+  small Kotlin HybridObject in `@rn-media/player` (`RnMediaScreenState`) whose
+  receiver is derived from its listener set. iOS needs no second signal and gets
+  a constant `true`: locking the device resigns the app's active state and
+  backgrounds it, and there is no iOS state where the app is foreground-active
+  with the display off, so there `AppState` already *is* the display truth. **Any
+  native-callback→JS feed gated on `AppState` alone on Android has this bug**, so
+  the rule is the pair, not the convenience.
 - **meson feeds the built-in `*_link_args` to compiler *checks*, not just to
   targets.** Putting `-Wl,-exported_symbols_list` on the darwin cross file — the
   obvious place, since `-Dc_link_args=` would *replace* the cross file's
