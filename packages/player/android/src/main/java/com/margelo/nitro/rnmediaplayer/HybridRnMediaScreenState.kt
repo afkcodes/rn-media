@@ -11,7 +11,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
-import android.os.Looper
 import android.os.PowerManager
 import com.margelo.nitro.NitroModules
 import java.util.concurrent.ConcurrentHashMap
@@ -34,14 +33,23 @@ import java.util.concurrent.atomic.AtomicLong
  * A device showing the lock screen is interactive, and that is correct — a
  * lock-screen surface is presenting frames.
  *
- * ## Threading contract
- * The receiver is registered with the main-looper [Handler], so [onReceive] and
- * every register/unregister runs on the main thread and the pairing needs no
- * locking. Listener *registration* arrives on the JS thread, hence the
- * concurrent map, and the register/unregister decisions it triggers are posted
- * to the main thread rather than taken on the caller's. Nitro callbacks may be
- * invoked from any thread — it schedules the actual JS call onto the JS thread
- * itself (https://nitro.margelo.com/docs/types/callbacks).
+ * ## Threading contract — NOT the main thread, and that is the bug fix
+ * The receiver is registered with a dedicated [android.os.HandlerThread]
+ * ("rn-media-screen"), never the main looper. `SCREEN_ON` is delivered as a
+ * FOREGROUND broadcast whose 10-second deadline starts at *dispatch* — so a
+ * receiver scheduled on the main thread inherits every millisecond of
+ * main-thread congestion at the exact moment the device wakes, which is the
+ * busiest moment a React Native app has (wake re-render, notification
+ * rebuild). Field evidence: ANR trace 2026-08-12 14:56:16 on a Poco F4 —
+ * `Subject: Broadcast of Intent { act=android.intent.action.SCREEN_ON …
+ * cmp=…HybridRnMediaScreenState$screenReceiver$1 }`, `Timeout: 10000` — where
+ * this class, registered on main at the time, was named as the timed-out
+ * receiver without its own code being slow. On our own thread the delivery
+ * cannot queue behind anyone. All register/unregister decisions are posted to
+ * the same handler, so the pairing still needs no locking. Listener
+ * *registration* arrives on the JS thread, hence the concurrent map. Nitro
+ * callbacks may be invoked from any thread — it schedules the actual JS call
+ * onto the JS thread itself (https://nitro.margelo.com/docs/types/callbacks).
  *
  * ## The receiver is derived from the listener set
  * Registered on the first listener, unregistered on the last, exactly like the
@@ -64,12 +72,18 @@ class HybridRnMediaScreenState : HybridRnMediaScreenStateSpec() {
   private val powerManager: PowerManager =
     appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
 
-  private val handler = Handler(Looper.getMainLooper())
+  // A thread of our own so broadcast delivery never queues behind main-thread
+  // wake congestion (see the class doc). One thread for the life of the
+  // object: parking an idle HandlerThread costs a few KB; churning threads on
+  // every first/last subscriber costs races. Named for `ps -T` archaeology.
+  private val receiverThread =
+    android.os.HandlerThread("rn-media-screen").apply { start() }
+  private val handler = Handler(receiverThread.looper)
 
   private val nextListenerId = AtomicLong(1)
   private val listeners = ConcurrentHashMap<Long, (Boolean) -> Unit>()
 
-  /** Main-thread only. Guards receiver registration symmetry. */
+  /** Receiver-thread only. Guards receiver registration symmetry. */
   private var isRegistered = false
 
   private val screenReceiver =
