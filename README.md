@@ -16,12 +16,15 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 [`audio_service`](https://pub.dev/packages/audio_service) /
 [`audio_session`](https://pub.dev/packages/audio_session) / media-kit trio.
 
-> **Status: v0.1, pre-release.** The Android stack is verified end-to-end on a
-> physical device: audio output, notification controls round-tripping to JS,
-> playback surviving Activity destruction, and the whole session coming back
-> from a process the OS had killed. iOS is **built by CI** — it compiles, links
-> and embeds the libmpv frameworks — but has never run on a device. APIs may
-> still change.
+> **Status: v0.1, pre-release — nothing is on npm yet.** The install line below
+> is what it will be; today the packages are consumed from this workspace (see
+> [Roadmap](#roadmap)). The Android stack is verified end-to-end on a physical
+> device: audio output, notification controls round-tripping to JS, playback
+> surviving Activity destruction, and the whole session coming back from a
+> process the OS had killed. iOS is **built by CI** — it compiles, links and
+> embeds the libmpv frameworks, and the shipped binaries are inspected
+> assertion-by-assertion — but it has never run on a device. APIs may still
+> change.
 
 <p align="center">
   <img src="docs/assets/demo.gif" width="330"
@@ -37,19 +40,31 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 
 ## Why this exists
 
-| | react-native-track-player | react-native-video / expo-video | **rn-media** |
-|---|---|---|---|
-| Engine | ExoPlayer / AVPlayer | ExoPlayer / AVPlayer | **libmpv (ffmpeg)** |
-| Formats | Platform codecs | Platform codecs | Everything ffmpeg decodes — MP3, AAC/M4A, FLAC, OGG/Opus, HLS, ICY/Icecast, and more |
-| Multiple players | ❌ singleton | ✅ | ✅ |
-| Background + media session | ✅ best-in-class | ⚠️ basic | ✅ media3 `MediaLibraryService`, native-first commands |
-| Session layer works with *any* player | ❌ | ❌ | ✅ (`@rn-media/media-session` is player-agnostic) |
-| Gapless playlists | ⚠️ | ❌ | ✅ (mpv native) |
-| EQ / DSP | ❌ | ❌ | ✅ 16 ffmpeg filters, 22 tuned EQ presets |
-| DRM (Widevine/FairPlay) | ❌ | ✅ | ❌ (libmpv cannot — see [Limitations](#limitations)) |
+| | [track-player](https://rntp.dev) | [expo-audio](https://docs.expo.dev/versions/latest/sdk/audio/) | [rn-video](https://github.com/TheWidlarzGroup/react-native-video) | [queue-player](https://ghenry22.github.io/react-native-queue-player/) | **rn-media** |
+|---|---|---|---|---|---|
+| Engine | ExoPlayer / AVPlayer | ExoPlayer / AVPlayer | ExoPlayer / AVPlayer | not documented | **libmpv 0.41.0 + FFmpeg 8.1.2 — our own build** |
+| One identical engine on both platforms | ❌ two engines | ❌ | ❌ | — | ✅ same sources, same flags: 103 mpv options a side, **101 identical** (the two that differ are the platform's audio device) |
+| Formats | platform codecs | platform codecs | platform codecs | not documented | everything FFmpeg decodes — MP3, AAC/M4A, FLAC, OGG/Opus, HLS, ICY/Icecast, TrueHD, cover art, legacy-charset tags |
+| Multiple players | ❌ singleton | ✅ | ✅ | ❌ singleton | ✅ one mpv core each |
+| Background + media session | ✅ best-in-class | ✅ lock screen + notification | ⚠️ notification controls | ✅ | ✅ media3 `MediaLibraryService`, native-first commands |
+| Session layer works with *any* player | ❌ | ❌ | ❌ | ❌ | ✅ (`@rn-media/media-session` is player-agnostic) |
+| Gapless queue | ⚠️ | ✅ | ❌ | ✅ | ✅ 25 ms handover, measured on-device |
+| Signed / expiring URLs stay gapless | ❌ | ❌ | ❌ | ❌ | ✅ resolver runs at **prefetch** time — our own mpv patch, [below](#resolve-sources-at-the-last-moment) |
+| EQ / DSP | ❌ | ❌ | ❌ | ✅ 10-band | ✅ 16 ffmpeg filters, 22 tuned EQ presets |
+| Spectrum visualizer | ❌ | ❌ | ❌ | ✅ | ✅ both platforms, no `RECORD_AUDIO` |
+| Crossfade | ❌ | ❌ | ❌ | ✅ | ❌ deliberately — built, listened to, dropped ([Limitations](#limitations)) |
+| Casting (Chromecast / AirPlay) | ✅ | ❌ | ❌ app-side | ✅ | ❌ deferred with a reason ([Limitations](#limitations)) |
+| Android Auto / CarPlay | ✅ | ❌ | ❌ | ✅ | 🚧 next feature ([Roadmap](#roadmap)) |
+| DRM (Widevine/FairPlay) | ⚠️ announced | ❌ | ✅ | not documented | ❌ libmpv cannot ([Limitations](#limitations)) |
+| Native binary it adds | ≈none (platform codecs) | ≈none | ≈none | — | 3.63 MB downloaded for `arm64-v8a`, ≈7.1 MB for the iOS device slice ([Requirements](#requirements)) |
 
-The sweet spot: music apps with **non-DRM audio** — indie catalogs, self-hosted
-libraries (Plex / Jellyfin / Subsonic), podcasts, radio, audiobooks.
+Every cell in the four competitor columns comes from that project's own
+documentation, read on 2026-08-12; ours are linked to the section that proves
+them. The sweet spot: music apps with **non-DRM audio** — indie catalogs,
+self-hosted libraries (Plex / Jellyfin / Subsonic), podcasts, radio, audiobooks.
+The row we pay for is the last one: a shipped engine costs megabytes that
+platform codecs do not, and that number is in [Requirements](#requirements)
+rather than in a footnote.
 
 Different job? [`react-native-audio-api`](https://github.com/software-mansion/react-native-audio-api)
 implements the **Web Audio API** — an audio *graph* for synthesis, games and
@@ -127,6 +142,7 @@ player.play();
 
 player.on('trackChanged', ({ index }) => console.log('now on', index));
 player.on('trackEnded', () => console.log('finished naturally'));
+player.on('prefetchStarted', ({ uri }) => console.log('opening ahead', uri));
 player.on('error', e => console.log(e.code, e.message)); // network | unsupported-format | …
 
 // --- the rest of the surface, at a glance ---
@@ -136,9 +152,10 @@ player.setRate(1.5);           // pitch-corrected
 player.setVolume(0.5);         // 0..1
 player.setLoop('playlist');    // 'off' | 'track' | 'playlist'
 
-await player.playlist.add(uri);                       // to the end
-await player.playlist.add(uri, { position: 'next' }); // play it after this one
-await player.playlist.add(uri, { position: 0 });      // exact index; rejected if out of range
+await player.playlist.add(uri);                                    // to the end
+await player.playlist.add(uri, { position: 'next' });              // play it after this one
+await player.playlist.add(uri, { position: 0 });                   // exact index; rejected if out of range
+await player.playlist.add(uri, { position: 'next', play: true });  // …and start if nothing is playing
 await player.playlist.move(0, 4);
 await player.playlist.jumpTo(2);  // plays it; { autoPlay: false } to stay paused
 await player.playlist.shuffle();  // mpv playlist-shuffle; unshuffle() undoes it, once
@@ -170,12 +187,56 @@ Worth knowing:
   hard to try when consecutive tracks decode to *different* formats.
 - `prefetchPlaylist: true` opens the next entry early — on a network queue that
   is what keeps the handover gapless (measured: 644 ms and an audible underrun
-  without it, 25 ms and none with it). `cacheSecs` bounds mpv's readahead (30 s
-  by default, against mpv's ~1000 hours); `userAgent` defaults to
-  `rn-media (libmpv)` because real Shoutcast hosts 401 the literal `libmpv`.
+  without it, 25 ms and none with it), and `prefetchStarted` tells you the moment
+  it happens. `cacheSecs` bounds mpv's readahead (30 s by default, against mpv's
+  ~1000 hours); `userAgent` defaults to `rn-media (libmpv)` because real
+  Shoutcast hosts 401 the literal `libmpv`.
+- **Insertion is one command, not two.** `position` compiles onto mpv's own
+  `insert-next` / `insert-at` load actions, so the queue is never briefly wrong
+  the way an append-then-move pair leaves it, and an index outside
+  `0 … playlist.count` throws instead of quietly landing at the far end.
 
 Queue semantics, shuffle's one-level undo, ReplayGain, prefetch caveats, the
 typed error taxonomy: [`@rn-media/player` README](packages/player/README.md).
+
+## Resolve sources at the last moment
+
+Signed CDN links that expire in minutes, transcode sessions created per track:
+queues whose entries cannot be written down when the queue is built. Give the
+player a resolver and it asks, per entry, moments before mpv opens it.
+
+```ts
+const player = await Player.create({
+  prefetchPlaylist: true,
+  sourceResolver: async ({ uri }) => {
+    if (!uri.startsWith('library://')) return uri;
+    const { url } = await api.signPlaybackUrl(uri.slice('library://'.length));
+    return url;
+  },
+});
+
+await player.loadPlaylist(['library://a', 'library://b', 'library://c']);
+player.setSourceResolver(null); // install, replace or remove it at any time
+```
+
+**The half that makes it useful: it also runs at *prefetch* time.**
+mpv opens the next entry ahead of the boundary, and upstream mpv deliberately
+runs no hooks there — its manual says resolved URLs "won't" work with
+`--prefetch-playlist` — so a URL-rewriting resolver on stock libmpv makes
+prefetch *worse* than off: mpv compares the two URLs, throws the prefetched
+stream away and opens cold while blocking its core. Our fork carries the patch
+that fires a hook on that path, so a signed queue keeps the 25 ms handover
+instead of paying 644 ms for it.
+
+The current and next entries are resolved as soon as the queue moves — read from
+mpv's own playlist, so it follows `next()`, repeat and shuffle rather than
+guessing — and the answers are cached natively, so a resolved entry costs a map
+lookup with no JavaScript near mpv's core. Answers are replayed per URI
+(`resolverTtlMs`, 10 min) because mpv reuses a prefetched stream only when the
+two URLs are byte-identical: mint one URL per track, not one per call. A miss at
+play time holds mpv for at most `resolverTimeoutMs` (10 s, `0` disables the
+hold); a resolver that throws emits a typed `load-failed` error and is retried.
+[Full contract](packages/player/README.md#dynamic-source-resolution-signed-urls-transcode-sessions).
 
 ## Show it on the lock screen
 
@@ -403,6 +464,18 @@ downmixes, windows and transforms it; the PCM never crosses into JavaScript and
 only ~4 KB of spectrum does. Lazy end to end: nothing exists until something
 subscribes, and the last unsubscribe frees all of it.
 
+**The hook stops itself when nothing can be seen**, and that is a correctness
+fix rather than a nicety: the frames are *native* callbacks, so unlike a JS
+timer the platform does not freeze them behind a locked screen. On Android "can
+be seen" is two signals ANDed — `AppState` **and** the display
+(`PowerManager.isInteractive()` plus screen on/off, through this package's own
+native object). One is not enough: on a Poco F4 soak `AppState` reported the app
+active again with the display still off, and the visualizer burned 65-80 % of a
+core in that window against 3.8 % for steady playback. On iOS the display signal
+is a constant `true`, correctly — locking the phone backgrounds the app, so
+there `AppState` already *is* the display truth. The imperative
+`player.visualizer.subscribe()` is never gated; pausing belongs to the hook.
+
 It needs binaries carrying that patch (Android `v1.1.9-rnmedia.3`+, iOS
 `v0.7.2-rnmedia.3`+ — what this repo pins). On anything older
 `player.visualizer.capabilities.fft` is `false` and subscribing throws a typed
@@ -423,6 +496,64 @@ player.getRawHandle(); // the mpv_handle, reserved for the future video plugin
 ```
 
 `createMpvClient()` hands you the binding with no `Player` wrapper at all.
+
+## We own the engine
+
+Both libmpv binaries are ours, built from forks of media-kit's build scripts,
+and their flags, pins and patches are **generated** from one workshop repo —
+[`afkcodes/rn-media-engine`](https://github.com/afkcodes/rn-media-engine). Edits
+happen there; `workshop sync --check` fails when a fork drifts, and `workshop
+verify-artifacts` scores the **released** binaries of both platforms rather than
+a build log — 12 slices × 10 categories = 120 cells, scored 0 FAIL on the parity
+release, and its very first run is what caught the iOS simulator slice shipping
+with no audio output compiled into it at all, four generations after the fact.
+
+That machinery buys three things a wrapper around two platform players cannot:
+
+**One configuration, not two.** mpv 0.41.0, FFmpeg 8.1.2 and mbedTLS 3.6.7 on
+both platforms, configured exhaustively: **103 mpv options a side, 101
+identical**, the only two that differ being the platform's own audio device
+(`audiotrack` / `audiounit`). Parity is aligned *up*, never down — iOS gained the
+eight cover-art decoders and the TrueHD decoder (it had the demuxer, so a `.thd`
+demuxed cleanly and then failed to decode, which reads like a corrupt file rather
+than a missing feature); Android gained zlib for compressed Matroska headers and,
+because bionic has no `iconv(3)` before API 28 while the fork targets API 21, a
+**statically vendored GNU libiconv 1.19** — so an ICY title or an old tag in
+CP1251 or Shift-JIS decodes on both platforms instead of on iOS only. Switching
+iconv *off* on iOS would have been the cheap parity, and it was reversed.
+
+**Features upstream will not ship.** Two source patches, byte-identical between
+the forks: the PCM tap behind the visualizer, and the prefetch hook behind
+resolver-at-prefetch-time. Both are proven present in the *shipped* artifact by
+strings only the patched code emits, and the release script refuses to package a
+binary that lacks one.
+
+**Size, attacked rather than excused.** The 0.41 engine bump cost +27 % on
+Android and was written down here as a regression; the size release then took
+back **−20.5 % on Android** (arm64 `libmpv.so`
+9,233,464 → 7,338,952 bytes stripped, all four ABIs −19.9…−21.8 %) and
+**−34.4 % off the iOS `Mpv` slice** (2,676,512 → 1,756,424 bytes), with zero
+feature loss proven rather than argued: 62 assertions against the shipped jars,
+a 50-assertion on-device engine harness A/B'd against the previous release, and
+the same 50 on an emulated 16 KB-page system *with* a negative control — remove
+the alignment flag and `dlopen` refuses the library, so the flag is observed
+load-bearing rather than assumed. Stripping unwind tables (−437 KB more) was
+declined on purpose: field crash diagnosis outranks bytes before 1.0.
+
+### What it costs at runtime
+
+Measured on a Poco F4 (Android 16), release build:
+
+| | |
+|---|---|
+| Live HLS radio, screen off | **3.8 %** of one core |
+| Cold start to a restored queue | **~1 s** |
+| Gapless handover, identically encoded pair | **25 ms**, audio device never reopened |
+| Network track boundary, prefetch on / off | **25 ms** / 644 ms plus an underrun |
+| Synchronous mpv reads per event batch, worst case | **5**, flat (was 47 on a 20-tag FLAC) |
+| Periodic bridge traffic while playing | none — position is projected, not streamed |
+
+No iOS runtime numbers appear here, on purpose: nothing has run on an iOS device.
 
 ## Platform setup
 
@@ -463,10 +594,12 @@ development build. [Plugin reference](packages/media-session/README.md#expo-conf
 - [`react-native-nitro-modules`](https://nitro.margelo.com)
 - Android: minSdk **24**, compileSdk **36**. iOS: **15.1+**
 - Prebuilt libmpv downloads at build time (Gradle task / podspec script), pinned
-  by tag + SHA-256: ~8 MB per Android ABI, ~7.7 MB for the iOS device slice
-  across all ten frameworks (9.4 MB compressed). Those numbers roughly doubled
-  at the mpv 0.41 / FFmpeg 8 engine bump; ARCHITECTURE §11 records why and says
-  so plainly.
+  by tag + SHA-256. Android, `arm64-v8a`: **3.63 MB** downloaded, **7,338,952
+  bytes** of stripped `libmpv.so` (the other three ABIs are in the same band).
+  iOS: `Mpv.framework`'s device slice is **1,756,424 bytes**, ≈7.1 MB
+  across all ten frameworks. The engine bump to mpv 0.41 / FFmpeg 8 cost +27 %,
+  the size release gave back −20.5 % (Android) and −34.4 % (iOS `Mpv`);
+  ARCHITECTURE §11 records both directions.
 
 ## Limitations
 
@@ -482,8 +615,16 @@ development build. [Plugin reference](packages/media-session/README.md#expo-conf
   is Android-only. Relatedly, an iOS sleep timer armed over silence may never fire
   (iOS suspends a backgrounded process once audio stops); armed during playback —
   the case that matters — it does.
-- **Chromecast is out of scope** — use the Cast SDK app-side. AirPlay audio
-  works through normal iOS routing.
+- **No casting, deferred with a reason.** media3's `CastPlayer` replaces our
+  engine with Google's, and there is no AirPlay path out of mpv at all — so a
+  casting feature here would be Android-shaped and would hand playback to a
+  different engine, which fails the parity gate this project is built on. Use the
+  Cast SDK app-side; AirPlay audio still works through normal iOS routing.
+- **No crossfade.** It was built, listened to on a device, and dropped by owner
+  decision: mpv's gapless is an output-buffer guarantee, and the crossfade built
+  on top of it was not good enough to ship. Loudness-aware fade points are
+  recorded as the one revisit worth making. A competitor ships crossfade; we do
+  not, and would rather say that than pretend the row does not exist.
 - **Persistence has two honest edges**: writes happen on broadcasts, so a track
   played straight through saves nothing until you call `service.save()`; and a
   live stream saves position `0`, because an offset into it has nothing to seek
@@ -498,16 +639,19 @@ pattern that satisfies the relink obligation. Ship your app's licenses screen
 with the mpv/FFmpeg notices.
 
 Both binaries come from our public forks of media-kit's build scripts —
-[`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.7)
-and [`libmpv-darwin-build`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.4)
-— both mpv 0.41.0 / FFmpeg 8.1.2, so the two platforms run one engine. The delta
-versus upstream is additive ffmpeg configure flags (the `hls`/`mpegts` demuxers,
-which stock audio flavours omit, plus 16 audio filters) and one source patch (the
-PCM tap behind the visualizer). Every GPL-gated ffmpeg filter is a *video*
-filter, so the LGPL line is untouched. libmpv also links **libplacebo**
-(LGPL v2.1+, mandatory for mpv >= 0.37) — statically, inside the LGPL libmpv that
-is itself dynamically linked, so the relink obligation still holds at that
-boundary.
+[`libmpv-android-audio-build`](https://github.com/afkcodes/libmpv-android-audio-build/releases/tag/v1.1.9-rnmedia.8)
+and [`libmpv-darwin-build`](https://github.com/afkcodes/libmpv-darwin-build/releases/tag/v0.7.2-rnmedia.7)
+— both mpv 0.41.0 / FFmpeg 8.1.2 / mbedTLS 3.6.7, so the two platforms run one
+engine, and both are generated from
+[`rn-media-engine`](https://github.com/afkcodes/rn-media-engine). The delta versus
+upstream is additive ffmpeg configure flags (the `hls`/`mpegts` demuxers, which
+stock audio flavours omit, plus 16 audio filters) and two source patches (the PCM
+tap behind the visualizer, the prefetch hook behind the source resolver). Every
+GPL-gated ffmpeg filter is a *video* filter, so the LGPL line is untouched.
+libmpv also links **libplacebo** (LGPL v2.1+, mandatory for mpv >= 0.37) and, on
+Android, **GNU libiconv 1.19** (LGPL v2.1+) — both statically, inside the LGPL
+libmpv that is itself dynamically linked, so the relink obligation still holds at
+that boundary.
 
 ## Development
 
@@ -537,10 +681,24 @@ own binaries, at zero cost to audio-only users.
 
 ## Roadmap
 
-1. **On-device iOS verification** — playback, background audio, lock screen,
-   HLS and the EQ chain on real hardware.
-2. First published release to npm.
-3. Video as an additive plugin package — `VideoView`, its own binaries, zero
+The gate that unlocks shipping, in this order: **on-device iOS verification**
+(playback, background audio, lock screen, HLS and the EQ chain on real hardware)
+→ the naming decision → the first npm publish.
+
+Next in the queue, owner-approved:
+
+1. **React Native 0.87**, inside the two-week currency window the dependency
+   policy sets.
+2. **Android Auto**, with a CarPlay-symmetric API — a browse tree over the
+   media3 `MediaLibraryService` already here, fanned into a JS handler the same
+   way commands are. The CarPlay half lands when Apple hardware exists.
+3. **`@rn-media/downloads`** — offline playback as a *source resolver* (local
+   file when downloaded, CDN otherwise), so the player needs no changes at all.
+4. Quick wins: `setLoudnessNormalization()` (loudnorm is already compiled in),
+   LRC lyrics utilities over position projection, a prefetch-status hook.
+5. Video as an additive plugin package — `VideoView`, its own binaries, zero
    core changes.
-4. Android Auto / CarPlay browse trees.
-5. FFT / PCM visualizer taps.
+
+Investigations rather than promises: pitch control down an LGPL filter path
+(rubberband is GPL and therefore banned) and output-device routing. Casting is
+deferred with the reason in [Limitations](#limitations).
