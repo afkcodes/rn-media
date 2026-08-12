@@ -72,7 +72,7 @@ react {
  * A green release build silently shipping stale JS is the worst possible failure mode for an
  * on-device test bed, so the inputs are declared here explicitly.
  *
- * The app's own JS/TS (App.tsx, index.js, SeekBar.tsx, theme.ts, …) is already covered by the
+ * The app's own JS/TS (index.js, App.tsx and everything under `src/`) is already covered by the
  * plugin's `root` tree; only the out-of-root workspace packages need adding. Debug variants
  * load from Metro and get no bundle task at all, hence the name-pattern match rather than a
  * hardcoded variant: whatever bundles, gets the inputs.

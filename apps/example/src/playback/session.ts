@@ -1,0 +1,280 @@
+/**
+ * The media-session half of the playback layer: fan-out.
+ *
+ * Everything a remote surface can *see* is written here, and it is written to
+ * exactly three channels — `setPlaybackState`, `setMediaItem`, `setQueue`. The
+ * notification, the lock screen, Android Auto and this app's own UI all read
+ * those three and nothing else, which is what stops the surfaces drifting
+ * apart.
+ *
+ * Split out of the controller on purpose: this file would be almost unchanged
+ * in an app that used a different player, because `@rn-media/media-session`
+ * does not know or care what makes the sound.
+ */
+import {
+  MediaService,
+  applyPersisted,
+  withPersistence,
+  type MediaHandler,
+  type PersistedMediaService,
+  type PersistedSession,
+} from '@rn-media/media-session'
+import type { PlayerState } from '@rn-media/player'
+import type { Track } from '../data/tracks'
+import { durationMs, nowPlaying, toMediaItem, toPlaybackState } from './broadcast'
+import { sessionStorage } from './persistence'
+
+export interface SessionBridgeOptions {
+  /** Built once, by `MediaService.init`. See `handler.ts`. */
+  readonly handler: () => MediaHandler
+  /** The player's current snapshot, for the catch-up broadcast on init. */
+  readonly snapshot: () => PlayerState | undefined
+  /** Re-render notification for the UI. */
+  readonly onChange: () => void
+}
+
+export class SessionBridge {
+  readonly #options: SessionBridgeOptions
+  #service: PersistedMediaService | undefined
+  #starting: Promise<void> | undefined
+  #restored: PersistedSession | undefined
+  #queue: readonly Track[] = []
+  /** Last broadcast discontinuity signature — see {@link publish}. */
+  #lastSignature = ''
+  /**
+   * Published duration per track id, in ms, as the player learns them.
+   *
+   * Why the *queue* channel carries durations at all: on Android the media3
+   * timeline — and with it the notification's seek bar — is built from the
+   * queue. A queue entry with no duration is `C.TIME_UNSET`, which media3 reads
+   * as "not seekable", and the scrubber then never appears however seekable the
+   * playback state claims to be. Durations only exist once mpv has opened the
+   * file, so the queue is re-broadcast the first time each one arrives: once
+   * per track, on a discontinuity, never on a timer.
+   */
+  readonly #durations = new Map<string, number>()
+
+  constructor(options: SessionBridgeOptions) {
+    this.#options = options
+  }
+
+  /** The session that was recovered on launch, to re-apply on init. */
+  setRestored(session: PersistedSession | undefined): void {
+    this.#restored = session
+  }
+
+  /**
+   * Bring the media session up if it is not up already.
+   *
+   * {@link stop} tears it down — that is what "stop" means here — and the
+   * session contract is explicit that `init` may be called again once
+   * `stopService()` has resolved. So every path that is about to make sound
+   * goes through this first. Without it, playing after a stop would produce
+   * audio with no notification and no remote controls forever, because
+   * {@link publish} drops every broadcast while `#service` is undefined and
+   * nothing else ever calls it again (the mount effect runs once).
+   *
+   * Callers deliberately do not await it: `#create` force-broadcasts the
+   * player's current state when it resolves, so the session catches up by
+   * itself rather than holding audio behind a native round trip.
+   */
+  ensure(): Promise<void> {
+    return (this.#starting ??= this.#create())
+  }
+
+  async #create(): Promise<void> {
+    try {
+      const api = await MediaService.init(this.#options.handler, {
+        android: {
+          notificationChannelId: 'playback',
+          notificationChannelName: 'Playback',
+          notificationIcon: 'ic_notification',
+          stopForegroundOnPause: true,
+          // Deliberately far below media3's 10-minute default so the
+          // demotion is observable in `dumpsys activity services` while
+          // someone is watching. A shipping app would leave this alone (or
+          // pick a value it can defend); this one is a test bed.
+          stopForegroundTimeoutMs: 15_000,
+          // Opt in to coming back from the dead. Paired with the
+          // `MediaButtonReceiver` in this app's AndroidManifest.xml and with
+          // `withPersistence` below — all three are required, and the
+          // library logs which one is missing.
+          playbackResumption: true,
+        },
+        onHandlerError: (method, cause) =>
+          console.error(`[example] handler.${method} failed:`, cause),
+      })
+      // One line, and every broadcast below persists itself. The library gains
+      // no dependency from this — `sessionStorage` is ours.
+      this.#service = withPersistence(api, sessionStorage, {
+        onError: (cause) =>
+          console.error('[example] persisting the session failed:', cause),
+      })
+      // Put the recovered session on every remote surface before the player has
+      // anything to say. It is a *paused* state by construction, so this does
+      // not start the foreground service — the notification appears on play,
+      // exactly as it would without persistence.
+      if (this.#restored !== undefined) {
+        applyPersisted(this.#service, this.#restored)
+      }
+      this.#publishQueue()
+      const state = this.#options.snapshot()
+      if (state !== undefined) this.#broadcast(state, true)
+    } catch (cause) {
+      console.error('[example] MediaService.init failed:', cause)
+      // Let the next play retry: a failed init must not latch the app into a
+      // permanently session-less state (`ensure` keys off this field).
+      this.#starting = undefined
+    }
+    this.#options.onChange()
+  }
+
+  /* --- channels ---------------------------------------------------------- */
+
+  /** Channel 3. Call whenever the app's queue model changes. */
+  setQueue(tracks: readonly Track[]): void {
+    this.#queue = tracks
+    this.#publishQueue()
+  }
+
+  #publishQueue(): void {
+    this.#service?.setQueue(
+      // `uri` and `live` are app-side fields; `MediaItem` is metadata only, so
+      // they are destructured away rather than shipped to the session.
+      //
+      // Ids are the track's own, which means "play next" can legitimately put
+      // the same id in the queue twice. That is fine here — `setMediaItem`
+      // enriches the entry at the broadcast `queueIndex` and both copies carry
+      // identical metadata — and it keeps the persisted `mediaItem.id` equal to
+      // a `TRACKS` id, which is what the restore path matches on.
+      this.#queue.map(({ uri: _uri, live: _live, ...item }) => ({
+        ...item,
+        duration: this.#durations.get(item.id),
+      }))
+    )
+  }
+
+  /**
+   * Channels 1 and 2, driven off the player rather than off a React effect.
+   *
+   * Broadcast only when a *discontinuity* signature changes. `PlayerState` also
+   * carries `bufferedPosition`, which mpv updates several times a second; keying
+   * on the whole snapshot would put the media session back on a timer, which is
+   * exactly what the position anchor exists to avoid. (Measured: ~6 broadcasts
+   * per second before this, 4 in 22 s after.) The buffered figure still rides
+   * along with the next real change.
+   */
+  publish(state: PlayerState, track: Track | undefined): void {
+    const signature = [
+      state.status,
+      state.playing,
+      state.playlist.index,
+      state.playlist.count,
+      // The *published* duration, not `state.duration`: on a live stream mpv's
+      // raw duration is the cache length and grows forever. See `durationMs`.
+      track === undefined ? undefined : durationMs(track, state),
+      // The ICY now-playing line: changes once per song, so it is a genuine
+      // discontinuity and not a ticker. Without it in the signature the
+      // notification would keep showing whatever was on air when the station
+      // was tuned in.
+      track === undefined ? undefined : nowPlaying(track, state),
+      state.seeking,
+      state.positionAnchor.timestamp,
+      state.error?.message,
+    ].join('|')
+
+    if (signature === this.#lastSignature) return
+    this.#lastSignature = signature
+    this.#broadcast(state, false, track)
+  }
+
+  #broadcast(state: PlayerState, force: boolean, track?: Track): void {
+    const service = this.#service
+    if (service === undefined) return
+    if (force) this.#lastSignature = ''
+    const entry = track ?? this.#queue[state.playlist.index]
+
+    // A duration we have not published yet: refresh the queue so the timeline
+    // entry becomes seekable. Guarded on the value, so this is one extra
+    // broadcast per track for the whole session.
+    if (entry !== undefined) {
+      const ms = durationMs(entry, state)
+      if (ms !== undefined && this.#durations.get(entry.id) !== ms) {
+        this.#durations.set(entry.id, ms)
+        this.#publishQueue()
+      }
+    }
+
+    service.setMediaItem(entry && toMediaItem(entry, state))
+    service.setPlaybackState(toPlaybackState(state))
+  }
+
+  /** Re-broadcast unconditionally — used after the queue is edited. */
+  refresh(state: PlayerState | undefined): void {
+    if (state !== undefined) this.#broadcast(state, true)
+  }
+
+  /* --- sleep timer ------------------------------------------------------- */
+
+  /**
+   * Arm the **native** sleep timer.
+   *
+   * Note what is *not* here: a `setTimeout`. With the Activity destroyed, JS
+   * timers stop firing, which is exactly the state a sleep timer is used in.
+   * The session schedules this on the platform's own timer instead.
+   */
+  setSleepTimer(seconds: number): void {
+    try {
+      this.#service?.setSleepTimer(seconds)
+      console.log(`[example] sleep timer armed for ${seconds}s`)
+    } catch (cause) {
+      console.warn('[example] sleep timer rejected:', cause)
+    }
+    this.#options.onChange()
+  }
+
+  cancelSleepTimer(): void {
+    this.#service?.cancelSleepTimer()
+    console.log('[example] sleep timer cancelled')
+    this.#options.onChange()
+  }
+
+  /** Polled by the UI. Safe from JS *because the UI is on screen.* */
+  sleepTimerRemaining(): number | undefined {
+    return this.#service?.getSleepTimerRemaining()
+  }
+
+  /* --- checkpoints and teardown ------------------------------------------ */
+
+  /**
+   * Write the session out *now*.
+   *
+   * The tee saves on every broadcast, and this app broadcasts only on
+   * discontinuities — so a track played straight through produces no write at
+   * all, and the position on disk stays wherever the last play/seek left it.
+   * The library will not paper over that with a timer (a periodic save is the
+   * per-tick write the whole design avoids, and the JS timer driving it would
+   * freeze in the background anyway), so choosing the moment is the app's job.
+   *
+   * The moment this app picks is *leaving the foreground* — see the `AppState`
+   * subscription in `index.ts` — which is the last instant it is guaranteed to
+   * run.
+   */
+  save(): void {
+    this.#service?.save()
+  }
+
+  /**
+   * The only thing that ends background execution — pause never does.
+   *
+   * Clearing `#starting` is what re-arms {@link ensure}, so the next play
+   * builds a fresh session and the notification comes back.
+   */
+  async stop(): Promise<void> {
+    const service = this.#service
+    this.#service = undefined
+    this.#starting = undefined
+    this.#lastSignature = ''
+    await service?.stopService()
+  }
+}
