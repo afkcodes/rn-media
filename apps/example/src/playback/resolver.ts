@@ -11,8 +11,8 @@
  * ## The three things worth copying
  *
  * 1. **Return the input unchanged for anything you do not own.** Five of the
- *    six queue entries are plain HTTPS and fall straight through; the identity
- *    answer costs one map lookup and nothing else. A resolver is not a
+ *    seven queue entries are plain HTTPS and fall straight through; the
+ *    identity answer costs one map lookup and nothing else. A resolver is not a
  *    gatekeeper.
  * 2. **Be deterministic while the answer is cached.** mpv opens each entry
  *    twice — once speculatively on the prefetch path, once for real — and
@@ -27,7 +27,12 @@
  *    core, and only for `resolverTimeoutMs`.
  */
 import type { SourceResolver } from '@rn-media/player'
-import { DEMO_SCHEME, DEMO_SOURCES } from '../data/tracks'
+import {
+  DEMO_BROKEN_TARGET,
+  DEMO_BROKEN_URI,
+  DEMO_SCHEME,
+  DEMO_SOURCES,
+} from '../data/tracks'
 
 /**
  * Stand-in for the network round trip a real signing call would cost.
@@ -53,6 +58,24 @@ function delay(ms: number): Promise<void> {
  */
 export function createDemoResolver(): SourceResolver {
   return async ({ uri, entryId }) => {
+    // Queue entry 7. **This is a feature demo, not a fixture** — every app
+    // needs an error path, and this one makes it reproducible: the entry
+    // resolves to a connection that is refused instantly (see
+    // `DEMO_BROKEN_TARGET`), which is what lets you watch, on a device, the
+    // three things this library does about a failure that a description cannot
+    // show you — the `retryable` taxonomy driving the banner's Retry button,
+    // the `retrying` event firing while NO `error` event does, and the queue
+    // finally moving on once the bounded budget is spent.
+    //
+    // Resolved rather than written into `TRACKS` directly so the queue keeps
+    // one honest shape (a list of *logical* ids) and so the failure is a
+    // property of this policy — one line to point somewhere real, one line to
+    // point at nothing.
+    if (uri === DEMO_BROKEN_URI) {
+      console.log(`[example] resolver: ${uri} → ${DEMO_BROKEN_TARGET} (demo)`)
+      return DEMO_BROKEN_TARGET
+    }
+
     if (!uri.startsWith(DEMO_SCHEME)) return uri // nothing to do — pass through
 
     const id = uri.slice(DEMO_SCHEME.length)

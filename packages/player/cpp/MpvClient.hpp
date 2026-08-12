@@ -95,6 +95,7 @@
 
 #include "ClientState.hpp"
 #include "EventBatch.hpp"
+#include "NodeReader.hpp"
 #include "SourceResolution.hpp"
 
 struct mpv_handle;
@@ -122,26 +123,10 @@ enum class PropertyFormat : std::uint8_t {
   Bool,
 };
 
-/// One member of an `MPV_FORMAT_NODE_MAP` property, as handed to the visitor of
-/// `MpvClient::getPropertyNodeMap`.
-///
-/// Everything here points into mpv's own node, which is freed the moment the
-/// visit returns — a visitor that wants to keep a value must copy it. That is
-/// the whole reason this is a visitor rather than a returned struct: the
-/// visualizer reads a multi-kilobyte byte array up to 60 times a second, and a
-/// value-returning API would allocate and copy it twice per frame.
-struct NodeMember {
-  std::string_view key;
-  /// Set for `INT64`, `DOUBLE` and `FLAG` members (flags arrive as 0 / 1).
-  std::optional<double> number;
-  /// Set for `INT64` and `FLAG` members, without the double round-trip.
-  std::optional<std::int64_t> integer;
-  /// Set for `STRING` members.
-  std::optional<std::string_view> text;
-  /// Set for `BYTE_ARRAY` members; `nullptr` otherwise.
-  const std::uint8_t* bytes = nullptr;
-  std::size_t byteCount = 0;
-};
+// `NodeMember` — the one member of an `MPV_FORMAT_NODE_MAP` handed to the
+// visitors below — and the two walks that produce it live in `NodeReader.hpp`,
+// in this same namespace. They are pure `mpv/client.h` structs plus std, which
+// is what makes them unit-testable with no libmpv to link against.
 
 class MpvClient final {
 public:

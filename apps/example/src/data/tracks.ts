@@ -27,6 +27,31 @@ export interface Track extends MediaItem {
 }
 
 /**
+ * The logical URI of the deliberately-broken entry (queue entry 7).
+ *
+ * Its own scheme, not `demo://track/<id>`, because it is not a catalogue
+ * lookup: the resolver answers it from a rule rather than from
+ * {@link DEMO_SOURCES}, and keeping the two apart is what stops "the demo
+ * catalogue" and "the demo failure" from being one map with a poisoned row in
+ * it.
+ */
+export const DEMO_BROKEN_URI = 'demo://broken'
+
+/**
+ * What {@link DEMO_BROKEN_URI} resolves to: a connection that is refused
+ * instantly, on every device, with no network.
+ *
+ * Port 9 is `discard` (RFC 863) and nothing on a phone listens on it, so the
+ * loopback connect is refused by the kernel — no DNS, no route, no timeout, the
+ * same failure in aeroplane mode as on Wi-Fi. `https://` is load-bearing:
+ * `classifyEndFile` splits a failed open on `isNetworkUri`, so a network URI
+ * becomes a **retryable `network`** error and anything else becomes a
+ * non-retryable `load-failed`. This entry demonstrates the retry path, and only
+ * a real network scheme takes it.
+ */
+export const DEMO_BROKEN_TARGET = 'https://127.0.0.1:9/unreachable.aac'
+
+/**
  * Public HTTPS endpoints, so this runs on a clean device with no fixtures.
  *
  * Deliberately different shapes, because each exercises a different part of
@@ -85,6 +110,33 @@ export interface Track extends MediaItem {
  *    which is exactly where `gapless-audio=weak` keeps the device open. It is
  *    an *untested claim on this device* until someone measures it; do not
  *    quote a number for it until they have.
+ *
+ * 7. **An entry that cannot possibly play** — and it is a FEATURE DEMO, not a
+ *    fixture. Every media app has an error path: a song pulled from the
+ *    catalogue, a CDN edge that is down, a phone that lost its connection
+ *    between the tap and the fetch. This entry is that path, on purpose and on
+ *    demand, so the three things this library does about it can be *seen*
+ *    rather than described:
+ *
+ *    - the **typed taxonomy** — it fails as `network` with `retryable: true`,
+ *      which is what makes `ErrorBanner` draw a Retry button without keeping an
+ *      app-side table of which codes are worth retrying;
+ *    - the **`retrying` event and `RetryBanner`** — while the player is
+ *      re-attempting, NO `error` event fires at all, so an app that listened
+ *      only to `error` would show nothing while a stream reconnects;
+ *    - **bounded retry before skip** — after `retry.maxAttempts` re-attempts
+ *      the player stops arguing, the advance mpv already performed stands, and
+ *      `error` finally fires carrying the attempt count.
+ *
+ *    It resolves (through the same demo resolver as entry 6) to
+ *    `https://127.0.0.1:9/unreachable.aac`. Port 9 is `discard`, nothing is
+ *    listening on the loopback interface of a phone, and a refused TCP connect
+ *    is instant and needs no network at all — so the failure is fast,
+ *    deterministic and identical on a plane. It is deliberately an `https://`
+ *    URL rather than a bogus scheme: the classifier splits a failed open on
+ *    {@link isNetworkUri}, so only a real network URI produces the `network`
+ *    error the retry layer acts on. A made-up scheme would be `load-failed`,
+ *    non-retryable, and would demo nothing.
  */
 export const TRACKS: readonly Track[] = [
   {
@@ -152,6 +204,17 @@ export const TRACKS: readonly Track[] = [
     uri: 'demo://track/aari-aari',
     artworkUri:
       'https://c.saavncdn.com/905/Dhurandhar-The-Revenge-Aari-Aari-From-Dhurandhar-The-Revenge-Hindi-2026-20260312141004-500x500.jpg',
+  },
+  {
+    // Entry 7: the error path, on demand. See the block comment above — this
+    // exists so the retryable taxonomy, the `retrying` event and bounded
+    // retry-before-skip can be watched happening, on a device, in a build
+    // anyone can run.
+    id: 'retry-demo',
+    title: 'Retry & errors demo',
+    artist: 'Tap to watch it fail',
+    album: 'Fails fast · retryable · re-attempted twice, then skipped',
+    uri: DEMO_BROKEN_URI,
   },
 ]
 

@@ -1,7 +1,8 @@
 #
 # Host-compiled unit tests for the parts of the player core that do not touch
 # libmpv or Nitro: `EventBatch.hpp` (batching + coalescing), `ClientState.hpp`
-# (the disposed-state machine), `Fft` (the visualizer transform), `PcmTap`
+# (the disposed-state machine), `Fft` (the visualizer transform), `NodeReader.hpp`
+# (the `mpv_node` walks, driven by hand-built node trees), `PcmTap`
 # (the visualizer engine — its threading, back-pressure and DSP, driven by a
 # fake `TapSource` in place of mpv) and `SourceResolution.hpp` (the resolved-URL
 # cache and the play-time hook hold, on an injected clock).
@@ -36,13 +37,20 @@ add_executable(player_core_tests
   EventBatchTests.cc
   ClientStateTests.cc
   FftTests.cc
+  NodeReaderTests.cc
   PcmTapTests.cc
   SourceResolutionTests.cc
   ../Fft.cpp
   ../PcmTap.cpp
 )
 
-target_include_directories(player_core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+# `..` for the units under test; the vendored `mpv/client.h` for `NodeReader.hpp`,
+# which walks `mpv_node` trees. Header only — nothing here links libmpv, and the
+# nodes in the tests are hand-built structs.
+target_include_directories(player_core_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/..
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/mpv/include
+)
 target_link_libraries(player_core_tests PRIVATE Threads::Threads)
 target_compile_options(player_core_tests PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -51,5 +59,6 @@ enable_testing()
 add_test(NAME EventBatch COMMAND player_core_tests EventBatch)
 add_test(NAME ClientState COMMAND player_core_tests ClientState)
 add_test(NAME Fft COMMAND player_core_tests Fft)
+add_test(NAME NodeReader COMMAND player_core_tests NodeReader)
 add_test(NAME PcmTap COMMAND player_core_tests PcmTap)
 add_test(NAME SourceResolution COMMAND player_core_tests SourceResolution)

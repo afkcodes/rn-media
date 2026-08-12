@@ -859,6 +859,32 @@ has already started the next entry, so a boundary failure can produce a brief
 blip of the following track; that is the honest trade and it is documented on
 the option.
 
+**The clean close is layer 2's, on request** (`retry.retryLiveEof`, default
+off). A radio server that hangs up *politely* produces `MPV_END_FILE_REASON_EOF`
+— no error number, no error string — so neither of the two layers above sees a
+failure at all: FFmpeg does not act on it (`reconnect_at_eof` is deliberately
+not set, because `http.c:1871` does not guard it on `is_streamed` and it would
+turn every finite track's natural end into a reconnect storm), and layer 2's
+gate is `PlayerError.retryable`, which a clean end never reaches. With the flag
+on, an `eof` on an entry whose state was `isLive` — mpv's `seekable = no`, so a
+finite file can never qualify — takes the same bounded per-entry budget,
+immediately and with no timers, emitting `retrying` with a *synthesised*
+`network` error (`errors.ts:liveEofError`; `raw` carries the end-file reason
+because there is no mpv error string to carry). When the budget is spent the end
+is reported as the `trackEnded` it always was — never as an `error`, because a
+clean end is not a failure and giving up on re-attempting it does not make it
+one.
+
+Its reset rule is the one part that could not be inherited: the ordinary budget
+resets on the first `playbackRestart`, which here would mean a server that hangs
+up after one second refills its budget on every reconnect and re-attempts
+forever. So a live-`eof` generation resets only after
+`LIVE_EOF_BUDGET_RESET_SECONDS` (30 s, the same number as `cache-secs`: the
+entry played for longer than the audio the player is willing to hold) of
+wall-clock playback since the restart. Bounded either way — a broadcast that has
+genuinely ended is re-attempted `maxAttempts` times and then the queue moves on,
+which is the documented cost of recovering the station that had not.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager

@@ -1,5 +1,10 @@
 import type { PlayerError } from './errors'
-import { PlayerErrorException, disposedError, toPlayerError } from './errors'
+import {
+  PlayerErrorException,
+  disposedError,
+  liveEofError,
+  toPlayerError,
+} from './errors'
 import type { LogEvent, PlayerEvent } from './events'
 import { toPlayerEvents } from './events'
 import type { AudioFilter } from './filters'
@@ -325,6 +330,57 @@ export interface RetryOptions {
    * @defaultValue {@link DEFAULT_RETRY_MAX_ATTEMPTS}
    */
   readonly maxAttempts?: number
+  /**
+   * Treat a **clean end of a live entry** as a retryable failure.
+   *
+   * @defaultValue `false`
+   *
+   * @remarks
+   * The failure this covers is the one neither other layer can see: a radio
+   * server that closes the connection *politely*. FFmpeg's reconnection
+   * (`{@link PlayerOptions.networkReconnect}`) does not act on it, deliberately
+   * — `reconnect_at_eof` is the option that would, and it is unsafe as a global
+   * default because `http.c:1871` does not guard it on `is_streamed`, so it
+   * would turn every finite track's natural end into a reconnect storm (see
+   * {@link NetworkReconnectOptions}). mpv then reports
+   * `MPV_END_FILE_REASON_EOF` — a *clean* end — and the queue moves on. For a
+   * file that is right. For a station it is the one thing the listener did not
+   * ask for.
+   *
+   * With this on, an entry that ends with `eof` **while
+   * {@link PlayerState.isLive} was true** takes the same path a retryable
+   * error takes: it re-attempts under the same per-entry budget
+   * ({@link maxAttempts}), emits {@link PlayerEventMap.retrying} with a
+   * synthesised `network` error, and emits **no**
+   * {@link PlayerEventMap.trackEnded} for that attempt. A finite entry is never
+   * affected, whatever this is set to — `isLive` is mpv's `seekable = no`, and
+   * a seekable file ends for good.
+   *
+   * There is no delay here either, and for the same reason as the rest of this
+   * option: a JS timer would freeze with the screen off. This layer re-attempts
+   * immediately; spaced retrying belongs to
+   * {@link PlayerOptions.networkReconnect}, which owns the *transient* drop.
+   * This one owns the clean close.
+   *
+   * ### When the budget resets — sustained playback, not the restart
+   * The ordinary retry budget resets on the first `playbackRestart`. That rule
+   * cannot be used here: a station that reconnects, plays for a second and
+   * drops again would clear its budget on every reconnect and re-attempt
+   * forever. So a live-`eof` generation resets only after
+   * {@link LIVE_EOF_BUDGET_RESET_SECONDS} of playback since the restart — long
+   * enough that a station which drops once an hour keeps recovering all day,
+   * short enough that a server serving two seconds and hanging up exhausts its
+   * budget and stops.
+   *
+   * ### The trade, stated plainly
+   * **A broadcast that has genuinely ended will be re-attempted
+   * {@link maxAttempts} times before the queue moves on.** That is bounded by
+   * design and it is the honest cost: nothing in the protocol distinguishes
+   * "this station is off the air" from "this station's server just closed a
+   * socket". The price of recovering the second is a few extra connects on the
+   * first.
+   */
+  readonly retryLiveEof?: boolean
 }
 
 /** Options for {@link Player.create}. */
@@ -1129,6 +1185,37 @@ const RECONNECT_DELAY_MAX_CEILING = 4294
 export const DEFAULT_RETRY_MAX_ATTEMPTS = 2
 
 /**
+ * How long a live entry must play, after a {@link RetryOptions.retryLiveEof}
+ * re-attempt, before its attempt budget starts over.
+ *
+ * @remarks
+ * `30`, and the number is chosen against two bounds rather than picked:
+ *
+ * - **It must be longer than a reconnect loop can plausibly take**, or a server
+ *   that accepts a connection and immediately hangs up would reset the budget
+ *   on every cycle and retry forever — the exact bug this constant exists to
+ *   prevent. Such a cycle completes in well under a second; even layer 1 gives
+ *   up after ~4 s at the default `reconnect_delay_max` of
+ *   {@link DEFAULT_RECONNECT_DELAY_MAX_SECONDS}. 30 s clears that by an order
+ *   of magnitude.
+ * - **It must be shorter than any real listening session**, so a station that
+ *   drops once an hour recovers every time instead of exhausting a budget it
+ *   spent months ago. Half a minute of continuous audio is the smallest
+ *   interval nobody would call "it never really played".
+ *
+ * It is deliberately the same number as {@link DEFAULT_CACHE_SECS}, which makes
+ * it say something concrete rather than arbitrary: the entry played for longer
+ * than the audio the player is willing to hold, so what the listener heard came
+ * from the network over time and not from one cache fill.
+ *
+ * Measured as **wall-clock since the restart**, not decoded seconds: a live
+ * stream that is playing advances both at the same rate, and reading `time-pos`
+ * instead would put a synchronous mpv round-trip on a failure path (see
+ * `#handleBatch`'s read budget) to learn something this already knows.
+ */
+export const LIVE_EOF_BUDGET_RESET_SECONDS = 30
+
+/**
  * Our TS level names → mpv's `mpv_request_log_messages` strings.
  *
  * The TS union deliberately renames two levels (`verbose`, `debugging`) because
@@ -1312,16 +1399,36 @@ function networkReconnectOptions(
   }
 }
 
-/** Validate {@link RetryOptions} and resolve it to a plain attempt budget. */
-function resolveRetryOptions(options: RetryOptions | undefined): number {
+/** {@link RetryOptions}, validated and defaulted. */
+interface ResolvedRetryOptions {
+  readonly maxAttempts: number
+  readonly retryLiveEof: boolean
+}
+
+/** Validate {@link RetryOptions} and resolve it to plain values. */
+function resolveRetryOptions(
+  options: RetryOptions | undefined
+): ResolvedRetryOptions {
   const attempts = options?.maxAttempts
-  if (attempts === undefined) return DEFAULT_RETRY_MAX_ATTEMPTS
-  if (!Number.isInteger(attempts) || attempts < 0) {
+  if (attempts !== undefined && (!Number.isInteger(attempts) || attempts < 0)) {
     throw invalidArgument(
       `\`retry.maxAttempts\` must be a non-negative integer; got ${attempts}.`
     )
   }
-  return attempts
+  const live = options?.retryLiveEof
+  // A boolean union is only a compile-time guarantee; a JavaScript caller (or a
+  // value read from JSON) can still get here, and a truthy string quietly
+  // turning on a policy that re-attempts finished broadcasts is exactly the
+  // kind of silent yes this library rejects everywhere else.
+  if (live !== undefined && typeof live !== 'boolean') {
+    throw invalidArgument(
+      `\`retry.retryLiveEof\` must be a boolean; got ${String(live)}.`
+    )
+  }
+  return {
+    maxAttempts: attempts ?? DEFAULT_RETRY_MAX_ATTEMPTS,
+    retryLiveEof: live ?? false,
+  }
 }
 
 /**
@@ -1595,6 +1702,8 @@ export class Player {
    * retrying, which is mpv's own behaviour.
    */
   #maxRetryAttempts = DEFAULT_RETRY_MAX_ATTEMPTS
+  /** {@link RetryOptions.retryLiveEof}. */
+  #retryLiveEof = false
   /**
    * The entry currently being re-attempted, and how many attempts it has cost.
    *
@@ -1602,7 +1711,24 @@ export class Player {
    * one generation in flight. It is dropped — the "generation" resetting — by
    * {@link #resetRetry}, which every cursor move and every queue edit calls.
    */
-  #retry: { readonly index: number; readonly attempts: number } | undefined
+  #retry:
+    | {
+        readonly index: number
+        readonly attempts: number
+        /**
+         * The generation was armed by {@link RetryOptions.retryLiveEof} rather
+         * than by a failure. It resets on *sustained playback* instead of on
+         * the first restart — see {@link LIVE_EOF_BUDGET_RESET_SECONDS}.
+         */
+        readonly live: boolean
+        /**
+         * When the re-attempt actually started playing, for the sustained-
+         * playback reset. `undefined` until a restart is seen; only ever set on
+         * a `live` generation.
+         */
+        readonly restartedAt?: number
+      }
+    | undefined
 
   readonly #stateListeners = new Set<(state: PlayerState) => void>()
   readonly #eventListeners: {
@@ -1655,7 +1781,9 @@ export class Player {
     const now = options.now ?? Date.now
     const client = factory()
     const player = new Player(client, now)
-    player.#maxRetryAttempts = resolveRetryOptions(options.retry)
+    const retry = resolveRetryOptions(options.retry)
+    player.#maxRetryAttempts = retry.maxAttempts
+    player.#retryLiveEof = retry.retryLiveEof
     player.#visualizer = new VisualizerController(client)
     player.#resolution = new SourceResolverController(client, {
       timeoutMs: options.resolverTimeoutMs ?? DEFAULT_RESOLVER_TIMEOUT_MS,
@@ -2707,7 +2835,20 @@ export class Player {
       this.#retry !== undefined &&
       this.#retry === retryBefore
     ) {
-      this.#resetRetry()
+      if (this.#retry.live) {
+        // A live-`eof` generation must NOT reset here: a station that
+        // reconnects, plays for a second and drops again would clear its budget
+        // on every reconnect and re-attempt forever. The restart is only the
+        // *start* of the clock — see `LIVE_EOF_BUDGET_RESET_SECONDS`, which
+        // `#takeRetryAttempt` reads. Stamped once per generation, so a second
+        // restart (a stall recovering, say) cannot keep pushing the deadline
+        // out.
+        if (this.#retry.restartedAt === undefined) {
+          this.#retry = { ...this.#retry, restartedAt: context.now }
+        }
+      } else {
+        this.#resetRetry()
+      }
     }
 
     // Deliberately reuses the existing discontinuity signals rather than adding
@@ -2799,7 +2940,16 @@ export class Player {
       case 'endFile': {
         if (after.status === 'ended') {
           const index = before.playlist.index
+          // Read from the snapshot taken *before* the end, for the same reason
+          // the index is: liveness is a fact about the entry that just ended,
+          // and mpv starts the next one immediately afterwards.
+          const wasLive = before.isLive
+          const wasPlaying = before.playing
           out.push(() => {
+            // A clean end of a *live* entry is a server hanging up, not a
+            // broadcast finishing — but only if the app said so. See
+            // `RetryOptions.retryLiveEof`.
+            if (this.#tryRetryLiveEof(index, wasLive, wasPlaying)) return
             this.#emit('trackEnded', { index })
           })
         } else if (after.status === 'error' && after.error !== undefined) {
@@ -2952,15 +3102,74 @@ export class Player {
    *
    * @remarks
    * Runs inside the batch fan-out, after listeners have seen the new snapshot.
-   * The jump itself is issued fire-and-forget: it is a command, this is not an
-   * async context, and there is nobody to hand a rejection to — a jump that
-   * mpv refuses simply leaves the queue where mpv already put it, which is the
-   * same place a non-retried failure leaves it.
+   * The typed error's {@link PlayerError.retryable} flag is the whole policy
+   * here — everything after it (budget, arming, the jump) is
+   * {@link #takeRetryAttempt}, shared with the live-`eof` path.
    */
   #tryRetry(index: number, error: PlayerError, wasPlaying: boolean): boolean {
+    if (!error.retryable) return false
+    return this.#takeRetryAttempt(index, error, wasPlaying, false)
+  }
+
+  /**
+   * Decide whether a live entry that ended *cleanly* gets another attempt.
+   *
+   * @param index - The playlist index that ended, from the snapshot before the
+   * `endFile` was reduced.
+   * @param wasLive - {@link PlayerState.isLive} at that same moment. The whole
+   * gate: a seekable entry that reaches its end has ended.
+   * @param wasPlaying - Playback intent, so the re-attempt restores it.
+   * @returns `true` when an attempt was taken — and therefore no `trackEnded`
+   * should be emitted for this end.
+   *
+   * @remarks
+   * Off unless {@link RetryOptions.retryLiveEof} says otherwise, because the
+   * default has to be mpv's honest reading: `MPV_END_FILE_REASON_EOF` means the
+   * source said it was done. Turning that into a failure for everybody would
+   * break the `trackEnded`-vs-`error` distinction this library is built around;
+   * turning it into one *for a live entry, on request* is the narrowest form of
+   * the feature that still catches a station's server closing the connection.
+   */
+  #tryRetryLiveEof(
+    index: number,
+    wasLive: boolean,
+    wasPlaying: boolean
+  ): boolean {
+    if (!this.#retryLiveEof) return false
+    if (!wasLive) return false
+    return this.#takeRetryAttempt(
+      index,
+      liveEofError(this.#currentUri),
+      wasPlaying,
+      true
+    )
+  }
+
+  /**
+   * The shared body of both retry paths: budget, arm, announce, jump.
+   *
+   * @param live - `true` when this generation was armed by
+   * {@link RetryOptions.retryLiveEof}, which changes only *when the budget
+   * resets* (see {@link LIVE_EOF_BUDGET_RESET_SECONDS}), never how much of it
+   * there is. One budget per entry generation, whichever path spent it — an
+   * entry that alternates clean closes and hard failures is one unhealthy
+   * entry, not two independent problems.
+   *
+   * @remarks
+   * Runs inside the batch fan-out, after listeners have seen the new snapshot.
+   * The jump itself is issued fire-and-forget: it is a command, this is not an
+   * async context, and there is nobody to hand a rejection to — a jump that mpv
+   * refuses simply leaves the queue where mpv already put it, which is the same
+   * place a non-retried failure leaves it.
+   */
+  #takeRetryAttempt(
+    index: number,
+    error: PlayerError,
+    wasPlaying: boolean,
+    live: boolean
+  ): boolean {
     if (this.#destroyed) return false
     if (this.#maxRetryAttempts <= 0) return false
-    if (!error.retryable) return false
     // `-1` is "no current entry" — there is nothing to jump back to, and
     // `playlist-play-index -1` would be a different operation entirely.
     if (index < 0) return false
@@ -2968,15 +3177,24 @@ export class Player {
     // A failure on a different entry starts a new generation. Without this a
     // queue of three dead streams would share one budget and only the first
     // would ever be retried.
-    const spent = this.#retry?.index === index ? this.#retry.attempts : 0
+    const record = this.#retry?.index === index ? this.#retry : undefined
+    // …and a generation whose re-attempt then played for a good while has
+    // proven itself, so it starts over. Only live generations carry a
+    // `restartedAt`; the ordinary path is already reset by the restart itself.
+    const sustained =
+      record?.restartedAt !== undefined &&
+      this.#now() - record.restartedAt >= LIVE_EOF_BUDGET_RESET_SECONDS * 1000
+    const spent = record === undefined || sustained ? 0 : record.attempts
     if (spent >= this.#maxRetryAttempts) return false
 
     // A *new* record object every time, never a mutation: `#handleBatch` uses
     // record identity to tell "this batch armed an attempt" from "this batch
     // was a success", and those can arrive together when a batch accumulates
-    // across a queue boundary.
+    // across a queue boundary. It also drops any `restartedAt` the previous
+    // attempt left behind, which is what starts the sustained-playback clock
+    // over rather than letting a stale stamp count twice.
     const attempt = spent + 1
-    this.#retry = { index, attempts: attempt }
+    this.#retry = { index, attempts: attempt, live }
     this.#emit('retrying', {
       index,
       attempt,
