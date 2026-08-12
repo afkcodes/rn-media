@@ -1,63 +1,69 @@
 /**
- * `prefetchStarted` — the typed event, not a log line being parsed.
+ * `usePrefetchStatus` — the library's own hook over the typed
+ * `prefetchStarted` event, not app plumbing.
  *
  * mpv opens the **next** queue entry while the current one is still playing, so
- * the handover does not have to pay for a fresh TCP + TLS + probe. This event
- * fires at the instant mpv's opener thread is released on that entry, which is
- * seconds *into* the current track rather than near its end — so if you see a
- * line here well before a boundary, that boundary is going to be gapless.
+ * the handover does not have to pay for a fresh TCP + TLS + probe. The hook
+ * goes `active` at the instant mpv's opener thread is released on that entry —
+ * which is seconds *into* the current track rather than near its end — and
+ * clears itself at the boundary that consumes the prefetch (and on error /
+ * queue end). This component holds no state and wires no events: the hook is
+ * the whole integration, which is the point of demoing it here.
  *
- * Two conditions, both honest, and the banner reports on both:
+ * Two conditions for it to ever go active, both honest (see the hook's TSDoc):
  *
  * 1. **mpv must actually be prefetching.** `prefetchPlaylist` is off by default
  *    in the library; this app turns it on in `Player.create` (see
- *    `controller.ts` for why, and for the queue-edit caveat that comes with it).
- *    The toggle below flips mpv's property at runtime so the difference is
- *    audible on a device without a rebuild.
+ *    `controller.ts`). The toggle below flips mpv's property at runtime so the
+ *    difference is audible on a device without a rebuild. Note the status can
+ *    outlive the toggle: turning prefetch off does not abort an opener already
+ *    running, and the banner honestly keeps showing what is still warm.
  * 2. **The linked libmpv must carry the prefetch hook** — Android
- *    `v1.1.9-rnmedia.5`+ / iOS `v0.7.2-rnmedia.4`+. Stock libmpv runs no hooks
- *    on its prefetch path, so on any other build the event simply never occurs.
- *    There is no error and no capability flag: an event that does not happen is
- *    not a failure.
+ *    `v1.1.9-rnmedia.5`+ / iOS `v0.7.2-rnmedia.4`+. On any other build the
+ *    status simply never leaves `{ active: false }`; an idle banner is not a
+ *    failure.
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
+import { usePrefetchStatus, type Player } from '@rn-media/player'
 import { COLORS, SPACE, TYPE } from '../theme'
 import { Chip, Detail, Strip } from './ui'
-import type { PrefetchNote } from '../playback'
 
 export const PrefetchBanner = React.memo(function PrefetchBanner({
-  note,
+  player,
   enabled,
   ready,
   onToggle,
 }: {
-  note: PrefetchNote | undefined
+  player: Player | undefined
   enabled: boolean
   ready: boolean
   onToggle: (enabled: boolean) => void
 }): React.JSX.Element {
+  // The library way: one hook, no listeners, no clearing rules to hand-roll.
+  const prefetch = usePrefetchStatus(player)
+
   return (
     // A flat strip like the retry/error banners — the rule turns success-green
-    // the moment `prefetchStarted` has fired, which is the visible proof a
+    // the moment a prefetch is in flight, which is the visible proof the next
     // boundary is going to be gapless.
     <View style={styles.container}>
-      <Strip color={note === undefined ? COLORS.border : COLORS.success}>
+      <Strip color={prefetch.active ? COLORS.success : COLORS.border}>
         <View style={styles.row}>
           <View style={styles.text}>
             <Text style={styles.title}>
-              {note === undefined
-                ? enabled
+              {prefetch.active
+                ? 'Next entry opened early'
+                : enabled
                   ? 'Prefetch armed — waiting for a boundary'
-                  : 'Prefetch off'
-                : 'Next entry opened early'}
+                  : 'Prefetch off'}
             </Text>
             <Detail>
-              {note === undefined
-                ? enabled
+              {prefetch.active
+                ? `${prefetch.uri}${prefetch.entryId === undefined ? '' : ` · entry #${prefetch.entryId}`}`
+                : enabled
                   ? 'mpv opens the next entry once the current one is fully read.'
-                  : 'Every transition will pay for a cold connection.'
-                : `${note.uri}${note.entryId === undefined ? '' : ` · entry #${note.entryId}`}`}
+                  : 'Every transition will pay for a cold connection.'}
             </Detail>
           </View>
           <Chip

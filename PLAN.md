@@ -374,9 +374,17 @@ loudness-aware fade points recorded as the only worthwhile revisit).
    as a source resolver (local file when downloaded, CDN otherwise) — zero
    player changes. Scope: WorkManager/URLSession backends, storage/eviction,
    progress events, playlist-level downloads, integrity, encryption decision.
-4. **Quick wins**: `setLoudnessNormalization()` (loudnorm is already
-   compiled in), LRC lyrics utilities + `useLyrics` (pure TS over position
-   projection), `usePrefetchStatus` hook.
+4. **Quick wins — CLOSED 2026-08-13.** `setLoudnessNormalization()` SHIPPED:
+   a managed, labelled `af` entry (`@rnmedia_loudnorm:loudnorm=…`) composing
+   with the EQ without clobbering (ARCHITECTURE §18); semantics verified
+   against FFmpeg 8.1.2 source, not memory — one-pass is always dynamic
+   (linear gates on `measured_*`), 192 kHz chain pin, 3 s lookahead; default
+   −16 LUFS per AES TD1008 rather than ffmpeg's broadcast −24.
+   `usePrefetchStatus` SHIPPED: `prefetchStarted` → renderable state, clearing
+   on `trackChanged`/`error`/`queueEnded` only (ARCHITECTURE §24); the example
+   banner now uses it in place of its hand-rolled plumbing. LRC lyrics
+   utilities + `useLyrics` **DROPPED by owner decision (2026-08-13)** — do not
+   build.
 5. **Investigations**: ~~pitch control via an LGPL filter path~~ — **CLOSED,
    the premise was stale.** mpv gained a first-class `--pitch` option in 0.40
    and we ship 0.41.0, so this needed no filter, no engine flag and no GPL

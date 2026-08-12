@@ -39,12 +39,7 @@ import type {
 } from '@rn-media/media-session'
 import type { Track } from '../data/tracks'
 import { repeatToLoop } from './broadcast'
-import {
-  createEngine,
-  type Engine,
-  type PrefetchNote,
-  type RetryNote,
-} from './engine'
+import { createEngine, type Engine, type RetryNote } from './engine'
 import { DemoMediaHandler, type PlaybackCommands } from './handler'
 import { OutputOptions } from './output'
 import { QueueMirror, type QueueRow } from './queue'
@@ -52,7 +47,7 @@ import { Transport } from './transport'
 import { restoreSession, type RestoreOutcome } from './persistence'
 import { SessionBridge } from './session'
 
-export type { PrefetchNote, RetryNote } from './engine'
+export type { RetryNote } from './engine'
 
 export class Playback implements PlaybackCommands {
   #engine: Engine | undefined
@@ -67,7 +62,6 @@ export class Playback implements PlaybackCommands {
   /* --- app-owned state the UI draws ------------------------------------- */
 
   #station: string | undefined
-  #prefetch: PrefetchNote | undefined
   #retrying: RetryNote | undefined
   /**
    * The shuffle toggle — **app** state, because mpv has no shuffle *mode*.
@@ -145,9 +139,6 @@ export class Playback implements PlaybackCommands {
   get station(): string | undefined {
     return this.#station
   }
-  get prefetch(): PrefetchNote | undefined {
-    return this.#prefetch
-  }
   /** Set while an entry is being re-attempted; cleared when it plays or gives up. */
   get retrying(): RetryNote | undefined {
     return this.#retrying
@@ -203,10 +194,10 @@ export class Playback implements PlaybackCommands {
             this.#station = station
             this.#notify()
           },
-          onPrefetch: (note) => {
-            this.#prefetch = note
-            this.#notify()
-          },
+          // Prefetch sightings are NOT plumbed here anymore: the banner reads
+          // them straight off the player with `usePrefetchStatus`, which is
+          // the library way (and owns the clearing rules this class used to
+          // approximate).
           // The library's own signal that the queue's *contents* moved — an
           // add/remove/clear (observed `playlist-count`) or a reorder (which
           // changes no observable property, so the playlist methods emit it).
@@ -379,8 +370,6 @@ export class Playback implements PlaybackCommands {
 
   setPrefetchEnabled(enabled: boolean): void {
     this.#output.setPrefetchEnabled(enabled)
-    // The banner's last sighting is only meaningful while prefetch is on.
-    if (!enabled) this.#prefetch = undefined
   }
 
   /* --- sleep timer, checkpoints, teardown --------------------------------- */

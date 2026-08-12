@@ -19,13 +19,6 @@ import {
 import { TRACKS } from '../data/tracks'
 import { createDemoResolver } from './resolver'
 
-/** What `prefetchStarted` last told us, for the banner. */
-export interface PrefetchNote {
-  readonly uri: string
-  readonly entryId: number | undefined
-  readonly at: number
-}
-
 /** What `retrying` last told us, for the banner. */
 export interface RetryNote {
   readonly index: number
@@ -39,8 +32,6 @@ export interface EngineHooks {
   readonly onState: (state: PlayerState) => void
   /** ICY station identity, or `undefined` when the tags carry none. */
   readonly onStation: (station: string | undefined) => void
-  /** mpv began opening the next entry ahead of time. */
-  readonly onPrefetch: (note: PrefetchNote) => void
   /** The queue's contents changed — re-read them. */
   readonly onQueueChanged: () => void
   /**
@@ -200,9 +191,10 @@ function wireEvents(player: Player, hooks: EngineHooks): void {
   // The typed prefetch event — not a log line being parsed. It fires when mpv's
   // opener thread is released on the next entry, which is seconds *into* the
   // current track, so seeing it is how you know a transition is going to be
-  // gapless before you hear it.
+  // gapless before you hear it. This log line is the raw-event route; the UI
+  // banner no longer plumbs it through the controller — `usePrefetchStatus`
+  // in `PrefetchBanner.tsx` is the library's own state over the same event.
   player.on('prefetchStarted', (e) => {
     console.log(`[example] prefetch: ${e.uri} (entry ${e.entryId ?? '?'})`)
-    hooks.onPrefetch({ uri: e.uri, entryId: e.entryId, at: Date.now() })
   })
 }

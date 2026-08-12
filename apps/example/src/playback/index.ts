@@ -13,7 +13,7 @@ import type { Player } from '@rn-media/player'
 import { Playback } from './controller'
 
 export { Playback } from './controller'
-export type { PrefetchNote, RetryNote } from './controller'
+export type { RetryNote } from './controller'
 
 /**
  * Parked on `globalThis` so a Fast Refresh of this module reuses the running
@@ -73,7 +73,7 @@ export interface PlaybackHandle {
  * Note what this subscription is *not*: it is not the player state. Player
  * state has its own subscription with its own selector (`usePlayerState`, see
  * `src/App.tsx`); this one fires only for things the controller owns — the
- * queue mirror, the restore note, the prefetch banner — which change a handful
+ * queue mirror, the restore note, the retry banner — which change a handful
  * of times per session.
  */
 export function usePlayback(): PlaybackHandle {

@@ -710,12 +710,23 @@ export const AudioFilters = {
   /**
    * EBU R128 loudness normalisation (ffmpeg `loudnorm`).
    *
-   * **Expensive on mobile, by construction.** In its single-pass (non-linear)
+   * **Prefer `Player.setLoudnessNormalization`** — the managed toggle over
+   * this same filter, which coexists with a chain set through
+   * `setAudioFilters` instead of being clobbered by it, and whose TSDoc
+   * carries the full cost sheet. This factory remains for hand-built chains
+   * that need options the toggle does not expose (`linear`, `offset`).
+   *
+   * **Expensive on mobile, by construction.** In its single-pass (dynamic)
    * mode `loudnorm` advertises exactly one input sample rate — 192 000 Hz
-   * (`af_loudnorm.c:734,746`) — so libavfilter resamples the stream up to
-   * 192 kHz for this filter and back down afterwards. If all you want is
-   * "make quiet tracks louder", {@link AudioFilters.dynamicNormalizer} or
-   * `Player.setReplayGain` costs a fraction of it.
+   * (FFmpeg 8.1.2 `af_loudnorm.c:740,752`; `doc/filters.texi`: "the audio
+   * stream will be upsampled to 192 kHz") — so libavfilter resamples the
+   * stream up to 192 kHz for this filter and back down afterwards, and the
+   * filter buffers 3 s of lookahead (`af_loudnorm.c:697,775`). Note `linear`
+   * is inert in live playback: ffmpeg's linear mode requires all four
+   * `measured_*` values from a prior analysis pass (`af_loudnorm.c:820-825`),
+   * which a live player cannot have. If all you want is "make quiet tracks
+   * louder", {@link AudioFilters.dynamicNormalizer} or `Player.setReplayGain`
+   * costs a fraction of it.
    */
   loudnorm(options: LoudnormOptions = {}): AudioFilter {
     const out: AudioFilterOption[] = []

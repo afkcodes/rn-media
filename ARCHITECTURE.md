@@ -543,6 +543,31 @@ not the largest slider — octave-spaced one-octave bells overlap and add, so
 per-platform branching; on binaries older than them the call fails with a typed
 `mpv` error (`errno: -11`), which remains the supported availability probe.
 
+**Loudness normalization is a *managed entry* of this same chain, not a second
+mechanism** (2026-08-13). `Player.setLoudnessNormalization(enabled, options?)`
+owns exactly one labelled entry — `@rnmedia_loudnorm:loudnorm=…` — appended
+after the user half; `setAudioFilters` owns everything before it. The player
+tracks the user half in TS and every call from either side recompiles the whole
+`af` property, so EQ presets and normalization compose without either
+clobbering the other; the label is reserved and user chains carrying it are
+rejected (two owners of one mpv label would silently overwrite each other).
+Tail position is deliberate: the normalizer must hear the EQ's output, and its
+built-in true-peak limiter then guards the chain's sum. Bookkeeping commits
+only *after* the property write succeeds, so a chain mpv rejected can never be
+re-applied later from stale state. The semantics were verified against the
+FFmpeg 8.1.2 tree the binaries build from, not remembered: one-pass `loudnorm`
+is always the **dynamic** mode (the linear mode gates on all four `measured_*`
+inputs from a prior analysis pass, `af_loudnorm.c:820-825` — unobtainable
+live), it pins the chain to 192 kHz in that mode (`af_loudnorm.c:740,752`;
+`doc/filters.texi`), and it buffers 3 s of lookahead (`af_loudnorm.c:697,775`)
+— so the TSDoc sells it as a dynamics processor with real CPU cost, not free
+loudness. The default target is −16 LUFS (AES TD1008.1.21-9, Table 1:
+track-normalized music −16 LUFS), overriding ffmpeg's broadcast-derived −24,
+which reads whisper-quiet on phones; TP stays at ffmpeg's −2 dBTP. ReplayGain
+and loudnorm level the same thing by different means and their gains stack if
+both are on; both APIs' TSDoc says choose one (tagged files → ReplayGain at
+zero DSP cost, untagged → loudnorm).
+
 ### 19. Background hardening: persistence is injected, the sleep timer is native, the FGS grace period is a knob
 Three answers to the same question — *what happens to a paused, demoted,
 killable service?* — added to `media-session` and verified on device
@@ -1075,6 +1100,28 @@ session's resumption card, which the next broadcast rewrites, and buys never
 silently restoring a session with shuffle off because the record could not say
 otherwise. `SchemaVersionSyncTest` still fails the Android build if the TS writer
 and the Kotlin reader drift.
+
+### 24. Prefetch status is a hook, and its clearing set is closed over existing events
+`usePrefetchStatus(player)` (2026-08-13) reduces the discrete `prefetchStarted`
+event into renderable state — `{ active: false }` or
+`{ active: true, uri, entryId?, at }`, a discriminated union so `uri` only
+exists where it means something. Deliberately **not** a `PlayerState` field:
+only debug/status surfaces read it, and a snapshot field would drag its
+clearing rules into the reducer and onto every subscriber. The clearing set is
+exactly three existing events, chosen for what they mean and written down so
+nobody "fixes" them: `trackChanged` (the boundary arrived — the prefetch was
+either consumed gaplessly or dropped by a queue edit, and `stop()` lands here
+too via the cursor moving to −1), `error` (the player gave up), and
+`queueEnded` (a natural end with nothing following, the one boundary
+`trackChanged` does not cover). Deliberately *not* cleared on `seekStarted` — a
+scrub within the current track does not invalidate the next entry's open
+demuxer — and not on `retrying`, because the warm next entry survives a
+re-attempt of the current one. No native surface was added: the hook rides
+`Player.on`, and on binaries without the fork's prefetch hook it simply never
+leaves idle — the same "an event that does not happen is not a failure" honesty
+the event itself documents. The example app's banner now consumes this hook;
+the hand-rolled engine→controller→UI plumbing it replaced is gone, which is the
+point of the example.
 
 ## Platform truths we build around (learned, verified)
 
