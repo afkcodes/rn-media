@@ -109,6 +109,19 @@ export interface PlayerState {
   /**
    * Absolute timestamp (seconds, directly comparable to position) up to which
    * the demuxer has buffered — mpv's `demuxer-cache-time`.
+   *
+   * @remarks
+   * **Second-granular, deliberately.** mpv republishes this several times a
+   * second for as long as the cache is filling (including while paused), and
+   * every republication would otherwise mint a new `PlayerState` and wake every
+   * state listener. The reducer therefore only adopts a value that moved at
+   * least {@link BUFFERED_POSITION_STEP} second from the last published one —
+   * plus one guaranteed update at the instant the buffer reaches
+   * {@link duration}, so "fully buffered" is always observable exactly.
+   *
+   * The value itself is mpv's, unrounded: what is quantised is *how often* it
+   * changes, not what it says. Do not use it as a clock — it is a fill level,
+   * and {@link projectPosition} is what moves smoothly.
    */
   readonly bufferedPosition?: number
   /** Playback rate multiplier (mpv's `speed`; mpv accepts 0.01–100). */
@@ -272,6 +285,42 @@ export function createInitialState(now: number): PlayerState {
     idleActive: true,
     eofReached: false,
   }
+}
+
+/**
+ * How far {@link PlayerState.bufferedPosition} must move before the reducer
+ * publishes it, in seconds.
+ *
+ * @remarks
+ * mpv republishes `demuxer-cache-time` continuously — ~4-6 broadcasts per
+ * second in steady playback, and it keeps filling while *paused* too. Each
+ * accepted value is a fresh `PlayerState` object and a full state fan-out, so
+ * left unquantised this single property makes the "state changes only on
+ * discontinuities" contract untrue for the entire life of a session.
+ *
+ * One second is chosen, not tuned: it is the granularity every consumer of the
+ * value already works at (a buffer bar is a few hundred pixels wide over a
+ * multi-minute track; media3's `setContentBufferedPositionMs` feeds the same
+ * bar; the media-session persistence layer rounds to seconds anyway), and it
+ * is coarse enough that a 4-6 Hz feed becomes ~1 Hz at the fastest fill and
+ * silent at a realistic one.
+ */
+export const BUFFERED_POSITION_STEP = 1
+
+/**
+ * Whether `next` is the moment the buffer reached the end of a finite entry.
+ *
+ * The one update that must never be quantised away: "fully buffered" is a
+ * *state*, not a sample, and a UI that draws `buffered >= duration` differently
+ * (no spinner, a filled bar, an offline badge) would otherwise be left up to
+ * {@link BUFFERED_POSITION_STEP} short of it forever, because nothing further
+ * arrives once the cache stops growing. A live entry has no duration, so this
+ * is simply never true there.
+ */
+function crossesEndOfBuffer(state: PlayerState, next: number): boolean {
+  const { duration, bufferedPosition } = state
+  if (duration === undefined || bufferedPosition === undefined) return false
+  return bufferedPosition < duration && next >= duration
 }
 
 /**
@@ -546,6 +595,20 @@ function reduceProperty(
         const next = { ...state }
         delete (next as { bufferedPosition?: number }).bufferedPosition
         return next
+      }
+      const previous = state.bufferedPosition
+      if (
+        previous !== undefined &&
+        !crossesEndOfBuffer(state, bufferedPosition)
+      ) {
+        // The buffer clock is the one property mpv republishes continuously —
+        // measured at ~4-6 Hz in steady playback — and every acceptance here
+        // costs a whole new `PlayerState` plus a full listener fan-out, for a
+        // number most UIs draw as a bar a few hundred pixels wide. Sub-second
+        // movement is therefore not news; see {@link BUFFERED_POSITION_STEP}.
+        if (Math.abs(bufferedPosition - previous) < BUFFERED_POSITION_STEP) {
+          return state
+        }
       }
       return { ...state, bufferedPosition }
     }

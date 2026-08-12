@@ -15,7 +15,10 @@
 #include <fbjni/fbjni.h>
 #include <NitroModules/HybridObjectRegistry.hpp>
 
+#include "JHybridRnMediaScreenStateSpec.hpp"
+#include "JFunc_void_bool.hpp"
 #include "HybridMpvClient.hpp"
+#include <NitroModules/DefaultConstructableObject.hpp>
 
 namespace margelo::nitro::rnmediaplayer {
 
@@ -25,14 +28,22 @@ int initialize(JavaVM* vm) {
   });
 }
 
-
+struct JHybridRnMediaScreenStateSpecImpl: public jni::JavaClass<JHybridRnMediaScreenStateSpecImpl, JHybridRnMediaScreenStateSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/rnmediaplayer/HybridRnMediaScreenState;";
+  static std::shared_ptr<JHybridRnMediaScreenStateSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridRnMediaScreenStateSpecImpl::javaobject()>();
+    jni::local_ref<JHybridRnMediaScreenStateSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridRnMediaScreenStateSpec();
+  }
+};
 
 void registerAllNatives() {
   using namespace margelo::nitro;
   using namespace margelo::nitro::rnmediaplayer;
 
   // Register native JNI methods
-  
+  margelo::nitro::rnmediaplayer::JHybridRnMediaScreenStateSpec::CxxPart::registerNatives();
+  margelo::nitro::rnmediaplayer::JFunc_void_bool_cxx::registerNatives();
 
   // Register Nitro Hybrid Objects
   HybridObjectRegistry::registerHybridObjectConstructor(
@@ -42,6 +53,12 @@ void registerAllNatives() {
                     "The HybridObject \"HybridMpvClient\" is not default-constructible! "
                     "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
       return std::make_shared<HybridMpvClient>();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "RnMediaScreenState",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridRnMediaScreenStateSpecImpl::create();
     }
   );
 }

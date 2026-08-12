@@ -577,6 +577,24 @@ std::optional<bool> HybridMpvClient::getPropertyBool(const std::string& name) {
   return _client->getPropertyBool(name);
 }
 
+std::optional<std::unordered_map<std::string, std::string>>
+HybridMpvClient::getPropertyMap(const std::string& name) {
+  std::unordered_map<std::string, std::string> out;
+  // One `mpv_get_property(MPV_FORMAT_NODE)`, and mpv's node is freed before
+  // `getPropertyNodeMap` returns — so the only copies made are the ones that
+  // end up in `out`. Non-string members are skipped, per the spec's contract.
+  const bool present = _client->getPropertyNodeMap(name, [&out](const rnmedia::NodeMember& member) {
+    if (!member.text.has_value()) {
+      return;
+    }
+    out.emplace(std::string(member.key), std::string(*member.text));
+  });
+  if (!present) {
+    return std::nullopt;
+  }
+  return out;
+}
+
 void HybridMpvClient::setPropertyString(const std::string& name, const std::string& value) {
   _client->setPropertyString(name, value);
 }
@@ -623,9 +641,26 @@ void HybridMpvClient::startVisualizer(double fftSize, double fps, bool waveform)
 }
 
 void HybridMpvClient::stopVisualizer() {
-  if (_tap != nullptr) {
-    _tap->stop();
+  if (_tap == nullptr) {
+    return;
   }
+  // `stop()` first: it joins the sampler thread and disarms mpv's ring, so
+  // nothing can be mid-analysis when the tap is destroyed.
+  _tap->stop();
+  // Then detach *before* freeing, because `VisualizerDelivery` holds a raw
+  // pointer to the tap and calls `onDeliveryComplete()` on it when a capture's
+  // JS promise settles. Both this method and that settlement run on the JS
+  // thread, so there is no window between the two lines — but the order still
+  // has to be right for the case where a capture is in flight.
+  _visualizer->attach(nullptr);
+  // Freeing is the point: the FFT tables, the Hann window, the PCM/mono/real/
+  // imag scratch and the magnitude buffers are ~75 KB at the default
+  // 2048-point transform and ~600 KB at the 16384 ceiling, per player. The
+  // lifetime contract for the whole feature is "derived from the listener set"
+  // (ARCHITECTURE §21), and holding a disarmed tap's buffers for the life of
+  // the player was the one place that was not true. `startVisualizer()`
+  // rebuilds and re-attaches on the next subscribe.
+  _tap.reset();
 }
 
 void HybridMpvClient::setVisualizerListener(

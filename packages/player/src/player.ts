@@ -12,8 +12,6 @@ import {
   OBSERVED_PROPERTIES,
   isMetadataProperty,
   metadataByKeyProperty,
-  metadataKeyProperty,
-  metadataValueProperty,
   playlistFilenameProperty,
 } from './properties'
 import type { SourceResolver } from './source-resolver'
@@ -302,6 +300,30 @@ export interface PlayerOptions {
    *
    * On timeout the logical URI is used unchanged, mpv fails the load on its own
    * terms, and the failure arrives as an ordinary typed `error` event.
+   *
+   * **What the hold actually parks.** The wait happens on the native event
+   * thread — the same thread that drains mpv's event queue — so for its
+   * duration *nothing* crosses into JavaScript: no property changes, and no
+   * command replies. A `play()`/`seekTo()`/`command()` Promise issued while an
+   * unresolved play-time load is in flight therefore does not settle until the
+   * resolution completes or this budget expires. The player is not wedged (the
+   * hold is bounded and mpv resumes normally afterwards), but a UI that awaits
+   * one of those Promises will look stalled for up to this long.
+   *
+   * The mitigation is the design's main path, not a workaround: resolve-ahead
+   * answers the current and next entries as the queue moves, typically a whole
+   * track before mpv asks, so a hit costs a native map lookup and this path
+   * stays cold. Keep your resolver deterministic (see {@link SourceResolver}) so
+   * the answers stay cacheable, and lower this value if your app would rather
+   * fail a load fast than have its transport Promises wait.
+   *
+   * Waiting *off* the event thread — parking a dedicated waiter and letting
+   * `mpv_wait_event` keep draining — was considered and deliberately deferred:
+   * it means a second synchronisation object, a hook continuation issued from a
+   * thread that did not receive the hook, and a new class of ordering bug, all
+   * to improve a path that resolve-ahead is designed to make rare. It is
+   * recorded in the as-built spec as the known cost of the simpler design
+   * rather than pretended away.
    */
   readonly resolverTimeoutMs?: number
   /**
@@ -1129,9 +1151,11 @@ export class Player {
 
     try {
       client.setEventBatchListener((events) => player.#handleBatch(events))
-      // Registered unconditionally, and it costs nothing: no mpv hook is
-      // registered until a resolver is installed, so a player without one never
-      // produces a request for this listener to receive.
+      // Registered unconditionally, and it costs nothing: `initialize()`
+      // registers both mpv hooks always (see the spec's note on why lazy
+      // registration was abandoned), but a *disarmed* handler continues every
+      // hook immediately and never asks anyone — so a player with no resolver
+      // never produces a request for this listener to receive.
       client.setSourceResolutionListener((request) => {
         player.#resolution?.handleRequest(request)
       })
@@ -1755,33 +1779,30 @@ export class Player {
    * demuxer).
    *
    * @remarks
-   * Built by walking mpv's documented scalar sub-properties —
-   * `metadata/list/count`, then `metadata/list/N/key` and
-   * `metadata/list/N/value` for each `N` (mpv 0.35.1 `input.rst`). No string
-   * parsing is involved anywhere: the map property itself is deliberately never
-   * read, because the manual states "Trying to retrieve this property as a raw
-   * string doesn't work", and a typed API must not rest on behaviour its own
-   * documentation disclaims.
+   * **One** synchronous read: `metadata` is fetched as an `MPV_FORMAT_NODE`
+   * map and converted natively (`MpvClient.getPropertyMap`). No string parsing
+   * is involved anywhere — the manual's "Trying to retrieve this property as a
+   * raw string doesn't work" is about the *string* format, and a node read is
+   * the documented way to get the map, which is also why it is atomic: mpv
+   * builds the whole node under its own lock, so the result cannot mix two tag
+   * generations.
    *
-   * The cost is `2N + 1` synchronous property reads, which is why this is a
-   * pull, not a field of `PlayerState`. It is also **not atomic**: if mpv
-   * republished the tags mid-walk (which only happens on a metadata update) the
-   * result could mix two generations. Call it again from
-   * {@link PlayerEventMap.metadataChanged} and the fresh map wins.
-   *
-   * For a single tag, {@link getMetadataValue} is one read instead of `2N + 1`.
+   * It used to walk `metadata/list/count` + `metadata/list/N/key` +
+   * `metadata/list/N/value`, at a cost of `2N + 1` blocking round-trips into
+   * mpv's core — 41 of them for a 20-tag FLAC, issued from inside the event
+   * batch at a track boundary. That is why this is still a *pull* rather than a
+   * field of {@link PlayerState}, but the pull is now cheap and constant.
    */
   getMetadata(): Metadata {
     this.#assertAlive('getMetadata')
-    const count = this.#readMetadataCount()
-    const metadata: Record<string, string> = {}
-    for (let index = 0; index < count; index += 1) {
-      const key = this.#readOptionalString(metadataKeyProperty(index))
-      if (key === undefined || key === '') continue
-      metadata[key] =
-        this.#readOptionalString(metadataValueProperty(index)) ?? ''
-    }
-    return metadata
+    const map = this.#readOptional(() =>
+      this.#client.getPropertyMap(MpvProperty.metadata)
+    )
+    // `undefined` covers both "no tags" and "nothing loaded" (mpv reports the
+    // whole property unavailable while there is no demuxer). The map is
+    // returned as-is rather than copied: Nitro builds a fresh JS object per
+    // call, so there is nothing shared to defend against.
+    return map ?? {}
   }
 
   /**
@@ -1975,6 +1996,25 @@ export class Player {
   /**
    * The batched event listener.
    *
+   * ### Synchronous mpv reads issued from this turn — the budget
+   * Every `getProperty*` is a blocking round-trip into mpv's core, and
+   * `mpv/client.h` is explicit that it "[has] to wait until the playback core
+   * is ready, which currently can take an unbounded time (e.g. if network is
+   * slow or unresponsive)". A track boundary is the worst moment to issue one
+   * (mpv is joining an opener thread), and it is also when the most events
+   * arrive at once — so the count here is a budget, not an accident:
+   *
+   * | read | when | count |
+   * | ---- | ---- | ----- |
+   * | `#readTimePos` | batch carried a position discontinuity | 1 |
+   * | `#readTrackChange` | batch moved the playlist cursor | 3 |
+   * | {@link getMetadata} | batch touched `metadata`/`media-title` **and** something is listening for `metadataChanged` | 1 |
+   *
+   * **Worst case: 5 synchronous reads per batch**, whatever the tag count and
+   * whatever the queue length. It was `6 + 2N` (47 for a 20-tag FLAC) until
+   * `metadata` became a single node read and resolve-ahead's two playlist reads
+   * moved off this turn — see `#resolveAhead`.
+   *
    * @returns `true` to keep receiving batches, `false` once destroyed.
    */
   #handleBatch(events: MpvEvent[]): boolean {
@@ -2015,12 +2055,25 @@ export class Player {
     // Deliberately reuses the existing discontinuity signals rather than adding
     // a native event: the queue moving is already visible here, and the whole
     // point of resolving ahead is to be early, not to be exact.
+    //
+    // Deferred to a microtask so its two playlist reads (see `#resolveAhead`)
+    // are not stacked onto the same turn as the reducer and the fan-out. It
+    // still runs before anything else can happen — a microtask drains at the
+    // end of *this* task, ahead of any timer or native callback — so "resolved
+    // as soon as the queue moves", the only ordering the `SourceResolver` docs
+    // promise, is unchanged. What changes is that the batch handler returns to
+    // native first, which is what re-opens the flush cycle.
     if (
       this.#resolution?.installed === true &&
       mapped.some(isQueueMovement) &&
       next !== previous
     ) {
-      this.#resolveAhead()
+      // `Promise.resolve().then`, not `queueMicrotask`: identical scheduling,
+      // but it needs no ambient global (this package compiles against
+      // `lib: ["esnext"]`, which does not declare one).
+      void Promise.resolve().then(() => {
+        this.#resolveAhead()
+      })
     }
 
     return !this.#destroyed
@@ -2037,8 +2090,16 @@ export class Player {
    *
    * Two entries, not the whole queue: mpv only ever prefetches one ahead, and
    * resolving further would mint credentials for tracks that may never play.
+   *
+   * **Called from a microtask, never inline from `#handleBatch`.** Its two
+   * `playlist/N/filename` reads are synchronous mpv round-trips, and stacking
+   * them onto the batch turn put them at the one moment the core is least able
+   * to answer. Everything it touches — the playlist snapshot, the resolver, the
+   * destroyed flag — is re-read here rather than captured, so a `destroy()` (or
+   * a resolver removal) in a listener between the two is seen.
    */
   #resolveAhead(): void {
+    if (this.#destroyed) return
     const resolution = this.#resolution
     if (resolution === undefined || !resolution.installed) return
     const { index, count } = this.#state.playlist
@@ -2164,19 +2225,6 @@ export class Player {
   }
 
   /**
-   * `metadata/list/count`, normalised to a non-negative integer.
-   *
-   * `0` covers both "no tags" and "nothing loaded" (mpv reports the whole
-   * `metadata` property unavailable while there is no demuxer, which the native
-   * binding turns into `undefined`).
-   */
-  #readMetadataCount(): number {
-    const raw = this.#readOptionalNumber(MpvProperty.metadataCount)
-    if (raw === undefined || !Number.isFinite(raw) || raw <= 0) return 0
-    return Math.trunc(raw)
-  }
-
-  /**
    * Read a string property, treating "no such property" as `undefined`.
    *
    * See {@link MPV_ERRNO_PROPERTY_NOT_FOUND}: an absent metadata key is a
@@ -2184,11 +2232,6 @@ export class Player {
    */
   #readOptionalString(name: string): string | undefined {
     return this.#readOptional(() => this.#client.getPropertyString(name))
-  }
-
-  /** {@link #readOptionalString}, for numeric properties. */
-  #readOptionalNumber(name: string): number | undefined {
-    return this.#readOptional(() => this.#client.getPropertyNumber(name))
   }
 
   #readOptional<T>(read: () => T | undefined): T | undefined {

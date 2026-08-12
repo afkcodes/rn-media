@@ -72,6 +72,18 @@ export type SourceResolver = (
  * waits, at any timeout: it fires mid-track over live audio backed by ~0.2–0.8 s
  * of device buffer (ARCHITECTURE §12), so a miss there is answered by continuing
  * mpv immediately and warming the cache for the play-time pass.
+ *
+ * **The hold parks the event thread, and that is the honest cost.** The wait is
+ * taken by the thread that drains mpv's event queue, so while it runs no
+ * property change and — this is the part that surprises people — **no command
+ * reply** reaches JavaScript. A `seekTo()` or `play()` Promise issued during an
+ * unresolved play-time load can therefore stay pending for up to this long.
+ * Nothing is lost (the replies arrive as soon as the hold ends) and nothing can
+ * hang forever (the budget is the bound), but the latency is real. Resolve-ahead
+ * exists to keep this path cold: with the current and next entries answered as
+ * the queue moves, a play-time miss should be the exception, and an app that
+ * cannot tolerate the stall at all can set the budget to `0` and rely on the
+ * pre-warmed cache alone.
  */
 export const DEFAULT_RESOLVER_TIMEOUT_MS = 10_000
 
@@ -188,7 +200,10 @@ export class SourceResolverController {
     this.#resolver = resolver
     try {
       if (previous !== undefined) this.#client.clearResolvedSources()
-      // Idempotent, and the first call is what registers the hooks with mpv.
+      // Idempotent, and it registers nothing: the hooks went in at
+      // `initialize()` and cannot be removed (mpv has no unregister call). This
+      // only stores the hold budget and flips the handler from pass-through to
+      // resolving — see the doc block at the top of this file.
       this.#client.installSourceResolver(this.#options.timeoutMs)
     } catch (thrown) {
       // Roll back, so a rejected install leaves no half-armed resolver behind

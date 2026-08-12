@@ -47,11 +47,19 @@ function moveCursor(index: number, count: number): void {
   ])
 }
 
-/** Let every queued microtask (i.e. every resolver promise) settle. */
+/**
+ * Let every queued microtask (i.e. every resolver promise) settle.
+ *
+ * Deliberately generous: resolve-ahead is itself dispatched from a
+ * `queueMicrotask` (so its playlist reads never land in the same JS turn as the
+ * event batch's reducer), and each resolver adds a couple of promise hops on
+ * top of that. Draining a fixed handful of turns keeps the tests honest about
+ * ordering without making them count hops.
+ */
 async function settle(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let turn = 0; turn < 8; turn += 1) {
+    await Promise.resolve()
+  }
 }
 
 beforeEach(() => {
@@ -233,6 +241,30 @@ describe('resolve-ahead', () => {
 
     // mpv's own `mp_next_file` consults `--loop-playlist`, so entry 0 really is
     // what comes next here.
+    expect(client.resolvedSources.get('library://a')).toBe('library://a?sig')
+    player.destroy()
+  })
+
+  it('reads no playlist entry during the event-batch turn', async () => {
+    // Regression: resolve-ahead used to run inline from `#handleBatch`, adding
+    // two blocking `playlist/N/filename` reads to the same JS turn as the
+    // reducer and the state fan-out — at a track boundary, which is the moment
+    // mpv's core is least able to answer one. It is a microtask now.
+    const player = await createPlayer()
+    player.setSourceResolver((request) => `${request.uri}?sig`)
+    seedPlaylist(['library://a', 'library://b'])
+    const reads = vi.spyOn(client, 'getPropertyString')
+
+    moveCursor(0, 2)
+    // Synchronously after the batch: nothing has asked mpv for a filename.
+    expect(
+      reads.mock.calls.filter(([name]) => name.startsWith('playlist/'))
+    ).toEqual([])
+
+    await settle()
+    expect(
+      reads.mock.calls.filter(([name]) => name.startsWith('playlist/')).length
+    ).toBe(2)
     expect(client.resolvedSources.get('library://a')).toBe('library://a?sig')
     player.destroy()
   })

@@ -1286,13 +1286,9 @@ describe('Player — prefetch and cache options', () => {
 })
 
 describe('Player — metadata', () => {
-  /** Seed the fake with mpv's documented `metadata/list/…` sub-properties. */
+  /** Seed the fake with the tag map mpv answers a `metadata` node read with. */
   function seedMetadata(entries: ReadonlyArray<readonly [string, string]>) {
-    client.readable.set(MpvProperty.metadataCount, entries.length)
-    entries.forEach(([key, value], index) => {
-      client.readable.set(`metadata/list/${index}/key`, key)
-      client.readable.set(`metadata/list/${index}/value`, value)
-    })
+    client.readableMaps.set(MpvProperty.metadata, Object.fromEntries(entries))
   }
 
   it('observes `metadata` as a string change-edge', async () => {
@@ -1302,23 +1298,26 @@ describe('Player — metadata', () => {
     expect(client.observations.get(MpvProperty.metadata)).toBe('string')
   })
 
-  it('builds the map from metadata/list, never from the map property', async () => {
+  it('builds the whole map from ONE node read', async () => {
     const player = await createPlayer()
     seedMetadata([
       ['title', 'Windowlicker'],
       ['artist', 'Aphex Twin'],
       ['icy-title', 'Aphex Twin - Windowlicker'],
     ])
-    const spy = vi.spyOn(client, 'getPropertyString')
+    const strings = vi.spyOn(client, 'getPropertyString')
+    const numbers = vi.spyOn(client, 'getPropertyNumber')
 
     expect(player.getMetadata()).toEqual({
       'title': 'Windowlicker',
       'artist': 'Aphex Twin',
       'icy-title': 'Aphex Twin - Windowlicker',
     })
-    expect(spy.mock.calls.map(([name]) => name)).not.toContain(
-      MpvProperty.metadata
-    )
+    // The point of the whole change: three tags, one blocking round-trip into
+    // mpv's core — not `2N + 1` of them, and none as a string.
+    expect(client.mapReads).toEqual([MpvProperty.metadata])
+    expect(strings).not.toHaveBeenCalled()
+    expect(numbers).not.toHaveBeenCalled()
   })
 
   it('returns an empty map when nothing is loaded', async () => {
@@ -1328,34 +1327,10 @@ describe('Player — metadata', () => {
     expect(player.getMetadata()).toEqual({})
   })
 
-  it.each([0, -1, Number.NaN])(
-    'returns an empty map for a count of %s',
-    async (count) => {
-      const player = await createPlayer()
-      client.readable.set(MpvProperty.metadataCount, count)
-      expect(player.getMetadata()).toEqual({})
-    }
-  )
-
-  it('skips entries whose key vanished mid-walk', async () => {
+  it('returns an empty map for an entry with no tags', async () => {
     const player = await createPlayer()
-    seedMetadata([
-      ['title', 'A'],
-      ['artist', 'B'],
-    ])
-    // The walk is not atomic; a key that is gone answers PROPERTY_NOT_FOUND.
-    client.readErrors.set(
-      'metadata/list/1/key',
-      '[mpv:-8] mpv_get_property("metadata/list/1/key", STRING): property not found'
-    )
-    expect(player.getMetadata()).toEqual({ title: 'A' })
-  })
-
-  it('treats a missing value as an empty string, not a missing key', async () => {
-    const player = await createPlayer()
-    client.readable.set(MpvProperty.metadataCount, 1)
-    client.readable.set('metadata/list/0/key', 'comment')
-    expect(player.getMetadata()).toEqual({ comment: '' })
+    seedMetadata([])
+    expect(player.getMetadata()).toEqual({})
   })
 
   it('reads a single tag through metadata/by-key', async () => {
@@ -1418,12 +1393,9 @@ describe('Player — metadata', () => {
 
   it('reads nothing while nobody is listening', async () => {
     await createPlayer()
-    const numbers = vi.spyOn(client, 'getPropertyNumber')
     const strings = vi.spyOn(client, 'getPropertyString')
     client.emit([propertyEvent(MpvProperty.metadata, '{"title":"A"}')])
-    expect(numbers.mock.calls.map(([name]) => name)).not.toContain(
-      MpvProperty.metadataCount
-    )
+    expect(client.mapReads).toEqual([])
     expect(strings).not.toHaveBeenCalled()
   })
 
@@ -1432,8 +1404,8 @@ describe('Player — metadata', () => {
     const changed = vi.fn()
     player.on('metadataChanged', changed)
     client.readErrors.set(
-      MpvProperty.metadataCount,
-      '[mpv:-9] mpv_get_property("metadata/list/count", INT64): property format error'
+      MpvProperty.metadata,
+      '[mpv:-9] mpv_get_property("metadata", NODE): property format error'
     )
     expect(() =>
       client.emit([propertyEvent(MpvProperty.mediaTitle, 'x')])

@@ -739,6 +739,86 @@ describe('reducer — scalar properties', () => {
     expect(state.bufferedPosition).toBeUndefined()
   })
 
+  describe('buffer clock quantisation', () => {
+    /** A state that is buffered to 42.5 s of a 180 s entry. */
+    function buffered(): PlayerState {
+      return run(createInitialState(T0), [
+        propertyEvent(MpvProperty.duration, 180),
+        propertyEvent(MpvProperty.seekable, true),
+        propertyEvent(MpvProperty.demuxerCacheTime, 42.5),
+      ])
+    }
+
+    it('ignores sub-second movement', () => {
+      const state = buffered()
+      // mpv republishes this at ~4-6 Hz forever; each accepted value is a new
+      // state object and a full listener fan-out.
+      for (const value of [42.6, 42.9, 43.4, 42.0]) {
+        expect(
+          run(state, [propertyEvent(MpvProperty.demuxerCacheTime, value)])
+        ).toBe(state)
+      }
+    })
+
+    it('publishes once the value moved a whole second', () => {
+      const state = buffered()
+      const next = run(state, [
+        propertyEvent(MpvProperty.demuxerCacheTime, 43.5),
+      ])
+      expect(next).not.toBe(state)
+      // Unrounded: what is quantised is how often it changes, not its value.
+      expect(next.bufferedPosition).toBe(43.5)
+    })
+
+    it('publishes a backwards jump of a whole second (a seek reset the cache)', () => {
+      const next = run(buffered(), [
+        propertyEvent(MpvProperty.demuxerCacheTime, 10),
+      ])
+      expect(next.bufferedPosition).toBe(10)
+    })
+
+    it('always publishes the moment the buffer reaches the duration', () => {
+      const state = run(buffered(), [
+        propertyEvent(MpvProperty.demuxerCacheTime, 179.6),
+      ])
+      expect(state.bufferedPosition).toBe(179.6)
+
+      // Only 0.4 s more, but it is the end of a finite entry: "fully buffered"
+      // is a state, and nothing further will ever arrive to report it.
+      const next = run(state, [
+        propertyEvent(MpvProperty.demuxerCacheTime, 180),
+      ])
+      expect(next.bufferedPosition).toBe(180)
+    })
+
+    it('does not special-case the end for a live entry', () => {
+      // No duration (mpv's is a cache length on an unseekable stream, which the
+      // reducer suppresses), so only the one-second rule applies.
+      const state = run(createInitialState(T0), [
+        propertyEvent(MpvProperty.idleActive, false),
+        propertyEvent(MpvProperty.seekable, false),
+        propertyEvent(MpvProperty.duration, 30),
+        propertyEvent(MpvProperty.demuxerCacheTime, 12),
+      ])
+      expect(state.isLive).toBe(true)
+      expect(
+        run(state, [propertyEvent(MpvProperty.demuxerCacheTime, 30)])
+      ).not.toBe(state)
+      expect(
+        run(state, [propertyEvent(MpvProperty.demuxerCacheTime, 12.5)])
+      ).toBe(state)
+    })
+
+    it('adopts the first value of an entry whatever it is', () => {
+      // After a track change `bufferedPosition` is dropped, so there is no
+      // previous value to compare against and the entry must not start blind.
+      const state = run(createInitialState(T0), [
+        propertyEvent(MpvProperty.demuxerCacheTime, 0.25),
+      ])
+      expect(state.bufferedPosition).toBe(0.25)
+    })
+  })
+
   it('drops duration when mpv reports it unavailable', () => {
     let state = run(createInitialState(T0), [
       propertyEvent(MpvProperty.duration, 12),

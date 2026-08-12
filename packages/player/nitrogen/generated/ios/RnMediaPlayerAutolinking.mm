@@ -11,6 +11,7 @@
 #import <type_traits>
 
 #include "HybridMpvClient.hpp"
+#include "HybridRnMediaScreenState.hpp"
 
 @interface RnMediaPlayerAutolinking : NSObject
 @end
@@ -28,6 +29,15 @@
                     "The HybridObject \"HybridMpvClient\" is not default-constructible! "
                     "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
       return std::make_shared<HybridMpvClient>();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "RnMediaScreenState",
+    []() -> std::shared_ptr<HybridObject> {
+      static_assert(std::is_default_constructible_v<HybridRnMediaScreenState>,
+                    "The HybridObject \"HybridRnMediaScreenState\" is not default-constructible! "
+                    "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
+      return std::make_shared<HybridRnMediaScreenState>();
     }
   );
 }

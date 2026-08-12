@@ -270,6 +270,31 @@ export interface MpvClient
   getPropertyNumber(name: string): number | undefined
   /** Read a property as a flag. `undefined` if currently unavailable. */
   getPropertyBool(name: string): boolean | undefined
+  /**
+   * Read a property whose value is a map of strings — one `MPV_FORMAT_NODE`
+   * read, not a walk.
+   *
+   * `undefined` when the property is currently unavailable *or* is not a map;
+   * the two are indistinguishable to a caller and mean the same thing ("no map
+   * to give you"), so they are not distinguished.
+   *
+   * Members that are not strings are skipped rather than coerced. The one
+   * property this exists for — `metadata` — is documented as a map of strings,
+   * and inventing a rendering for an int or a byte array would be a guess
+   * baked into a typed API.
+   *
+   * @remarks
+   * This is the reason it exists: `metadata` used to be assembled from
+   * `metadata/list/count` + `metadata/list/N/key` + `metadata/list/N/value`,
+   * i.e. **`2N + 1` blocking round-trips** into mpv's core, issued from inside
+   * the event-batch handler at a track boundary — the exact instant mpv's core
+   * is least able to answer (it is joining an opener thread). A 20-tag FLAC
+   * cost 41 of them. mpv's own header warns that a synchronous read "[has] to
+   * wait until the playback core is ready, which currently can take an
+   * unbounded time" (`mpv/client.h`), so the fix is to make the number of them
+   * small and constant, not to make each one faster.
+   */
+  getPropertyMap(name: string): Record<string, string> | undefined
 
   /** Set a property from a string. Throws on mpv error. */
   setPropertyString(name: string, value: string): void

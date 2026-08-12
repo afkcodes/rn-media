@@ -18,6 +18,16 @@
         "language": "c++",
         "implementationClassName": "HybridMpvClient"
       }
+    },
+    "RnMediaScreenState": {
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridRnMediaScreenState"
+      },
+      "ios": {
+        "language": "c++",
+        "implementationClassName": "HybridRnMediaScreenState"
+      }
     }
   },
   "ignorePaths": [

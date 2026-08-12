@@ -455,6 +455,29 @@ TEST(PcmTap, resumes_after_a_stall_when_the_sequence_advances_again) {
   CHECK(peak > 0.5F);
 }
 
+TEST(PcmTap, destroying_a_stopped_tap_releases_it_without_disarming_twice) {
+  // This is exactly what `HybridMpvClient::stopVisualizer()` does now — stop,
+  // then free — so that the FFT tables, the window and the sampler's scratch
+  // buffers (~75 KB at the default transform, ~600 KB at the ceiling) do not
+  // outlive the last subscriber. The tap must therefore survive being destroyed
+  // straight after `stop()`, and must not disarm mpv a second time on the way
+  // out.
+  FakeSource source;
+  FrameSink sink;
+  {
+    rnmedia::PcmTap tap(source.source(), sink.deliver());
+    sink.bind(&tap);
+    source.setPcm(interleavedSine(512, 1, 8, 0.5F), 1, 44100);
+    tap.start(512, 60, false);
+    CHECK(sink.wait(1));
+    tap.stop();
+  }
+  const auto configured = source.configured();
+  CHECK_EQ(configured.size(), std::size_t{2});
+  CHECK_EQ(configured[0], 512);
+  CHECK_EQ(configured[1], 0);
+}
+
 TEST(PcmTap, destructor_stops_the_sampler_thread) {
   FakeSource source;
   FrameSink sink;

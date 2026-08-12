@@ -73,6 +73,7 @@ namespace margelo::nitro::rnmediaplayer {
       virtual std::optional<std::string> getPropertyString(const std::string& name) = 0;
       virtual std::optional<double> getPropertyNumber(const std::string& name) = 0;
       virtual std::optional<bool> getPropertyBool(const std::string& name) = 0;
+      virtual std::optional<std::unordered_map<std::string, std::string>> getPropertyMap(const std::string& name) = 0;
       virtual void setPropertyString(const std::string& name, const std::string& value) = 0;
       virtual void setPropertyNumber(const std::string& name, double value) = 0;
       virtual void setPropertyBool(const std::string& name, bool value) = 0;

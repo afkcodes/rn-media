@@ -14,6 +14,10 @@
 
 export { createMpvClient } from './native-client'
 
+export { getScreenStateSource, setScreenStateSource } from './screen-state'
+export type { ScreenStateSource } from './screen-state'
+export type { RnMediaScreenState } from './specs/screen-state.nitro'
+
 export type {
   MpvClient,
   MpvEndFileReason,
@@ -121,6 +125,7 @@ export type {
 } from './source-resolver'
 
 export {
+  BUFFERED_POSITION_STEP,
   createInitialState,
   isPositionDiscontinuity,
   projectPosition,

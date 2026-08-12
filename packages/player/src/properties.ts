@@ -57,9 +57,9 @@ export const MpvProperty = {
    *
    * Observed purely as a *change edge*: mpv's `input.rst` (0.35.1) says of this
    * property "Trying to retrieve this property as a raw string doesn't work",
-   * so the delivered string is never interpreted. The typed map is rebuilt from
-   * the documented `metadata/list/…` sub-properties instead — see
-   * {@link metadataKeyProperty}.
+   * so the delivered string is never interpreted. The typed map comes from one
+   * `MPV_FORMAT_NODE` read of this same property (`MpvClient.getPropertyMap`),
+   * which is the format the manual says to use.
    */
   metadata: 'metadata',
   /**
@@ -163,8 +163,13 @@ export const MpvProperty = {
  *
  * mpv 0.35.1 `input.rst`: "``metadata/list/N/key`` — Key name of the Nth
  * metadata entry. (The first entry is ``0``)." It is a plain string
- * sub-property (`player/command.c`, `get_tag_entry` → `SUB_PROP_STR`), which is
- * what makes the whole tag map reachable without `MPV_FORMAT_NODE`.
+ * sub-property (`player/command.c`, `get_tag_entry` → `SUB_PROP_STR`), which
+ * makes the tag map reachable one scalar at a time.
+ *
+ * {@link Player.getMetadata} no longer walks these — it does one node read of
+ * `metadata` instead, because `2N + 1` blocking reads at a track boundary is a
+ * JS-thread stall. They stay public because a caller who wants exactly one
+ * entry by position still has no other way to ask.
  *
  * @param index - 0-based entry index, `< metadata/list/count`.
  */
