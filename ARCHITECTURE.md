@@ -1147,7 +1147,21 @@ and the Kotlin reader drift.
   mapping is unchanged. Kept as a retired entry because the API shape it
   produced is still in the public surface, and a reader who finds the current
   manual correct should not conclude the API is backwards.
-- **mpv's waf did not relink `libmpv.so` when ffmpeg's static libs changed** —
+- **`replaygain-fallback` applies even with `replaygain=no`** (task #43,
+  owner-reported: switching ReplayGain off did not restore the original
+  loudness). In mpv 0.41.0's `compute_replaygain()` (`player/audio.c:142-168`)
+  the fallback branch is the `else` of `if (opts->rgain_mode && rg)` — it runs
+  for an untagged file *and* whenever the mode is `no`, which the manual states
+  ("always applied if the replaygain logic is somehow inactive") but every
+  intuition misses. Measured on mpv 0.41.0 (`--ao=pcm` capture, tagged −10 dB
+  file): mode `track` → gain 0.316228 (−10 dB); mode set to `no` with a stale
+  `fallback=-6` → gain 0.501187 (−6.02 dB in the PCM), **not** unity; only
+  `fallback=0` returns the RMS to the baseline exactly. All four `replaygain*`
+  options carry `UPDATE_VOL` (`options/options.c:764-773`), so writes do apply
+  live via `audio_update_volume()` → `ao_set_gain()` — the deferred-to-next-file
+  theory is false; the trap is purely the mode-independent fallback. Turning
+  ReplayGain off for real is `{ mode: 'no', fallback: 0 }`; the example's
+  toggle and the `ReplayGainOptions.fallback` TSDoc both spell this out.
   a rebuilt `libavfilter.a` next to a stale `.so` looked like a successful build
   and silently shipped the old binary (`./build.sh --clean -n mpv` forced it).
   **Re-tested after the meson migration (mpv 0.41): it does NOT reproduce** —

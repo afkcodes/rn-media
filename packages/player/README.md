@@ -373,7 +373,11 @@ being silently clamped.
 > (default: no)." Leave `clip` alone unless you want the limiter gone.
 
 Files with no ReplayGain tags get `fallback` and nothing else — mpv applies it
-*instead of* the tag logic, not on top of it.
+*instead of* the tag logic, not on top of it. The same branch runs when `mode`
+is `'no'`: mpv's manual calls `replaygain-fallback` "always applied if the
+replaygain logic is somehow inactive", so `setReplayGain({ mode: 'no' })` does
+**not** silence a non-zero fallback written earlier — pass
+`{ mode: 'no', fallback: 0 }` to return to unity gain.
 
 ### Gapless transitions
 

@@ -14,6 +14,13 @@
  * branch *instead of* the tag branch. This app passes `fallback: -6` dB, which
  * is why switching modes is audible on the untagged demo entries too.
  *
+ * The fallback branch is also what `no` lands in: mpv applies
+ * `replaygain-fallback` whenever the tag branch is inactive, *including*
+ * `replaygain=no` ("always applied if the replaygain logic is somehow
+ * inactive" — mpv 0.41.0 `options.rst`). That is why `output.ts` writes
+ * `fallback: 0` together with `mode: 'no'` — leaving the −6 dB in place would
+ * keep every track quieter than before ReplayGain was ever touched.
+ *
  * All four mpv options behind this carry `UPDATE_VOL`, so the change lands on
  * the track that is already playing: no reload, no gap.
  */
@@ -50,10 +57,11 @@ export const ReplayGainToggle = React.memo(function ReplayGainToggle({
         ))}
       </ChipRow>
       <Detail>
-        Applied live — no reload. Untagged files fall back to −6 dB; tagged ones
-        use their own gain. Clipping prevention stays on (mpv's `replaygain-clip`
-        defaults to off, and the polarity in mpv 0.35's manual is stale — the
-        library's TSDoc has the receipts).
+        Applied live — no reload. Track/Album give untagged files a −6 dB
+        fallback; Off zeroes that fallback too (mpv applies it even with
+        `replaygain=no`), so Off really is unity gain. Clipping prevention stays
+        on (mpv's `replaygain-clip` defaults to off, and the polarity in mpv
+        0.35's manual is stale — the library's TSDoc has the receipts).
       </Detail>
     </Section>
   )

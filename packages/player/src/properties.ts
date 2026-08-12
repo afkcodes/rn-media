@@ -141,8 +141,12 @@ export const MpvProperty = {
   replayGainClip: 'replaygain-clip',
   /**
    * `replaygain-fallback` — "Gain in dB to apply if the file has no replay gain
-   * tags" (`options.rst`). mpv clamps it to `M_RANGE(-200, 60)`
-   * (`options/options.c`). Runtime-settable (`UPDATE_VOL`).
+   * tags. This option is always applied if the replaygain logic is somehow
+   * inactive" (mpv 0.41.0 `options.rst`) — *"somehow inactive" includes
+   * `replaygain=no`: the fallback branch is the `else` of the mode check in
+   * `compute_replaygain()` (`player/audio.c`), so a non-zero fallback keeps
+   * applying after the mode is switched off. mpv clamps it to
+   * `M_RANGE(-200, 60)` (`options/options.c`). Runtime-settable (`UPDATE_VOL`).
    */
   replayGainFallback: 'replaygain-fallback',
   /**

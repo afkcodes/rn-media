@@ -5,7 +5,7 @@
     "build": "npm --prefix packages/player run build && npm --prefix packages/audio-session run build && npm --prefix packages/media-session run build",
     "codegen": "npm --prefix packages/player run codegen",
     "typecheck": "npm --prefix packages/player run typecheck && npm --prefix packages/audio-session run typecheck && npm --prefix packages/media-session run typecheck",
-    "test": "npm --prefix packages/player run test",
+    "test": "npm --prefix packages/player run test && npm --prefix apps/example run test",
     "lint": "npm --prefix apps/example run lint",
     "release": "npm --prefix packages/player run release",
     "check:upstream": "node scripts/check-upstream.mjs"
