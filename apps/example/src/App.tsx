@@ -63,6 +63,7 @@ import { sameShell, selectShell } from './playback/shell'
 import { formatTime } from './components/SeekBar'
 import { ErrorBanner } from './components/ErrorBanner'
 import { EqualizerSection } from './components/EqualizerSection'
+import { LoudnessSection } from './components/LoudnessSection'
 import { NowPlaying } from './components/NowPlaying'
 import { OutputControls } from './components/OutputControls'
 import { PersistenceNote } from './components/PersistenceNote'
@@ -163,8 +164,10 @@ function App(): React.JSX.Element {
           onDismiss={() => playback.dismissError()}
         />
 
+        {/* The banner's state IS the library's `usePrefetchStatus` hook — the
+            app wires no events and keeps no note. See the component header. */}
         <PrefetchBanner
-          note={playback.prefetch}
+          player={player}
           enabled={playback.prefetchEnabled}
           ready={ready}
           onToggle={(enabled) => playback.setPrefetchEnabled(enabled)}
@@ -213,6 +216,10 @@ function App(): React.JSX.Element {
           ready={ready}
           onChange={(mode) => playback.setReplayGain(mode)}
         />
+
+        {/* Deliberately adjacent to ReplayGain: both level loudness, and the
+            section copy says why an app should ship one of them, not both. */}
+        <LoudnessSection player={player} />
 
         <EqualizerSection player={player} />
 

@@ -10,7 +10,7 @@ import { toPlayerEvents } from './events'
 import type { CommonMetadata } from './common-metadata'
 import { toCommonMetadata } from './common-metadata'
 import type { AudioFilter } from './filters'
-import { compileAudioFilters } from './filters'
+import { AudioFilters, compileAudioFilters } from './filters'
 import type { HttpHeaders } from './headers'
 import { HTTP_HEADER_FIELDS_OPTION, compileHttpHeaderFields } from './headers'
 import { createMpvClient } from './native-client'
@@ -98,6 +98,15 @@ export type ReplayGainMode = 'no' | 'track' | 'album'
  * {@link fallback} also applies when {@link mode} is `'no'` — the manual's
  * "always applied if the replaygain logic is somehow inactive". Turning
  * ReplayGain off for real means `{ mode: 'no', fallback: 0 }`.
+ *
+ * **Pick this *or* {@link Player.setLoudnessNormalization}, not both.** They
+ * level loudness by different means — ReplayGain is a per-track volume-domain
+ * gain read from tags (zero DSP, dynamics untouched); loudness normalization
+ * is a live `loudnorm` filter (dynamic gain ride, 192 kHz resample, 3 s
+ * lookahead). Run together their gains *stack*: a track ReplayGain already
+ * leveled gets re-leveled — and re-compressed — by loudnorm. When files carry
+ * tags, ReplayGain is the better tool; loudness normalization exists for the
+ * files that don't. (See that method's TSDoc for the full cost sheet.)
  */
 export interface ReplayGainOptions {
   /** Which tag set to use. `'no'` disables tag-based adjustment entirely. */
@@ -1577,6 +1586,106 @@ const AUDIO_CHANNEL_MODES: readonly AudioChannelMode[] = [
 export const DEFAULT_RESTART_THRESHOLD_SECONDS = 3
 
 /**
+ * Options for {@link Player.setLoudnessNormalization}.
+ *
+ * Every field is optional; an omitted field falls back to the default named on
+ * it. The names and units are ffmpeg `loudnorm`'s own (verified against the
+ * FFmpeg 8.1.2 tree our binaries are built from — `libavfilter/af_loudnorm.c`
+ * and `doc/filters.texi`), so a value copied from any loudnorm reference means
+ * the same thing here.
+ */
+export interface LoudnessNormalizationOptions {
+  /**
+   * Integrated loudness target in LUFS (`loudnorm`'s `I`), `-70 … -5`.
+   *
+   * Defaults to {@link DEFAULT_LOUDNESS_TARGET_LUFS} (−16 LUFS) — **not**
+   * ffmpeg's own −24, which is a broadcast-derived number. −16 LUFS is AES
+   * TD1008.1.21-9's recommendation for track-normalized music on streaming
+   * services ("Recommendations for Loudness of Internet Audio Streaming and
+   * On-Demand Distribution", Table 1: track-normalized music −16 LUFS; Table 2:
+   * pop-music streams −16 LUFS, news/talk −18). On phone hardware −24 leaves
+   * music so quiet that users max the volume and blame the app.
+   */
+  readonly targetLufs?: number
+  /**
+   * Loudness range target in LU (`LRA`), `1 … 50`. Defaults to ffmpeg's `7`
+   * (`af_loudnorm.c:109`).
+   *
+   * In the one-pass dynamic mode this API runs in, this is a *shaping hint*
+   * for how hard the gain ride may compress loudness variation, not a
+   * guarantee of the output's measured LRA.
+   */
+  readonly loudnessRange?: number
+  /**
+   * Maximum true peak in dBTP (`TP`), `-9 … 0`. Defaults to ffmpeg's `-2`
+   * (`af_loudnorm.c:111`) — 1 dB more conservative than the −1 dBTP ceiling
+   * AES TD1008 asks of streams at the codec input, which buys headroom against
+   * lossy-decoder overshoot for free (the ceiling only matters when the
+   * limiter is already engaging).
+   */
+  readonly truePeakDb?: number
+  /**
+   * Treat a mono file as dual-mono (`dual_mono`). Defaults to ffmpeg's
+   * `false`. Set it when mono content is played on stereo outputs and sounds
+   * ~3 dB too loud after normalization — that offset is exactly what this
+   * compensates (ffmpeg `doc/filters.texi`, loudnorm `dual_mono`).
+   */
+  readonly dualMono?: boolean
+}
+
+/**
+ * Default integrated-loudness target of {@link Player.setLoudnessNormalization},
+ * in LUFS. See {@link LoudnessNormalizationOptions.targetLufs} for why −16 and
+ * not ffmpeg's −24.
+ */
+export const DEFAULT_LOUDNESS_TARGET_LUFS = -16
+
+/**
+ * The mpv filter label of the managed loudness-normalization entry.
+ *
+ * {@link Player.setLoudnessNormalization} owns exactly one `af` entry, and this
+ * label is how it is recognisable — in {@link Player.getAudioFilters}
+ * read-backs (`@rnmedia_loudnorm:loudnorm=…`) and in mpv's own logs. The label
+ * is reserved: {@link Player.setAudioFilters} rejects user entries carrying it,
+ * because two owners of one label would silently overwrite each other.
+ */
+export const LOUDNESS_NORMALIZATION_LABEL = 'rnmedia_loudnorm'
+
+/**
+ * Resolve {@link LoudnessNormalizationOptions} into the managed, labelled
+ * `loudnorm` entry plus the frozen options {@link Player.getLoudnessNormalization}
+ * reports. Range validation is delegated to `AudioFilters.loudnorm`, the one
+ * place that owns ffmpeg's documented bounds.
+ */
+function buildLoudnessNormalization(options: LoudnessNormalizationOptions): {
+  readonly filter: AudioFilter
+  readonly options: Readonly<LoudnessNormalizationOptions>
+} {
+  const resolved: LoudnessNormalizationOptions = Object.freeze({
+    targetLufs: options.targetLufs ?? DEFAULT_LOUDNESS_TARGET_LUFS,
+    ...(options.loudnessRange !== undefined && {
+      loudnessRange: options.loudnessRange,
+    }),
+    ...(options.truePeakDb !== undefined && { truePeakDb: options.truePeakDb }),
+    ...(options.dualMono !== undefined && { dualMono: options.dualMono }),
+  })
+  const filter = AudioFilters.loudnorm({
+    integrated: resolved.targetLufs,
+    ...(resolved.loudnessRange !== undefined && {
+      loudnessRange: resolved.loudnessRange,
+    }),
+    ...(resolved.truePeakDb !== undefined && {
+      truePeak: resolved.truePeakDb,
+    }),
+    ...(resolved.dualMono !== undefined && { dualMono: resolved.dualMono }),
+  })
+  return {
+    filter: { ...filter, label: LOUDNESS_NORMALIZATION_LABEL },
+    options: resolved,
+  }
+}
+
+/**
  * An argument this library rejects before it can reach mpv.
  *
  * `invalid-state` is the taxonomy's slot for "this call cannot be honoured as
@@ -2114,6 +2223,27 @@ export class Player {
          * a `live` generation.
          */
         readonly restartedAt?: number
+      }
+    | undefined
+
+  /**
+   * The chain the app last set through {@link setAudioFilters} — the "user
+   * half" of the `af` property. Kept so the managed loudness-normalization
+   * entry can be added or removed without clobbering it (and vice versa).
+   * Committed only *after* the property write succeeded, so a chain mpv
+   * rejected never poisons the bookkeeping.
+   */
+  #userAudioFilters: readonly AudioFilter[] = []
+  /**
+   * The managed loudness-normalization entry, when enabled: the compiled
+   * filter (labelled {@link LOUDNESS_NORMALIZATION_LABEL}) plus the resolved
+   * options {@link getLoudnessNormalization} reports. Same commit-after-write
+   * rule as `#userAudioFilters`.
+   */
+  #loudnessNormalization:
+    | {
+        readonly filter: AudioFilter
+        readonly options: Readonly<LoudnessNormalizationOptions>
       }
     | undefined
 
@@ -3078,6 +3208,16 @@ export class Player {
    * chain also survives track changes — `af` is a global option, not a
    * per-entry one.
    *
+   * **Coexists with {@link setLoudnessNormalization}, by construction.** This
+   * method owns the *user half* of the chain; the loudness-normalization
+   * toggle owns exactly one managed, labelled entry appended after it. Setting
+   * filters here never turns normalization off, and toggling normalization
+   * never touches the chain set here. (The raw
+   * `setPropertyString('af', …)` escape hatch bypasses both halves' bookkeeping
+   * — after using it, the next call to either method rewrites the property
+   * from that bookkeeping, exactly as documented on
+   * {@link setLoudnessNormalization}.)
+   *
    * @example
    * ```ts
    * import { AudioFilters } from '@rn-media/player'
@@ -3091,18 +3231,165 @@ export class Player {
    */
   setAudioFilters(filters: readonly AudioFilter[]): void {
     this.#assertAlive('setAudioFilters')
-    this.#setString(MpvProperty.audioFilters, compileAudioFilters(filters))
+    for (const filter of filters) {
+      if (filter.label === LOUDNESS_NORMALIZATION_LABEL) {
+        throw invalidArgument(
+          `The filter label '${LOUDNESS_NORMALIZATION_LABEL}' is reserved for \`setLoudnessNormalization\`; ` +
+            'a user entry carrying it would fight the managed one for the same mpv label. ' +
+            'Pick any other label, or use `setLoudnessNormalization` itself.'
+        )
+      }
+    }
+    this.#setString(
+      MpvProperty.audioFilters,
+      compileAudioFilters(
+        this.#composeAudioFilters(filters, this.#loudnessNormalization?.filter)
+      )
+    )
+    // After the write: a chain mpv rejected must not become the remembered
+    // "user half" that the next normalization toggle re-applies.
+    this.#userAudioFilters = [...filters]
   }
 
   /**
-   * Remove every audio filter.
+   * Remove every filter set through {@link setAudioFilters}.
    *
    * Equivalent to `setAudioFilters([])`; spelled out because "set the empty
-   * string" is not an obvious way to say it.
+   * array" is not an obvious way to say it. The managed
+   * loudness-normalization entry is **not** a filter you set, so it survives —
+   * turn it off with `setLoudnessNormalization(false)`.
    */
   clearAudioFilters(): void {
-    this.#assertAlive('clearAudioFilters')
-    this.#setString(MpvProperty.audioFilters, '')
+    this.setAudioFilters([])
+  }
+
+  /**
+   * Turn EBU R128 loudness normalization on or off — ffmpeg's `loudnorm`,
+   * managed as one labelled entry of the `af` chain.
+   *
+   * This is the "make everything the same loudness" switch for content that
+   * carries no ReplayGain tags: podcasts mixed at wildly different levels, a
+   * queue mixing loud modern masters with quiet archival ones. One call, no
+   * chain bookkeeping — it composes with whatever {@link setAudioFilters} has
+   * set (the managed entry sits at the tail, so it normalizes the signal your
+   * EQ actually produced, and its built-in true-peak limiter guards the whole
+   * chain's output).
+   *
+   * @param enabled - `true` inserts or replaces the managed entry; `false`
+   * removes it and only it.
+   * @param options - See {@link LoudnessNormalizationOptions}. Meaningful only
+   * with `enabled: true`; ignored (deliberately, not silently — this sentence
+   * is the notice) when disabling.
+   * @throws {@link PlayerErrorException} with code `invalid-state` when an
+   * option is outside ffmpeg's documented range, and with code `mpv`
+   * (`errno: -11`) when the linked libmpv lacks the filter — the same
+   * availability probe as {@link setAudioFilters}, and the same parity note:
+   * both platforms' pinned binaries compile `loudnorm` in.
+   *
+   * @remarks
+   * **What one-pass loudnorm honestly is.** `loudnorm` has a linear mode (one
+   * fixed gain for the whole file) and a dynamic mode (a gain that rides the
+   * signal). The linear mode is *unreachable live*: ffmpeg enters it only when
+   * all four `measured_*` values from a prior analysis pass are supplied
+   * (FFmpeg 8.1.2 `af_loudnorm.c:820-825` — the gate requires `measured_tp`,
+   * `measured_thresh`, `measured_lra` and `measured_i` all non-default), and a
+   * live player cannot measure a file it has not finished playing. So this API
+   * is always ffmpeg's **dynamic** mode, and that has real costs:
+   *
+   * - **It is a dynamics processor.** The gain is recomputed per 100 ms
+   *   block from short-term loudness and smoothed with a 21-tap Gaussian
+   *   (≈2 s window, `af_loudnorm.c:139-159,505`), with a built-in true-peak
+   *   limiter (10 ms attack / 100 ms release, `af_loudnorm.c:799-800`)
+   *   catching what the ride pushes at the ceiling. Macro-dynamics — the
+   *   difference between a verse and a chorus, a whisper and a shout — are
+   *   genuinely compressed. On well-mastered music that is a loss; this
+   *   switch is for material whose levels are wrong, not a mastering upgrade.
+   * - **It resamples the whole chain to 192 kHz.** In dynamic mode the filter
+   *   advertises exactly one input rate (`af_loudnorm.c:740,752`;
+   *   `doc/filters.texi`: "the audio stream will be upsampled to 192 kHz"),
+   *   so libavfilter converts up and back down around it. Measurable CPU and
+   *   battery cost — the most expensive single entry this library ships.
+   * - **It buffers 3 s of audio.** The dynamic mode's lookahead window
+   *   (`af_loudnorm.c:697,775`: the first frame it consumes is 3000 ms).
+   *   Position and A/V pts stay correct, but enabling it mid-track rebuilds
+   *   the chain and refills that window, so expect a short hiccup on toggle —
+   *   this is a settings switch, not a per-track one.
+   *
+   * If your files **do** carry ReplayGain tags, prefer
+   * {@link setReplayGain}: it levels loudness in mpv's volume domain from the
+   * tags — zero DSP, zero latency, zero resampling — and preserves dynamics
+   * completely. **Do not run both**: they solve the same problem and their
+   * gain changes stack, so a track leveled by ReplayGain gets re-leveled (and
+   * re-compressed) by loudnorm. Tagged library → ReplayGain; untagged /
+   * mixed-provenance streams → this. (The same advice is written on
+   * {@link ReplayGainOptions}, from the other side.)
+   *
+   * For loudness *smoothing* at native sample rate,
+   * `AudioFilters.dynamicNormalizer` (ffmpeg `dynaudnorm`) is the cheaper,
+   * less faithful cousin — it chases a peak/RMS window rather than an EBU
+   * R128 target. Reach for it through {@link setAudioFilters} when the 192 kHz
+   * cost is unacceptable; it is a different trade, not a hidden mode of this
+   * API.
+   *
+   * The managed entry is visible in {@link getAudioFilters} read-backs as
+   * `@rnmedia_loudnorm:loudnorm=…` ({@link LOUDNESS_NORMALIZATION_LABEL}), and
+   * `af` is a global option, so it survives track changes exactly like the
+   * user chain does.
+   *
+   * @example
+   * ```ts
+   * player.setLoudnessNormalization(true)                      // −16 LUFS
+   * player.setLoudnessNormalization(true, { targetLufs: -18 }) // spoken word
+   * player.setLoudnessNormalization(false)                     // off
+   * ```
+   */
+  setLoudnessNormalization(
+    enabled: boolean,
+    options: LoudnessNormalizationOptions = {}
+  ): void {
+    this.#assertAlive('setLoudnessNormalization')
+    const next = enabled ? buildLoudnessNormalization(options) : undefined
+    this.#setString(
+      MpvProperty.audioFilters,
+      compileAudioFilters(
+        this.#composeAudioFilters(this.#userAudioFilters, next?.filter)
+      )
+    )
+    // After the write, for the same reason as `setAudioFilters`.
+    this.#loudnessNormalization = next
+  }
+
+  /**
+   * The loudness normalization currently applied by
+   * {@link setLoudnessNormalization} — the resolved options (defaults filled
+   * in), or `undefined` when it is off.
+   *
+   * This is the toggle's own bookkeeping, not an mpv read — a raw `af` write
+   * through the escape hatch is invisible to it, exactly as documented there.
+   */
+  getLoudnessNormalization():
+    Readonly<LoudnessNormalizationOptions> | undefined {
+    this.#assertAlive('getLoudnessNormalization')
+    return this.#loudnessNormalization?.options
+  }
+
+  /**
+   * The full `af` chain: the user half first (signal-flow order is chain
+   * order), then the managed loudness-normalization entry, which must hear the
+   * user chain's output to normalize what is actually audible.
+   *
+   * `managed` is an explicit parameter, never defaulted from the field: both
+   * callers write the property *before* committing their half, so the value to
+   * compose with is "the half that is not changing" — which for
+   * `setLoudnessNormalization(false)` is honestly `undefined`, not the entry
+   * still sitting in the field. (A default parameter here was the first bug
+   * this method had.)
+   */
+  #composeAudioFilters(
+    userFilters: readonly AudioFilter[],
+    managed: AudioFilter | undefined
+  ): readonly AudioFilter[] {
+    return managed === undefined ? userFilters : [...userFilters, managed]
   }
 
   /**
@@ -3113,6 +3400,10 @@ export class Player {
    * set through {@link Player.setAudioFilters} this returns exactly the string
    * that was written. Useful as an assertion in tests and on-device checks, and
    * as the way to see a chain that was set through the raw escape hatch.
+   *
+   * With {@link setLoudnessNormalization} on, the string ends with the managed
+   * `@rnmedia_loudnorm:loudnorm=…` entry — it is a real chain member, and this
+   * read-back is honest about the whole property.
    *
    * @returns The `af` value; `''` when no filters are active.
    */

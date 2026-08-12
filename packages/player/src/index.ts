@@ -177,11 +177,13 @@ export type {
 
 export {
   DEFAULT_CACHE_SECS,
+  DEFAULT_LOUDNESS_TARGET_LUFS,
   DEFAULT_RECONNECT_DELAY_MAX_SECONDS,
   DEFAULT_RESTART_THRESHOLD_SECONDS,
   DEFAULT_RETRY_MAX_ATTEMPTS,
   DEFAULT_USER_AGENT,
   LIVE_EOF_BUDGET_RESET_SECONDS,
+  LOUDNESS_NORMALIZATION_LABEL,
   Player,
 } from './player'
 export type {
@@ -190,6 +192,7 @@ export type {
   GaplessAudioMode,
   LoadOptions,
   LoadPlaylistOptions,
+  LoudnessNormalizationOptions,
   Metadata,
   MpvClientFactory,
   NetworkReconnectOptions,
@@ -223,5 +226,11 @@ export { DEFAULT_PROGRESS_INTERVAL_MS, useProgress } from './hooks/useProgress'
 export type { Progress } from './hooks/useProgress'
 export { DEFAULT_MILESTONES, useMilestones } from './hooks/useMilestones'
 export type { Milestone } from './hooks/useMilestones'
+export { usePrefetchStatus } from './hooks/usePrefetchStatus'
+export type {
+  PrefetchActive,
+  PrefetchIdle,
+  PrefetchStatus,
+} from './hooks/usePrefetchStatus'
 export { useVisualizer } from './hooks/useVisualizer'
 export type { UseVisualizerResult } from './hooks/useVisualizer'
