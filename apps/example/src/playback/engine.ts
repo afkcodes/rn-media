@@ -6,7 +6,12 @@
  * that order, and the order matters (the subscription is live before the
  * playlist is loaded, so no early state is missed).
  */
-import { Player, type PlayerState, type Unsubscribe } from '@rn-media/player'
+import {
+  Player,
+  type PlayerError,
+  type PlayerState,
+  type Unsubscribe,
+} from '@rn-media/player'
 import {
   AudioSessionPresets,
   wireAudioSession,
@@ -21,6 +26,14 @@ export interface PrefetchNote {
   readonly at: number
 }
 
+/** What `retrying` last told us, for the banner. */
+export interface RetryNote {
+  readonly index: number
+  readonly attempt: number
+  readonly maxAttempts: number
+  readonly message: string
+}
+
 export interface EngineHooks {
   /** Every reduced snapshot, in order. */
   readonly onState: (state: PlayerState) => void
@@ -28,6 +41,18 @@ export interface EngineHooks {
   readonly onStation: (station: string | undefined) => void
   /** mpv began opening the next entry ahead of time. */
   readonly onPrefetch: (note: PrefetchNote) => void
+  /** The queue's contents changed — re-read them. */
+  readonly onQueueChanged: () => void
+  /**
+   * A retryable entry is being re-attempted, or (with `undefined`) is no longer
+   * being re-attempted.
+   */
+  readonly onRetrying: (note: RetryNote | undefined) => void
+  /**
+   * An entry failed for good — after `attempts` automatic re-attempts, which is
+   * `0` when nothing was retried.
+   */
+  readonly onFailed: (error: PlayerError, attempts: number) => void
 }
 
 export interface Engine {
@@ -48,6 +73,21 @@ export async function createEngine(
 ): Promise<Engine> {
   const player = await Player.create({
     volume: 0.8,
+    // Two recovery layers, and they answer different questions.
+    //
+    // `networkReconnect` is FFmpeg's own, wired through mpv's `stream-lavf-o`:
+    // native, inside libavformat's read loop, no JavaScript and no timers —
+    // which is the only kind of retry that still works with the screen off. It
+    // is on by default; it is named here only to widen the window a little,
+    // because every entry in this queue is a network source.
+    networkReconnect: { maxDelaySeconds: 8 },
+    // `retry` is the layer FFmpeg cannot be: it answers "should the queue move
+    // on?". mpv's own behaviour on a hard failure is to advance to the next
+    // entry, which is right for a file that will never play and wrong for a
+    // stream that was unlucky. There is deliberately no delay between attempts
+    // — a JS-timer backoff would freeze with the screen off, which is exactly
+    // when a radio app needs it. See `RetryOptions`.
+    retry: { maxAttempts: 2 },
     // Open the *next* entry while the current one finishes. On by default in
     // this app because every entry here is a network source, which is the case
     // the option exists for — and because `prefetchStarted` has nothing to
@@ -99,11 +139,45 @@ export async function createEngine(
 }
 
 function wireEvents(player: Player, hooks: EngineHooks): void {
-  player.on('error', (e) => console.warn(`[example] ${e.code}: ${e.message}`))
+  // `error` now means "gave up", not "failed": with `retry` on, an entry that
+  // failed and then played on the second attempt produces `retrying` and no
+  // error at all. `info.attempts` is how many re-attempts it cost.
+  player.on('error', (e, info) => {
+    hooks.onRetrying(undefined)
+    hooks.onFailed(e, info.attempts)
+    console.warn(
+      `[example] ${e.code}: ${e.message}` +
+        (info.attempts > 0 ? ` (after ${info.attempts} attempts)` : '') +
+        ` — retryable: ${e.retryable}`
+    )
+  })
+
+  // The re-attempt banner. Nothing else reports this: no `error` event fires
+  // while a retry is in flight, by design.
+  player.on('retrying', (e) => {
+    console.log(`[example] retrying #${e.index} ${e.attempt}/${e.maxAttempts}`)
+    hooks.onRetrying({
+      index: e.index,
+      attempt: e.attempt,
+      maxAttempts: e.maxAttempts,
+      message: e.error.message,
+    })
+  })
+
+  // The queue's *contents* moved. `reason` is honest about what the library
+  // actually knows: `'resized'` comes from the observed `playlist-count`,
+  // `'reordered'` is emitted by move/shuffle/unshuffle because a reorder
+  // changes no observable mpv property at all.
+  player.on('queueChanged', (e) => {
+    console.log(`[example] queue ${e.reason} → ${e.count} entries`)
+    hooks.onQueueChanged()
+  })
   player.on('trackEnded', (e) => console.log(`[example] ended #${e.index}`))
-  player.on('trackChanged', (e) =>
+  player.on('trackChanged', (e) => {
     console.log(`[example] track ${e.previousIndex} → ${e.index}`)
-  )
+    // An entry that changed is an entry that is no longer being re-attempted.
+    hooks.onRetrying(undefined)
+  })
 
   // Live-stream identity. `metadataChanged` is the *event* route to mpv's tag
   // map — it fires at most once per native batch, and only while something is

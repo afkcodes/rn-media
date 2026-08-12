@@ -56,6 +56,11 @@ describe('Player.create', () => {
       // `demuxer-max-bytes`; bounding it is what stops a paused radio stream
       // from downloading for hours. See DEFAULT_CACHE_SECS.
       'cache-secs': '30',
+      // FFmpeg's own HTTP reconnection, on by default. `reconnect_at_eof` is
+      // deliberately absent — see NetworkReconnectOptions for why enabling it
+      // would turn every clean end-of-file into a four-second retry storm.
+      'stream-lavf-o':
+        'reconnect=1,reconnect_on_network_error=1,reconnect_streamed=1,reconnect_delay_max=5',
     })
   })
 
@@ -79,6 +84,8 @@ describe('Player.create', () => {
       // The raw escape hatch beats both the typed option and our default.
       'cache-secs': '120',
       'user-agent': 'raw-wins/2.0',
+      'stream-lavf-o':
+        'reconnect=1,reconnect_on_network_error=1,reconnect_streamed=1,reconnect_delay_max=5',
     })
   })
 
@@ -1669,5 +1676,553 @@ describe('Player — visualizer wiring', () => {
     await player.load(URI)
     player.play()
     expect(client.visualizerCalls).toHaveLength(0)
+  })
+})
+
+describe('Player — queue contents (playlist.entries)', () => {
+  /** mpv's `playlist` node, as the fake will hand it back. */
+  function queue(
+    ...uris: readonly string[]
+  ): { readonly uri: string; readonly entryId: number; readonly current: boolean }[] {
+    return uris.map((uri, index) => ({
+      uri,
+      entryId: 100 + index,
+      current: index === 0,
+    }))
+  }
+
+  it('reads the whole queue in ONE native call, whatever its length', () => {
+    // The budget is the point: an `N + 1` walk of `playlist/N/filename` is what
+    // this replaced, and it was issued at track boundaries where mpv's core is
+    // least able to answer.
+    client.playlist = queue('a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3')
+    return createPlayer().then((player) => {
+      const entries = player.playlist.entries()
+      expect(entries).toHaveLength(5)
+      expect(client.playlistReads).toBe(1)
+      expect(entries[2]).toEqual({ uri: 'c.mp3', entryId: 102, current: false })
+    })
+  })
+
+  it('reports which entry is current', async () => {
+    client.playlist = [
+      { uri: 'a.mp3', entryId: 7, current: false },
+      { uri: 'b.mp3', entryId: 8, current: true },
+    ]
+    const player = await createPlayer()
+    expect(player.playlist.entries().map((e) => e.current)).toEqual([
+      false,
+      true,
+    ])
+  })
+
+  it('returns [] for an idle core rather than throwing', async () => {
+    const player = await createPlayer()
+    expect(player.playlist.entries()).toEqual([])
+  })
+
+  it('never observes the playlist node', async () => {
+    // It is a pull, not a feed: putting a variable-size array on the bridge on
+    // every queue edit is exactly what this design avoids.
+    await createPlayer()
+    expect(client.observations.has(MpvProperty.playlist)).toBe(false)
+  })
+
+  it('hands out a frozen snapshot — mpv is the record, this is a photograph', async () => {
+    client.playlist = queue('a.mp3', 'b.mp3')
+    const player = await createPlayer()
+    const entries = player.playlist.entries()
+    expect(Object.isFrozen(entries)).toBe(true)
+  })
+
+  it('throws a typed disposed error after destroy', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    expect(() => player.playlist.entries()).toThrow(PlayerErrorException)
+  })
+
+  it('surfaces an mpv read failure as a typed error', async () => {
+    client.readErrors.set(MpvProperty.playlist, '[mpv:-11] property error')
+    const player = await createPlayer()
+    expect(() => player.playlist.entries()).toThrowError(
+      expect.objectContaining({ playerError: expect.objectContaining({ code: 'mpv' }) })
+    )
+  })
+
+  it('shuffle returns the permutation mpv actually produced', async () => {
+    // mpv's `playlist-shuffle` reports nothing about what it did; before this
+    // returned anything, an app could only re-read the playlist or guess.
+    client.playlist = queue('a.mp3', 'b.mp3', 'c.mp3')
+    const player = await createPlayer()
+    client.commandRejection = undefined
+    const shuffled = await player.playlist.shuffle()
+    expect(shuffled.map((e) => e.uri)).toEqual(['a.mp3', 'b.mp3', 'c.mp3'])
+    // Read AFTER the command, not before — otherwise it is a prediction.
+    expect(client.commands).toEqual([['playlist-shuffle']])
+    expect(client.playlistReads).toBe(1)
+  })
+
+  it('unshuffle returns the restored order', async () => {
+    client.playlist = queue('a.mp3', 'b.mp3')
+    const player = await createPlayer()
+    const restored = await player.playlist.unshuffle()
+    expect(restored.map((e) => e.entryId)).toEqual([100, 101])
+  })
+
+  it('does not read the playlist when the shuffle command failed', async () => {
+    const player = await createPlayer()
+    client.commandRejection = '[mpv:-12] command failed'
+    await expect(player.playlist.shuffle()).rejects.toBeInstanceOf(
+      PlayerErrorException
+    )
+    expect(client.playlistReads).toBe(0)
+  })
+})
+
+describe('Player — queueChanged', () => {
+  it('fires with reason "resized" when playlist-count moves', async () => {
+    const player = await createPlayer()
+    const seen: unknown[] = []
+    player.on('queueChanged', (event) => seen.push(event))
+
+    client.emit([propertyEvent(MpvProperty.playlistCount, 3)])
+    expect(seen).toEqual([{ count: 3, reason: 'resized' }])
+  })
+
+  it('does not fire when the count is republished unchanged', async () => {
+    const player = await createPlayer()
+    client.emit([propertyEvent(MpvProperty.playlistCount, 3)])
+    const seen: unknown[] = []
+    player.on('queueChanged', (event) => seen.push(event))
+    client.emit([propertyEvent(MpvProperty.playlistCount, 3)])
+    expect(seen).toEqual([])
+  })
+
+  it('fires with reason "reordered" for move/shuffle/unshuffle', async () => {
+    // A reorder changes no observed property at all — `playlist-count` is
+    // identical — so these are the only honest source of the event.
+    const player = await createPlayer()
+    client.emit([propertyEvent(MpvProperty.playlistCount, 4)])
+    const seen: unknown[] = []
+    player.on('queueChanged', (event) => seen.push(event))
+
+    await player.playlist.move(0, 2)
+    await player.playlist.shuffle()
+    await player.playlist.unshuffle()
+    expect(seen).toEqual([
+      { count: 4, reason: 'reordered' },
+      { count: 4, reason: 'reordered' },
+      { count: 4, reason: 'reordered' },
+    ])
+  })
+
+  it('does not fire "reordered" when mpv rejected the command', async () => {
+    const player = await createPlayer()
+    const seen: unknown[] = []
+    player.on('queueChanged', (event) => seen.push(event))
+    client.commandRejection = '[mpv:-12] nope'
+    await expect(player.playlist.move(0, 1)).rejects.toBeInstanceOf(
+      PlayerErrorException
+    )
+    expect(seen).toEqual([])
+  })
+})
+
+describe('Player — setPrefetchPlaylist', () => {
+  it('writes mpv’s prefetch-playlist property', async () => {
+    const player = await createPlayer()
+    player.setPrefetchPlaylist(true)
+    expect(client.written.get(MpvProperty.prefetchPlaylist)).toBe(true)
+    player.setPrefetchPlaylist(false)
+    expect(client.written.get(MpvProperty.prefetchPlaylist)).toBe(false)
+  })
+
+  it('rejects a non-boolean with a typed invalid-state error', async () => {
+    const player = await createPlayer()
+    expect(() =>
+      (player as unknown as { setPrefetchPlaylist: (v: unknown) => void }).setPrefetchPlaylist(
+        'yes'
+      )
+    ).toThrowError(
+      expect.objectContaining({
+        playerError: expect.objectContaining({ code: 'invalid-state' }),
+      })
+    )
+    expect(client.written.has(MpvProperty.prefetchPlaylist)).toBe(false)
+  })
+
+  it('throws disposed after destroy', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    expect(() => player.setPrefetchPlaylist(true)).toThrow(PlayerErrorException)
+  })
+})
+
+describe('Player — networkReconnect (FFmpeg reconnection)', () => {
+  const DEFAULTS =
+    'reconnect=1,reconnect_on_network_error=1,reconnect_streamed=1,reconnect_delay_max=5'
+
+  it('is on by default and never sets reconnect_at_eof', async () => {
+    // `reconnect_at_eof` is unguarded on `is_streamed` in FFmpeg's
+    // `http.c:1871`, so enabling it globally turns every clean end-of-file into
+    // a retry storm ending in EIO — i.e. "the song finished" becomes "the song
+    // failed". It is opt-in through the raw escape hatch only.
+    await createPlayer()
+    const value = client.initOptions?.[MpvProperty.streamLavfO]
+    expect(value).toBe(DEFAULTS)
+    expect(value).not.toContain('reconnect_at_eof')
+  })
+
+  it('honours a custom maxDelaySeconds', async () => {
+    await createPlayer({ networkReconnect: { maxDelaySeconds: 20 } })
+    expect(client.initOptions?.[MpvProperty.streamLavfO]).toContain(
+      'reconnect_delay_max=20'
+    )
+  })
+
+  it('writes nothing at all when disabled, leaving FFmpeg’s own defaults', async () => {
+    await createPlayer({ networkReconnect: { enabled: false } })
+    expect(client.initOptions).not.toHaveProperty(MpvProperty.streamLavfO)
+  })
+
+  it('lets a raw stream-lavf-o replace the whole list', async () => {
+    await createPlayer({
+      networkReconnect: { maxDelaySeconds: 20 },
+      mpvOptions: { 'stream-lavf-o': 'reconnect=1,reconnect_at_eof=1' },
+    })
+    expect(client.initOptions?.[MpvProperty.streamLavfO]).toBe(
+      'reconnect=1,reconnect_at_eof=1'
+    )
+  })
+
+  it('rejects a maxDelaySeconds outside FFmpeg’s own range, before any core exists', async () => {
+    // mpv silently ignores an unparseable AVOption, so an unchecked value would
+    // not fail — it would just not apply.
+    for (const bad of [-1, 1.5, 4295, Number.NaN]) {
+      await expect(
+        createPlayer({ networkReconnect: { maxDelaySeconds: bad } })
+      ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    }
+    expect(client.initialized).toBe(false)
+  })
+})
+
+describe('Player — retry before skip', () => {
+  /** Put the cursor on `index` with a queue of `count`, then clear the log. */
+  function atEntry(index: number, count = 3): void {
+    client.emit([
+      propertyEvent(MpvProperty.playlistCount, count),
+      propertyEvent(MpvProperty.playlistPos, index),
+    ])
+    client.commands.length = 0
+  }
+
+  /** The `end-file` a dropped network stream produces. */
+  const NETWORK_FAILURE = endFileEvent('error', 'loading failed')
+
+  async function playingNetworkPlayer(
+    overrides: Parameters<typeof Player.create>[0] = {}
+  ): Promise<Player> {
+    const player = await createPlayer(overrides)
+    await player.loadPlaylist([URI, 'b.mp3', 'c.mp3'])
+    client.emit([startFileEvent(), propertyEvent(MpvProperty.pause, false)])
+    atEntry(0)
+    return player
+  }
+
+  it('re-attempts the same entry instead of letting the queue advance', async () => {
+    const player = await playingNetworkPlayer()
+    const retries: unknown[] = []
+    const errors: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('error', (error) => errors.push(error))
+
+    client.emit([NETWORK_FAILURE])
+
+    expect(retries).toEqual([
+      {
+        index: 0,
+        attempt: 1,
+        maxAttempts: 2,
+        error: expect.objectContaining({ code: 'network', retryable: true }),
+      },
+    ])
+    // No `error` event: nothing has finally failed yet. That is the feature.
+    expect(errors).toEqual([])
+    expect(client.commands).toEqual([['playlist-play-index', '0']])
+  })
+
+  it('issues the re-attempt immediately, with no timer to freeze', async () => {
+    // JS timers freeze with the screen off (ARCHITECTURE, Platform truths), so
+    // a backoff written here would silently become "retry on next unlock".
+    // Spaced retrying is FFmpeg's job; this layer only decides to stay put.
+    vi.useFakeTimers()
+    try {
+      const player = await playingNetworkPlayer()
+      client.emit([NETWORK_FAILURE])
+      // Nothing advanced the clock, and the command is already out.
+      expect(client.commands).toEqual([['playlist-play-index', '0']])
+      expect(vi.getTimerCount()).toBe(0)
+      player.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves playback intent across the re-attempt', async () => {
+    const player = await createPlayer()
+    await player.loadPlaylist([URI], { autoPlay: false })
+    client.emit([startFileEvent(), propertyEvent(MpvProperty.pause, true)])
+    atEntry(0, 1)
+    client.written.delete(MpvProperty.pause)
+
+    client.emit([NETWORK_FAILURE])
+    // It was paused, so the jump must not start playing behind the user's back.
+    expect(client.written.has(MpvProperty.pause)).toBe(false)
+    expect(client.commands).toEqual([['playlist-play-index', '0']])
+  })
+
+  it('stops after maxAttempts and lets the advance stand, with the count', async () => {
+    const player = await playingNetworkPlayer()
+    const retries: unknown[] = []
+    const errors: { error: PlayerError; attempts: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('error', (error, info) =>
+      errors.push({ error, attempts: info.attempts })
+    )
+
+    client.emit([NETWORK_FAILURE]) // attempt 1
+    client.emit([NETWORK_FAILURE]) // attempt 2
+    client.emit([NETWORK_FAILURE]) // budget spent
+
+    expect(retries).toHaveLength(2)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.attempts).toBe(2)
+    expect(errors[0]?.error.code).toBe('network')
+    // Two jumps, and none for the give-up: mpv already advanced, and that is
+    // deliberately left alone.
+    expect(client.commands).toEqual([
+      ['playlist-play-index', '0'],
+      ['playlist-play-index', '0'],
+    ])
+  })
+
+  it('resets the budget once the entry actually plays', async () => {
+    const player = await playingNetworkPlayer()
+    const retries: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+
+    client.emit([NETWORK_FAILURE]) // attempt 1
+    client.emit([startFileEvent(), playbackRestartEvent()]) // it played
+    client.emit([NETWORK_FAILURE]) // a fresh generation
+
+    expect(retries.map((r) => (r as { attempt: number }).attempt)).toEqual([
+      1, 1,
+    ])
+  })
+
+  it('gives each entry its own budget', async () => {
+    const player = await playingNetworkPlayer()
+    const retries: { index: number; attempt: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+
+    client.emit([NETWORK_FAILURE])
+    atEntry(1)
+    client.emit([NETWORK_FAILURE])
+
+    expect(retries).toEqual([
+      expect.objectContaining({ index: 0, attempt: 1 }),
+      expect.objectContaining({ index: 1, attempt: 1 }),
+    ])
+  })
+
+  it('a user skip during a retry cancels it', async () => {
+    const player = await playingNetworkPlayer()
+    const retries: unknown[] = []
+    const errors: { attempts: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('error', (_error, info) => errors.push(info))
+
+    client.emit([NETWORK_FAILURE]) // attempt 1
+    await player.playlist.next() // the user has said what they want
+    client.emit([NETWORK_FAILURE]) // still entry 0 as far as the cursor knows
+
+    // The generation was dropped, so this is attempt 1 again — not attempt 2 —
+    // and the count reported alongside any later error starts from zero too.
+    expect(retries).toHaveLength(2)
+    expect(retries[1]).toMatchObject({ attempt: 1 })
+    expect(errors).toEqual([])
+  })
+
+  it.each([
+    ['playlist.jumpTo', (p: Player) => p.playlist.jumpTo(2)],
+    ['playlist.previous', (p: Player) => p.playlist.previous()],
+    ['playlist.add', (p: Player) => p.playlist.add('d.mp3')],
+    ['playlist.remove', (p: Player) => p.playlist.remove(2)],
+    ['playlist.clear', (p: Player) => p.playlist.clear()],
+    ['playlist.move', (p: Player) => p.playlist.move(0, 1)],
+    ['playlist.shuffle', (p: Player) => p.playlist.shuffle()],
+    ['playlist.unshuffle', (p: Player) => p.playlist.unshuffle()],
+    // Network URIs on purpose: a non-network source classifies as
+    // `load-failed`, which is not retryable, and the test would pass for the
+    // wrong reason.
+    ['load', (p: Player) => p.load('https://cdn.example.com/other.mp3')],
+    [
+      'loadPlaylist',
+      (p: Player) => p.loadPlaylist(['https://cdn.example.com/other.mp3']),
+    ],
+  ])('%s ends the retry generation', async (_name, act) => {
+    const player = await playingNetworkPlayer()
+    const retries: { attempt: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+
+    client.emit([NETWORK_FAILURE])
+    await act(player)
+    client.emit([NETWORK_FAILURE])
+
+    expect(retries.map((r) => r.attempt)).toEqual([1, 1])
+  })
+
+  it('never retries a non-retryable failure', async () => {
+    const player = await playingNetworkPlayer()
+    const retries: unknown[] = []
+    const errors: { attempts: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('error', (_error, info) => errors.push(info))
+
+    client.emit([endFileEvent('error', 'unrecognized file format')])
+
+    expect(retries).toEqual([])
+    expect(errors).toEqual([{ attempts: 0 }])
+    expect(client.commands).toEqual([])
+  })
+
+  it('retries an audio-output init failure — the one transient mpv errno', async () => {
+    const player = await playingNetworkPlayer()
+    const retries: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    client.emit([endFileEvent('error', 'audio output initialization failed')])
+    expect(retries).toHaveLength(1)
+  })
+
+  it('retry: { maxAttempts: 0 } restores mpv’s own advance-on-failure', async () => {
+    const player = await playingNetworkPlayer({ retry: { maxAttempts: 0 } })
+    const retries: unknown[] = []
+    const errors: { attempts: number }[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('error', (_error, info) => errors.push(info))
+
+    client.emit([NETWORK_FAILURE])
+
+    expect(retries).toEqual([])
+    expect(errors).toEqual([{ attempts: 0 }])
+    expect(client.commands).toEqual([])
+  })
+
+  it('rejects a bad maxAttempts before any core exists', async () => {
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      await expect(
+        createPlayer({ retry: { maxAttempts: bad } })
+      ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    }
+    expect(client.initialized).toBe(false)
+  })
+
+  it('is safe when a listener destroys the player mid-retry', async () => {
+    const player = await playingNetworkPlayer()
+    player.on('retrying', () => {
+      player.destroy()
+    })
+    expect(() => client.emit([NETWORK_FAILURE])).not.toThrow()
+    // The jump was not issued into a dead core.
+    expect(client.commands).toEqual([])
+  })
+
+  it('is safe when a state listener destroys the player before the fan-out', async () => {
+    const player = await playingNetworkPlayer()
+    player.onStateChange((state) => {
+      if (state.status === 'error') player.destroy()
+    })
+    expect(() => client.emit([NETWORK_FAILURE])).not.toThrow()
+    expect(client.commands).toEqual([])
+  })
+
+  it('does not retry when there is no current entry to jump back to', async () => {
+    const player = await createPlayer()
+    const retries: unknown[] = []
+    const errors: unknown[] = []
+    player.on('retrying', (event) => retries.push(event))
+    player.on('error', (error) => errors.push(error))
+    // `playlist-pos` is still -1: `playlist-play-index -1` is a different
+    // operation entirely, not a re-attempt.
+    client.emit([NETWORK_FAILURE])
+    expect(retries).toEqual([])
+    expect(errors).toHaveLength(1)
+  })
+})
+
+describe('Player — clearError', () => {
+  it('clears a settled error and moves status to idle', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    await player.load(URI)
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+    expect(player.state.status).toBe('error')
+    expect(player.state.error?.code).toBe('network')
+
+    const states: PlayerState[] = []
+    player.onStateChange((state) => states.push(state))
+    expect(player.clearError()).toBe(true)
+
+    expect(player.state.error).toBeUndefined()
+    expect(player.state.status).toBe('idle')
+    expect(states).toHaveLength(1)
+  })
+
+  it('is a no-op with no error, and notifies nobody', async () => {
+    const player = await createPlayer()
+    const states: PlayerState[] = []
+    player.onStateChange((state) => states.push(state))
+    expect(player.clearError()).toBe(false)
+    expect(states).toEqual([])
+  })
+
+  it('clears state only — it never suppresses a later error event', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    await player.load(URI)
+    const errors: unknown[] = []
+    player.on('error', (error) => errors.push(error))
+
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+    player.clearError()
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+
+    expect(errors).toHaveLength(2)
+    expect(player.state.status).toBe('error')
+  })
+
+  it('auto-clears on the next successful playback restart, without being asked', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    await player.load(URI)
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+    expect(player.state.error).toBeDefined()
+
+    client.emit([playbackRestartEvent()])
+    expect(player.state.error).toBeUndefined()
+    expect(player.state.status).toBe('ready')
+  })
+
+  it('auto-clears when the next entry starts loading', async () => {
+    const player = await createPlayer({ retry: { maxAttempts: 0 } })
+    await player.load(URI)
+    client.emit([startFileEvent(), endFileEvent('error', 'loading failed')])
+    client.emit([startFileEvent()])
+    expect(player.state.error).toBeUndefined()
+    expect(player.state.status).toBe('loading')
+  })
+
+  it('throws disposed after destroy', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    expect(() => player.clearError()).toThrow(PlayerErrorException)
   })
 })

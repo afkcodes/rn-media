@@ -210,6 +210,7 @@ export function defineEqualizerPreset(
     throw new PlayerErrorException({
       code: 'invalid-state',
       message: `defineEqualizerPreset: ${message}`,
+      retryable: false,
     })
   }
   if (typeof id !== 'string' || id === '') {
@@ -369,6 +370,7 @@ export function equalizerPresetChain(
     throw new PlayerErrorException({
       code: 'invalid-state',
       message: `equalizerPresetChain: gainsDb must have exactly ${String(EQUALIZER_BAND_COUNT)} entries, got ${Array.isArray(gainsDb) ? String(gainsDb.length) : typeof gainsDb}.`,
+      retryable: false,
     })
   }
 

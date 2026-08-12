@@ -26,6 +26,7 @@ export type {
   MpvFormat,
   MpvLogLevel,
   MpvPropertyValue,
+  PlaylistEntry,
   PrefetchStartedEvent,
   SourceResolutionRequest,
   VisualizerCapture,
@@ -48,6 +49,7 @@ export {
   classifyEndFile,
   disposedError,
   isNetworkUri,
+  isRetryableErrno,
   toPlayerError,
   toVisualizerError,
 } from './errors'
@@ -60,6 +62,7 @@ export type {
   PlayerError,
   PlayerErrorCode,
   RawMpvError,
+  Retryable,
   UnsupportedError,
   UnsupportedFormatError,
 } from './errors'
@@ -126,6 +129,7 @@ export type {
 
 export {
   BUFFERED_POSITION_STEP,
+  clearPlayerError,
   createInitialState,
   isPositionDiscontinuity,
   projectPosition,
@@ -164,21 +168,33 @@ export type {
   VisualizerUnsubscribe,
 } from './visualizer-controller'
 
-export { Player } from './player'
+export {
+  DEFAULT_CACHE_SECS,
+  DEFAULT_RECONNECT_DELAY_MAX_SECONDS,
+  DEFAULT_RETRY_MAX_ATTEMPTS,
+  DEFAULT_USER_AGENT,
+  Player,
+} from './player'
 export type {
   GaplessAudioMode,
   LoadOptions,
   LoadPlaylistOptions,
   Metadata,
   MpvClientFactory,
+  NetworkReconnectOptions,
+  PlayerErrorInfo,
   PlayerEventMap,
   PlayerEventName,
   PlayerLogLevel,
   PlayerOptions,
   PlaylistAddOptions,
   PlaylistApi,
+  QueueChangeReason,
+  QueueChangedEvent,
   ReplayGainMode,
   ReplayGainOptions,
+  RetryOptions,
+  RetryingEvent,
   TrackChangedEvent,
   TrackEndedEvent,
   Unsubscribe,

@@ -394,36 +394,25 @@ void MpvClient::setPropertyBool(const std::string& name, bool value) {
   }
 }
 
-bool MpvClient::getPropertyNodeMap(const std::string& name,
-                                   const std::function<void(const NodeMember&)>& visit) {
-  _state.requireInitialized("getPropertyNodeMap");
-  std::shared_lock<std::shared_mutex> lock(_handleMutex);
-  if (_handle == nullptr) {
-    throw DisposedError("getPropertyNodeMap");
-  }
+namespace {
 
-  mpv_node node{};
-  const int status = mpv_get_property(_handle, name.c_str(), MPV_FORMAT_NODE, &node);
-  if (status == MPV_ERROR_PROPERTY_UNAVAILABLE) {
-    return false;
+/// mpv owns a node handed out by `mpv_get_property(MPV_FORMAT_NODE)`; this frees
+/// it on every path out of the read, including a throwing visitor.
+struct NodeGuard {
+  mpv_node* node;
+  ~NodeGuard() {
+    mpv_free_node_contents(node);
   }
-  if (status < 0) {
-    throw MpvError(status, "mpv_get_property(\"" + name + "\", NODE)");
-  }
+};
 
-  // mpv owns the node's memory and hands ownership to us; this frees it on
-  // every path out, including a throwing visitor.
-  struct NodeGuard {
-    mpv_node* node;
-    ~NodeGuard() {
-      mpv_free_node_contents(node);
-    }
-  } guard{&node};
-
+/// Walk one `MPV_FORMAT_NODE_MAP` node, handing each member to `visit`.
+///
+/// Shared by the map and the array-of-maps readers so the scalar-extraction
+/// switch — the part that has to know mpv's format zoo — exists exactly once.
+void visitNodeMap(const mpv_node& node, const std::function<void(const NodeMember&)>& visit) {
   if (node.format != MPV_FORMAT_NODE_MAP || node.u.list == nullptr) {
-    return false;
+    return;
   }
-
   const mpv_node_list* list = node.u.list;
   for (int i = 0; i < list->num; i++) {
     const mpv_node& value = list->values[i];
@@ -460,6 +449,63 @@ bool MpvClient::getPropertyNodeMap(const std::string& name,
     }
     visit(member);
   }
+}
+
+} // namespace
+
+bool MpvClient::getPropertyNodeMapArray(
+    const std::string& name, const std::function<void(std::size_t, const NodeMember&)>& visit) {
+  _state.requireInitialized("getPropertyNodeMapArray");
+  std::shared_lock<std::shared_mutex> lock(_handleMutex);
+  if (_handle == nullptr) {
+    throw DisposedError("getPropertyNodeMapArray");
+  }
+
+  mpv_node node{};
+  const int status = mpv_get_property(_handle, name.c_str(), MPV_FORMAT_NODE, &node);
+  if (status == MPV_ERROR_PROPERTY_UNAVAILABLE) {
+    return false;
+  }
+  if (status < 0) {
+    throw MpvError(status, "mpv_get_property(\"" + name + "\", NODE)");
+  }
+  NodeGuard guard{&node};
+
+  if (node.format != MPV_FORMAT_NODE_ARRAY || node.u.list == nullptr) {
+    return false;
+  }
+
+  const mpv_node_list* list = node.u.list;
+  for (int i = 0; i < list->num; i++) {
+    const std::size_t index = static_cast<std::size_t>(i);
+    visitNodeMap(list->values[i], [&](const NodeMember& member) { visit(index, member); });
+  }
+  return true;
+}
+
+bool MpvClient::getPropertyNodeMap(const std::string& name,
+                                   const std::function<void(const NodeMember&)>& visit) {
+  _state.requireInitialized("getPropertyNodeMap");
+  std::shared_lock<std::shared_mutex> lock(_handleMutex);
+  if (_handle == nullptr) {
+    throw DisposedError("getPropertyNodeMap");
+  }
+
+  mpv_node node{};
+  const int status = mpv_get_property(_handle, name.c_str(), MPV_FORMAT_NODE, &node);
+  if (status == MPV_ERROR_PROPERTY_UNAVAILABLE) {
+    return false;
+  }
+  if (status < 0) {
+    throw MpvError(status, "mpv_get_property(\"" + name + "\", NODE)");
+  }
+  NodeGuard guard{&node};
+
+  if (node.format != MPV_FORMAT_NODE_MAP || node.u.list == nullptr) {
+    return false;
+  }
+
+  visitNodeMap(node, visit);
   return true;
 }
 

@@ -136,9 +136,65 @@ export interface PlayerState {
   readonly loopRaw: LoopRaw
   /** Playlist cursor. */
   readonly playlist: PlaylistPosition
-  /** The failure that produced `status: 'error'`. Present iff status is `'error'`. */
+  /**
+   * The failure that produced `status: 'error'`. Present iff status is
+   * `'error'`.
+   *
+   * @remarks
+   * **How long it sticks, exactly** — the three ways it clears, all of them
+   * already in the reducer and none of them a timer:
+   *
+   * 1. **`startFile`** — a new entry is loading, so every file-scoped field
+   *    including this one is dropped. On a queue this is the common case: mpv
+   *    advances past the failed entry within milliseconds, and the error is
+   *    visible only in the window before the next entry starts.
+   * 2. **`playbackRestart`** — audio is flowing again, which is the strongest
+   *    possible evidence that whatever failed no longer applies. This is the
+   *    "auto-clear on the next successful playback restart" rule.
+   * 3. **`endFile` with reason `stop`/`quit`** — deliberate teardown; the state
+   *    goes to `idle` with nothing left over.
+   *
+   * So it survives indefinitely in exactly one situation: the **last** entry
+   * failed and nothing started after it. That is the case
+   * {@link Player.clearError} exists for — a user dismissing a banner. Clearing
+   * is a change to this snapshot only: the `error` event has already been
+   * delivered and nothing suppresses, replays or un-logs it.
+   */
   readonly error?: PlayerError
-  /** Title of the current entry (mpv's `media-title`), when known. */
+  /**
+   * Title of the current entry (mpv's `media-title`), when known.
+   *
+   * @remarks
+   * **This is the now-playing surface, and it is one of two deliberately
+   * different routes to a track's metadata.** Read this one when you want *the
+   * line a lock screen shows*; reach for `Player.getMetadata()` /
+   * `Player.getMetadataValue()` when you want *a specific tag*.
+   *
+   * | | `state.title` | `metadataChanged` + `getMetadataValue` |
+   * | --- | --- | --- |
+   * | shape | one coalesced string | the whole tag map, or one key |
+   * | delivery | part of every snapshot, so it rides the state fan-out and every broadcast channel built on it | an event, and only while something is listening |
+   * | cost | none beyond the snapshot | one node read per batch that touched the tags |
+   * | on a radio stream | follows `StreamTitle` automatically | `icy-title`, `icy-name`, `icy-genre`, `icy-br` … individually |
+   *
+   * mpv derives `media-title` from the demuxer's `title` tag when there is one
+   * and from ICY's `icy-title` on a live stream, and invalidates both it and
+   * `metadata` on the same `MP_EVENT_METADATA_UPDATE` (`player/command.c`). So
+   * on an Icecast/Shoutcast station this field *is* the currently-playing song,
+   * changing every few minutes without a track change — which is exactly what a
+   * media session wants to publish, and exactly why it lives in state rather
+   * than behind a pull.
+   *
+   * The reason both exist: a media session re-broadcasts **state**, not events,
+   * so the now-playing line has to be a state field or it cannot reach the
+   * notification at all. And the full tag map cannot be a state field, because
+   * building it costs a synchronous read and most apps never look at it — see
+   * `PlayerEventMap.metadataChanged`, which is why that one is opt-in.
+   *
+   * One consequence worth knowing on a live stream: this field carries the
+   * *song*, and the *station* is only in the tag map (`icy-name`). An app that
+   * wants both needs both routes.
+   */
   readonly title?: string
   /** `true` while mpv is repositioning; position projection freezes. */
   readonly seeking: boolean
@@ -803,6 +859,42 @@ function reduceEvent(
       return state
     }
   }
+}
+
+/**
+ * Drop a settled `error` on request, leaving every other field alone.
+ *
+ * @param state - The snapshot to clear.
+ * @returns A new snapshot with no `error` and `status: 'idle'`, or `state`
+ * unchanged when there was nothing to clear.
+ *
+ * @remarks
+ * This is the deliberate-dismissal counterpart to the three automatic clears
+ * documented on {@link PlayerState.error}; it exists because those all require
+ * *something to happen*, and the one error that sticks forever is the one after
+ * which nothing does.
+ *
+ * `status` must move too, or the snapshot would violate its own invariant
+ * ("`error` present iff `status === 'error'`"). It moves to `'idle'` rather
+ * than to a re-derived value because `'error'` is a **sticky terminal** status
+ * — the reducer only leaves it on a `startFile`/`playbackRestart`/stop, and if
+ * any of those had happened there would be no error left to clear. `'idle'` is
+ * the other terminal, and it is what the core genuinely is: nothing playing,
+ * nothing loading.
+ *
+ * Clearing changes **state only**. No event is suppressed, replayed or undone:
+ * the `error` event fired when the failure happened and is already in the app's
+ * logs. Dismissing a banner is not the same as the failure not having occurred,
+ * and this function is careful not to conflate them.
+ */
+export function clearPlayerError(state: PlayerState): PlayerState {
+  if (state.error === undefined && state.status !== 'error') return state
+  const next: PlayerState = {
+    ...state,
+    status: state.status === 'error' ? 'idle' : state.status,
+  }
+  delete (next as { error?: PlayerError }).error
+  return next
 }
 
 /**

@@ -76,8 +76,48 @@ await player.playlist.jumpTo(2); // plays it; pass { autoPlay: false } to stay p
 await player.playlist.next();
 await player.playlist.previous();
 await player.playlist.clear(); // keeps the entry that is playing
-await player.playlist.shuffle(); // mpv `playlist-shuffle`
+await player.playlist.shuffle(); // mpv `playlist-shuffle`, RETURNS the new order
 await player.playlist.unshuffle(); // undoes the last shuffle — once
+
+player.playlist.entries(); // [{ uri, entryId, current }, …] — the contents
+player.on('queueChanged', ({ count, reason }) => refreshQueueUi());
+```
+
+**Reading the queue back.** `PlayerState.playlist` is a *cursor* (index and
+count); `playlist.entries()` is the contents. It is **one** synchronous native
+call — a single `mpv_get_property("playlist", MPV_FORMAT_NODE)`, constant
+whatever the queue length — and it is a pull, not a subscription, on purpose.
+Observing the playlist would put a variable-size array on the bridge every time
+the queue is touched and make `PlayerState` a second copy of state mpv already
+owns; that is the same trade this library refuses for position (anchored and
+projected, never streamed) and for metadata (pulled, never pushed). One node read
+is also the only *coherent* answer: a walk of `playlist/N/filename` can
+interleave with a `playlist-move` and hand you two halves of two different
+orders.
+
+Call it when something says the queue moved — not on a timer, and not per render.
+
+**`queueChanged` tells you when, and is honest about what it knows.**
+
+| `reason` | fires when | how it is known |
+| --- | --- | --- |
+| `'resized'` | add / remove / clear / a fresh `loadPlaylist` | `playlist-count` is observed, so this rides the ordinary event batch |
+| `'reordered'` | `move` / `shuffle` / `unshuffle` | emitted by those methods — a reorder changes **no** observable mpv property, so nothing else could report it |
+
+The gap that leaves, stated rather than papered over: a reorder issued through
+the raw `player.command()` escape hatch is invisible to this event. That is the
+price of not streaming the queue across the bridge.
+
+**Key on `entryId`, not on the array index.** An insert renumbers everything
+after it, so any app-side `index → metadata` map is silently one row off from
+the next `playlist.add(uri, { position: 'next' })` onwards — the queue is
+correct, the labels are wrong, and it shows up later as the wrong artwork on the
+wrong song. mpv's `entryId` is "unique for the entire life time of the current
+mpv core instance" and survives inserts, removes, moves and shuffles:
+
+```ts
+const byUri = new Map(myTracks.map(t => [t.uri, t]));
+const rows = player.playlist.entries().map(e => ({ ...e, track: byUri.get(e.uri) }));
 ```
 
 **Insertion is one command, and it is validated.** `position` compiles straight
@@ -102,6 +142,11 @@ that was in flight. Insert well before the current track ends and nothing is los
 *every* entry, including the one playing. The track keeps playing (mpv tracks the
 entry, not the index), but its `playlist-pos` moves — so you get a `trackChanged`
 event for a track that did not change. Read `state.playlist.index` and carry on.
+
+`shuffle()` and `unshuffle()` **return the resulting order** (the same value
+`entries()` would give). mpv reports nothing about the permutation it performed,
+so before this an app's only options were to re-read the playlist itself or to
+guess; the read happens once, after the command, where it cannot be missed.
 
 `playlist.unshuffle()` is a **one-level undo**, and mpv says so: "Attempt to
 revert the previous `playlist-shuffle` command. This works only once (multiple
@@ -535,8 +580,140 @@ single read of one tag.
 `metadataChanged` fires at most once per native event batch, and only while at
 least one listener is registered — a player nobody is asking pays nothing. It is
 driven by mpv's `metadata` and `media-title` observations, which mpv invalidates
-together on `MP_EVENT_METADATA_UPDATE`; ICY now-playing updates on a radio stream
-arrive through exactly this path (and also as `state.title`).
+together on `MP_EVENT_METADATA_UPDATE`.
+
+#### Two routes to a title, and which one you want
+
+ICY now-playing (and every other tag) is reachable two ways. They are not
+redundant — each one exists because the other cannot do its job.
+
+| | `state.title` | `metadataChanged` + `getMetadataValue()` |
+| --- | --- | --- |
+| shape | one coalesced string | the whole tag map, or one key |
+| delivery | in **every snapshot** — rides the state fan-out, and therefore every broadcast channel and the media session | an **event**, and only while something is listening |
+| cost | none beyond the snapshot | one node read per batch that touched the tags |
+| on a radio stream | the currently-playing **song**, updating on its own | the **station**: `icy-name`, `icy-genre`, `icy-br`, … |
+
+**Use `state.title` for the now-playing line.** mpv folds `icy-title` into
+`media-title` and invalidates both on the same event, so it *is* the song, and
+it changes every few minutes on a live stream with no track change. It has to be
+a state field: a media session re-broadcasts state, not events, so a title
+delivered only as an event would never reach the notification.
+
+**Use `metadataChanged` + `getMetadataValue()` for specific keys.** The map
+cannot be a state field — building it is a synchronous read into mpv's core and
+most apps never look at it — so it is opt-in, and pays nothing when nobody
+subscribes.
+
+```ts
+// The song, for free, everywhere:
+const song = player.state.title;
+// The station, only if you asked for it:
+player.on('metadataChanged', tags => setStation(tags['icy-name']));
+```
+
+### Recovering from network failures
+
+Two layers, and they answer different questions.
+
+**1. FFmpeg reconnection (`networkReconnect`, on by default).** Native, inside
+libavformat's read loop, with no JavaScript and no timers — which is the only
+kind of retry that works with the screen off, because
+[JS timers freeze in the background](../../ARCHITECTURE.md). It is wired through
+mpv's `stream-lavf-o` and sets exactly four AVOptions:
+
+```text
+reconnect=1                   premature end of a sized response
+reconnect_on_network_error=1  DNS / refused TCP / TLS failure at connect
+reconnect_streamed=1          allows mid-read retry on a non-seekable stream
+reconnect_delay_max=5         give up once the next backoff step exceeds this
+```
+
+FFmpeg's backoff is `delay = 1 + 2 * delay` from `0`, so `5` means attempts at
+0 s, 1 s and 3 s — about four seconds of trying. FFmpeg's own defaults are
+off / `120 s`, which is why this is opt-*out*:
+`networkReconnect: { enabled: false }`, or `{ maxDelaySeconds: 20 }` to widen it.
+
+**`reconnect_at_eof` is deliberately not set**, and that is worth knowing if
+your queue is only live streams. It is the option that makes a live stream
+reconnect when the server simply closes the connection — but FFmpeg does not
+guard it on "is this stream seekable" (`http.c`), so on an ordinary sized file
+the natural end of the response *is* `AVERROR_EOF` and enabling it turns every
+clean track end into a `maxDelaySeconds`-long retry storm that finishes with
+`EIO`. That would convert "the song finished" into "the song failed" — the exact
+distinction this library is built on. A live-only app can opt in through the raw
+escape hatch, which replaces the whole list:
+
+```ts
+mpvOptions: {
+  'stream-lavf-o':
+    'reconnect=1,reconnect_on_network_error=1,reconnect_streamed=1,' +
+    'reconnect_delay_max=5,reconnect_at_eof=1',
+}
+```
+
+HTTP status codes (`404`, `503`) are not retried either; that is
+`reconnect_on_http_error`, a policy decision an app should make for itself.
+
+**2. Player-level re-attempt (`retry`, 2 attempts by default).** This is the
+layer FFmpeg cannot be: it answers *"should the queue move on?"*. mpv's own
+behaviour on a hard failure is to advance to the next entry, which is right for
+a file that will never play and wrong for a stream that was unlucky.
+
+```ts
+const player = await Player.create({ retry: { maxAttempts: 2 } }); // 0 disables
+
+player.on('retrying', ({ index, attempt, maxAttempts }) =>
+  showBanner(`Reconnecting… ${attempt}/${maxAttempts}`)
+);
+player.on('error', (error, { attempts }) =>
+  showBanner(`Gave up after ${attempts} attempts: ${error.message}`)
+);
+```
+
+When an entry fails with a `retryable` error, the player jumps **back** to it,
+preserving whether it was playing, and emits `retrying`. **No `error` event is
+emitted for that attempt** — nothing has finally failed yet. When the budget is
+spent, the advance mpv already performed stands and `error` fires with the
+count. So `error` counts *give-ups*, not failures.
+
+**There is no delay between attempts, on purpose.** The only way to wait in
+JavaScript is a timer, and JS timers freeze with the screen off — a backoff
+written here would silently become "retry when the user next unlocks the phone",
+a bug invisible to every test that runs with the display on. Spaced, backed-off
+retrying is layer 1's job. The consequence: a re-attempt is issued a moment
+*after* mpv has already started the next entry, so a failure at a queue boundary
+can produce a brief blip of the following track.
+
+Attempts are tracked per **entry generation** and reset when the entry plays,
+when a different entry fails, or when the app moves the cursor or edits the
+queue (`jumpTo`, `next`, `previous`, `load`, `loadPlaylist`, `add`, `remove`,
+`move`, `clear`, `shuffle`, `unshuffle`). A user who skips during a retry has
+said what they want, and the player stops arguing.
+
+### Errors: `retryable`, and dismissing one
+
+Every `PlayerError` carries `retryable: boolean` — "could repeating the
+identical operation plausibly succeed with nothing else changed?". Read that
+field instead of maintaining a table of codes, which is how such tables go
+stale. It is also what `retry` consumes.
+
+| code | `retryable` |
+| --- | --- |
+| `network` | `true` |
+| `mpv` with `errno: -14` (`AO_INIT_FAILED`) | `true` — the audio device is shared, and another app or a route change can lose you one open and not the next |
+| everything else | `false` |
+
+`load-failed` is `false`, and that is a fact about the classifier rather than a
+policy: failures are split on whether the URI is a network scheme, so every
+network source became `network` and what is left in `load-failed` is a local
+path (or an unknown one). Neither improves by being asked twice.
+
+`state.error` clears itself three ways — a new entry starting, playback
+restarting, or a deliberate stop. It survives in exactly one case: the last
+entry failed and nothing has happened since. `player.clearError()` is the button
+for that (a user dismissing a banner). It clears **state only** — it never
+suppresses, replays or undoes an event.
 
 ### Notes
 
@@ -549,8 +726,8 @@ arrive through exactly this path (and also as `state.title`).
   `setPropertyNumber('volume', …)` if you need mpv's amplification range.
 - **Errors are typed.** Every failure is a `PlayerError`
   (`network` | `unsupported-format` | `load-failed` | `disposed` |
-  `invalid-state` | `unsupported` | `mpv`); a natural end of stream is a
-  `trackEnded` event and never an error.
+  `invalid-state` | `unsupported` | `mpv`), each carrying `retryable`; a natural
+  end of stream is a `trackEnded` event and never an error.
 - **Escape hatch.** `player.command()`, `player.getProperty*` /
   `setProperty*` / `observeProperty` reach anything mpv can do, and
   `createMpvClient()` exposes the raw binding directly.
@@ -567,10 +744,14 @@ arrive through exactly this path (and also as `state.title`).
   (`cache-pause-initial` is `no`, so playback never waits on the cache).
   Override with the typed `cacheSecs` option, or raw with
   `mpvOptions: { 'cache-secs': '…' }`.
+- **Prefetching is runtime-settable.** `player.setPrefetchPlaylist(enabled)` is
+  the twin of the `prefetchPlaylist` create option, with every one of its
+  caveats plus one: flipping it takes effect from the *next* prefetch decision,
+  so turning it off does not abort an opener that is already running.
 - **Raw `mpvOptions` always win.** Precedence at init, weakest first: this
-  library's defaults (`user-agent`, `cache-secs`), then the typed options
-  (`userAgent`, `cacheSecs`, `prefetchPlaylist`, `replayGain`), then whatever
-  you put in `mpvOptions`.
+  library's defaults (`user-agent`, `cache-secs`, `stream-lavf-o`), then the
+  typed options (`userAgent`, `cacheSecs`, `prefetchPlaylist`, `replayGain`,
+  `networkReconnect`), then whatever you put in `mpvOptions`.
 
 ## Credits
 

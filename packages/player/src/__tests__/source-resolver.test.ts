@@ -534,6 +534,9 @@ describe('resolver failures', () => {
       message: 'Could not resolve `library://one`: token service is down',
       raw: 'token service is down',
       uri: 'library://one',
+      // `library://` is not a network scheme, so re-signing it is not obviously
+      // worth another go. See `Retryable`.
+      retryable: false,
     })
     // Nothing cached: mpv is left to open the logical URI and fail on its own
     // terms rather than being handed a URL we do not trust.

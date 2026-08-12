@@ -8,7 +8,7 @@
  * then show a state the engine is not in. So every setter here writes first and
  * only records the new value if the write survived.
  */
-import { MpvProperty, type Player, type ReplayGainMode } from '@rn-media/player'
+import type { Player, ReplayGainMode } from '@rn-media/player'
 
 export interface OutputOptionsHooks {
   readonly player: () => Player | undefined
@@ -58,17 +58,22 @@ export class OutputOptions {
   /**
    * Flip mpv's `prefetch-playlist` at runtime.
    *
-   * `Player.create({ prefetchPlaylist })` is the typed, supported knob and is
-   * what this app sets (see `engine.ts`). This toggle exists so the effect can
-   * be A/B'd on a device without a rebuild, and it goes through the raw property
-   * escape hatch — `setPropertyBool`, the same door every un-wrapped mpv option
-   * is reachable through.
+   * `Player.create({ prefetchPlaylist })` is the create-time knob and is what
+   * this app sets (see `engine.ts`); `setPrefetchPlaylist` is its runtime twin
+   * — typed and validated, where this used to reach through the raw
+   * `setPropertyBool` escape hatch. The toggle exists so the effect can be
+   * A/B'd on a device without a rebuild.
+   *
+   * The caveats are the create option's, plus one of its own: flipping it takes
+   * effect from the *next* prefetch decision, so turning it off does not abort
+   * an opener that is already running and one more boundary may still be
+   * gapless.
    */
   setPrefetchEnabled(enabled: boolean): void {
     const player = this.#hooks.player()
     if (player === undefined) return
     try {
-      player.setPropertyBool(MpvProperty.prefetchPlaylist, enabled)
+      player.setPrefetchPlaylist(enabled)
       this.#prefetchEnabled = enabled
       this.#hooks.onChange()
     } catch (cause) {
