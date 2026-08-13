@@ -21,9 +21,11 @@ import {
   type SleepTimerState,
 } from '@rn-media/media-session'
 import type { PlayerState } from '@rn-media/player'
+import type { CastReceiverSnapshot } from '@rn-media/cast'
 import { ACCENT_ARGB } from '../theme'
 import type { Track } from '../data/tracks'
 import { durationMs, nowPlaying, toMediaItem, toPlaybackState } from './broadcast'
+import { toCastMediaItem, toCastPlaybackState } from './cast-broadcast'
 import { sessionStorage } from './persistence'
 
 export interface SessionBridgeOptions {
@@ -50,6 +52,8 @@ export class SessionBridge {
   #starting: Promise<void> | undefined
   #restored: PersistedSession | undefined
   #queue: readonly Track[] = []
+  /** While `true`, channels 1–2 carry receiver state — see {@link publishCast}. */
+  #castActive = false
   /** Last broadcast discontinuity signature — see {@link publish}. */
   #lastSignature = ''
   /**
@@ -165,6 +169,38 @@ export class SessionBridge {
     this.#options.onChange()
   }
 
+  /* --- the cast override --------------------------------------------------- */
+
+  /**
+   * While a cast session is active the RECEIVER's state flows through the
+   * same three channels — that is the whole §3 contract: the notification,
+   * the lock screen and the app UI keep working because nothing about the
+   * fan-out changed, only whose facts ride on it. Set with a snapshot to
+   * broadcast receiver state (and silence the local `publish`, whose player
+   * is deliberately paused and would otherwise fight the receiver for the
+   * channels); set `undefined` when the transfer back completes.
+   *
+   * The queue channel is untouched: the JS queue stays the source of truth
+   * on every surface, casting or not.
+   */
+  publishCast(
+    snapshot: CastReceiverSnapshot | undefined,
+    track: Track | undefined
+  ): void {
+    if (snapshot === undefined) {
+      this.#castActive = false
+      // Force the next local publish through: the local signature is stale by
+      // an entire cast session.
+      this.#lastSignature = ''
+      return
+    }
+    this.#castActive = true
+    const service = this.#service
+    if (service === undefined) return
+    service.setMediaItem(track && toCastMediaItem(track, snapshot))
+    service.setPlaybackState(toCastPlaybackState(snapshot))
+  }
+
   /* --- channels ---------------------------------------------------------- */
 
   /** Channel 3. Call whenever the app's queue model changes. */
@@ -235,6 +271,9 @@ export class SessionBridge {
   #broadcast(state: PlayerState, force: boolean, track?: Track): void {
     const service = this.#service
     if (service === undefined) return
+    // The receiver owns channels 1–2 for the whole session; a local snapshot
+    // here is the deliberately-paused mpv, not news.
+    if (this.#castActive) return
     if (force) this.#lastSignature = ''
     const entry = track ?? this.#queue[state.playlist.index]
 

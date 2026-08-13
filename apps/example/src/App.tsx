@@ -59,8 +59,10 @@ import {
 import { COLORS, SPACE, TYPE } from './theme'
 import { usePlayback } from './playback'
 import { durationMs, nowPlaying } from './playback/broadcast'
+import { runCastSelfTest } from './playback/cast-selftest'
 import { sameShell, selectShell } from './playback/shell'
 import { formatTime } from './components/SeekBar'
+import { CastSection } from './components/CastSection'
 import { ErrorBanner } from './components/ErrorBanner'
 import { EqualizerSection } from './components/EqualizerSection'
 import { LoudnessSection } from './components/LoudnessSection'
@@ -183,6 +185,17 @@ function App(): React.JSX.Element {
           onAddLast={(item) => void playback.addLast(item)}
           onRemove={(index) => void playback.removeAt(index)}
           onClear={() => void playback.clearQueue()}
+        />
+
+        {/* Cast is a URL handoff to a second, remote player behind the same
+            broadcast channels: while casting, the transport above and the
+            notification both steer the RECEIVER, because the controller
+            forwards every command to whichever backend owns playback. */}
+        <CastSection
+          cast={playback.cast}
+          queue={playback.queue}
+          ready={ready}
+          onSelfTest={() => runCastSelfTest(playback)}
         />
 
         {/* Repeat renders from the player (`shell.loop`), shuffle from the

@@ -342,8 +342,9 @@ render-API path, fullscreen, background detach/reattach, track selection, subtit
 
 **Phase 5 — Power features**
 Typed DSP/EQ API (subset of mpv_audio_kit's 87 filters), FFT/PCM visualizer streams,
-mpv hooks/source resolvers, Android Auto + CarPlay browse, casting story (out of
-scope for mpv itself — document), persistence decorator.
+mpv hooks/source resolvers, Android Auto + CarPlay browse, casting (a URL handoff
+around mpv, not an mpv output — `@rn-media/cast`; see docs/design/cast.md),
+persistence decorator.
 
 ## 8.1 ROADMAP AS OF 2026-08-12 (the living queue; see the session task board for detail)
 
@@ -398,22 +399,37 @@ loudness-aware fade points recorded as the only worthwhile revisit).
    `screenshot-raw` needs a video output this core never creates, so there is
    no client-API path at all. Native work (decode the attachment ourselves, or
    a fork-side property), and the README formats claim is softened until it
-   lands. Casting is DEFERRED WITH
-   REASON: media3 CastPlayer abandons our engine and AirPlay-from-mpv does
-   not exist — fails the parity gate; revisit only if a documented
-   platform-shaped feature becomes acceptable.
-6. **Casting — design APPROVED 2026-08-13, superseding review of item 5's
-   deferral in progress** (`docs/design/cast.md` is the owner-approved design:
-   first-party `@rn-media/cast` binding over the official sender SDKs on both
-   platforms, receiver-side queue, no local-file HTTP server in v1, AirPlay
-   honestly out of scope). Phasing per cast.md §6: Phase 1 sign-off DONE;
-   Phase 2 — the `@rn-media/cast` package (Nitro Kotlin/Swift binding + expo
-   plugin, pins 22.3.1/4.8.6 registry-verified 2026-08-13) — BUILT, device
-   verification pending; Phase 3 — the media-session handoff state machine —
-   next; Phase 4 — device verification (owner's receiver: Mi Smart Speaker
-   with Google Assistant, audio-only); Phase 5 — docs/scoreboard. The item-5
-   casting verdict prose above stays as-is until Phase 3 lands (the
-   decision-change rule: verdict and implementation move in one commit).
+   lands. ~~Casting is DEFERRED WITH REASON~~ — **that deferral is DEAD
+   (2026-08-13, docs/design/cast.md §0).** Both halves of the old verdict
+   ("media3 CastPlayer abandons our engine"; "AirPlay-from-mpv does not exist
+   — fails the parity gate") were answered, not argued away: casting is a
+   **URL handoff**, not an output route — the engine is *paused* for the
+   session and resumes at the receiver's position, so no player is abandoned
+   (mpv can never cast as an *output*; that is an argument *for* the handoff
+   model) — and the parity gate passes because the **Google Cast sender SDK
+   is first-party on both platforms** (Chromecast-on-both; the paid
+   competitor's Android-only-Chromecast / iOS-only-AirPlay split is exactly
+   the compromise our gate rejects). AirPlay stays honestly out of scope: no
+   sender SDK exists for third-party engines. Shipped as `@rn-media/cast` —
+   see item 6.
+6. **Casting — design APPROVED 2026-08-13; the item-5 deferral is rewritten
+   above in the same change (the decision-change rule).** `docs/design/cast.md`
+   is the owner-approved design: first-party `@rn-media/cast` binding over the
+   official sender SDKs on both platforms, receiver-side queue, no local-file
+   HTTP server in v1, AirPlay honestly out of scope. Phasing per cast.md §6:
+   Phase 1 sign-off DONE; Phase 2 — the `@rn-media/cast` package (Nitro
+   Kotlin/Swift binding + expo plugin, pins 22.3.1/4.8.6 registry-verified
+   2026-08-13) — BUILT; Phase 3 — the handoff state machine — BUILT: a pure,
+   exhaustively-tested reducer (`reduceCastHandoff`, cast.md §3 verbatim) plus
+   `wireCastHandoff`, living in **@rn-media/cast, not media-session** (which
+   stays cast-free; the handoff takes structural player/queue interfaces, the
+   `AudioSessionPlayerLike` discipline), with the example app's controller/
+   SessionBridge integration broadcasting the RECEIVER's state through the
+   existing three channels while casting (ARCHITECTURE §25); Phase 4 — device
+   verification against the owner's Mi Smart Speaker (Google Assistant,
+   audio-only): scripted self-test in the example's Cast section, Android
+   findings recorded in ARCHITECTURE §25, iOS parity via CI + a macOS device
+   session still owed; Phase 5 — docs/scoreboard (README row) still owed.
 
 **Standing maintenance queue:** darwin `-dead_strip` size stage via CI
 (deferred from the size release, size-only); mbedTLS section-flags (~1.1 MB
@@ -502,8 +518,11 @@ device-verified 2026-08-10.
 
 **Fundamental limits (document, don't fight):** no DRM (Widevine/FairPlay) — mpv
 cannot; target audience is non-DRM audio (indie/self-hosted/Plex/Jellyfin/
-Subsonic/podcasts/radio/audiobooks). Chromecast = Cast SDK, app-level (same as
-every RN player). AirPlay audio works via iOS system routing.
+Subsonic/podcasts/radio/audiobooks). Chromecast = Cast SDK URL handoff — ours
+first-party via `@rn-media/cast` on both platforms (docs/design/cast.md); an
+mpv *output* to a receiver can never exist. AirPlay audio works via iOS system
+routing only; no third-party sender SDK exists, so it stays honestly out of
+scope as a feature claim.
 
 ## 9. Risks
 

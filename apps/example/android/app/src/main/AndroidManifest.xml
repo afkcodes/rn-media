@@ -49,5 +49,30 @@
           <action android:name="android.intent.action.MEDIA_BUTTON" />
         </intent-filter>
       </receiver>
+
+      <!--
+        @rn-media/cast (pasted by hand — this is a bare-RN app; the Expo
+        plugin writes exactly this pair for prebuild apps).
+
+        The Cast framework instantiates the OptionsProvider reflectively at
+        CastContext init; without the meta-data, initialize() resolves the
+        typed 'unavailable'. No RECEIVER_APPLICATION_ID meta-data on purpose:
+        the zero-config default is Google's Default Media Receiver.
+      -->
+      <meta-data
+        android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+        android:value="com.rnmediacast.RnMediaCastOptionsProvider" />
+
+      <!--
+        Output-switcher stream transfer (Android 13+ system picker): this
+        declaration is what lets the system move a stream phone ↔ receiver.
+        Requirements checklist (developers.google.com/cast/docs/android_sender/
+        output_switcher): this receiver, cast-framework ≥ 21.2 (we pin 22.3.1),
+        a real media notification (we have one), and
+        CastOptions.setRemoteToLocalEnabled — set in RnMediaCastOptionsProvider.
+      -->
+      <receiver
+        android:name="androidx.mediarouter.media.MediaTransferReceiver"
+        android:exported="true" />
     </application>
 </manifest>
