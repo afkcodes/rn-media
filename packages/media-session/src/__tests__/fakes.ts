@@ -37,6 +37,13 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
 
   handlers: MediaSessionHandlers | undefined
 
+  /**
+   * The one callback the real native side retains **across `stopService`** —
+   * mirrors `MediaSessionController.revivalRequester`, which exists precisely
+   * for the after-stop window (see the spec's `onRevivalRequested`).
+   */
+  revivalRequester: (() => void) | undefined
+
   initialize(
     config: MediaSessionConfig,
     handlers: MediaSessionHandlers
@@ -46,6 +53,9 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
       return Promise.reject(this.initializeError)
     }
     this.handlers = handlers
+    // Captured like the Kotlin controller captures it: at initialize, before
+    // anything async, and independently of `handlers`' own lifetime.
+    this.revivalRequester = handlers.onRevivalRequested
     return Promise.resolve()
   }
 
@@ -126,8 +136,22 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
     if (this.stopServiceError != null) {
       return Promise.reject(this.stopServiceError)
     }
+    // `revivalRequester` deliberately survives — same as the Kotlin side.
     this.handlers = undefined
     return Promise.resolve()
+  }
+
+  /**
+   * Play the part of `RnMediaMediaSessionService.onRuntimeReady`: a revival
+   * began and the service is asking the (still-alive) runtime to re-init.
+   * Legal after `stopService()` — that is the whole point.
+   */
+  emitRevivalRequested(): void {
+    const requester = this.revivalRequester
+    if (requester === undefined) {
+      throw new Error('[test] emitRevivalRequested() before initialize().')
+    }
+    requester()
   }
 
   // --- HybridObject surface (unused by this package, present for the type) ---

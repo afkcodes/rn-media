@@ -225,13 +225,24 @@ export interface MediaServiceConfig {
      *
      * @default false — opt-in until it is proven on more hardware than ours.
      *
-     * Requires all three, and says so in the log when one is missing:
+     * Requires all four, and says so in the log when one is missing:
      * 1. `withPersistence(service, storage)` — it writes the native mirror the
      *    service reads with no JS alive.
-     * 2. `MediaService.init(...)` reachable at **JS module scope**. A revived
-     *    runtime loads your bundle but mounts no component, so an `init` inside
-     *    a `useEffect` never runs.
-     * 3. media3's `MediaButtonReceiver` in your `AndroidManifest.xml`:
+     * 2. `MediaService.init(...)` reachable at **JS module scope**, in a module
+     *    your **entry file imports for its side effects**
+     *    (`import './src/playback'` in `index.js`). A revived runtime loads
+     *    your bundle but mounts no component, so an `init` inside a `useEffect`
+     *    never runs — and Metro's release-mode **inline requires** goes
+     *    further: an `import { x } from './m'` whose bindings are only used
+     *    inside a component defers `./m`'s module scope to the first *render*,
+     *    which a headless runtime never performs. Only a bare side-effect
+     *    import in the entry file's own graph is guaranteed to execute at
+     *    bundle load.
+     * 3. {@link onRevivalRequested} — the same recovery for a runtime that is
+     *    still **alive**: after `stopService()` the resumption card can start
+     *    the service into a process whose module scope already ran and cannot
+     *    run again, so the service asks the app to re-initialize instead.
+     * 4. media3's `MediaButtonReceiver` in your `AndroidManifest.xml`:
      *
      *    ```xml
      *    <receiver android:name="androidx.media3.session.MediaButtonReceiver"
@@ -263,6 +274,46 @@ export interface MediaServiceConfig {
      * purpose, not by accident.
      */
     playbackResumption?: boolean
+    /**
+     * Called when the media service needs this app to run its `init` path
+     * again, **now** — the missing half of {@link playbackResumption} for a JS
+     * runtime that is still alive.
+     *
+     * ## The scenario, concretely
+     * The user presses your stop button; `stopService()` ends the session and
+     * clears the handlers, but the System UI keeps offering its media
+     * resumption card (stop ends *background execution*, not the user's place
+     * in the album — the persisted record deliberately survives). The user
+     * taps play on that card. The OS starts the media service into your
+     * still-running process; the service rebuilds the session from the
+     * persisted mirror and waits for `MediaService.init`. In a **killed**
+     * process that init arrives by itself — booting the runtime re-runs your
+     * module scope. In an **alive** process the module scope already ran and
+     * will never run again, so without this callback the revival times out
+     * after 10 s and the card's play button silently does nothing.
+     *
+     * ## What to do in it
+     * Run exactly what your module scope runs — your idempotent "bring the
+     * session up" path, ending in `MediaService.init(...)` (plus your
+     * `withPersistence` wrapping and catch-up broadcasts). It is invoked only
+     * while the service is actually waiting (never while an `init` is already
+     * in flight or the session is up), so calling `init` from it is safe:
+     *
+     * ```ts
+     * android: {
+     *   playbackResumption: true,
+     *   onRevivalRequested: () => void playback.start(),
+     * }
+     * ```
+     *
+     * ## Lifetime
+     * Registered at `init` and — unlike the handlers — **retained across
+     * `stopService()`**, because the window it exists for is precisely
+     * "after stop, before the next init". Replaced by the next `init`;
+     * dropped with the runtime on a dev reload. Never invoked on iOS, which
+     * has no service to revive (see {@link playbackResumption}).
+     */
+    onRevivalRequested?: () => void
     /**
      * Notification accent colour as an **ARGB integer** — `0xFF1DB954`.
      *

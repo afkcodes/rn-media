@@ -107,10 +107,23 @@ export class SessionBridge {
           // pick a value it can defend); this one is a test bed.
           stopForegroundTimeoutMs: 15_000,
           // Opt in to coming back from the dead. Paired with the
-          // `MediaButtonReceiver` in this app's AndroidManifest.xml and with
-          // `withPersistence` below — all three are required, and the
-          // library logs which one is missing.
+          // `MediaButtonReceiver` in this app's AndroidManifest.xml, with
+          // `withPersistence` below, and with the two revival entry points
+          // (the eager `import './src/playback'` in index.js and
+          // `onRevivalRequested` here) — all are required, and the library
+          // logs which one is missing.
           playbackResumption: true,
+          // The alive-process half of resumption. After `stop()` the System
+          // UI still offers its resumption card (stop ends background
+          // execution, not the user's place in the album), but this process
+          // already ran its module scope — the thing that re-inits a KILLED
+          // process — and cannot run it again. So when the card (or a media
+          // button) starts the service and the runtime is found alive, the
+          // service asks the app to bring the session back up, and `ensure()`
+          // is precisely this app's idempotent init path. The library only
+          // fires this while no init is up or in flight, so `ensure`'s
+          // `#starting` latch is never raced.
+          onRevivalRequested: () => void this.ensure(),
           // The app accent on the notification — full ARGB, alpha included
           // (`0x1F6FEB` alone would be transparent black). A hint, not a
           // guarantee: Android 12+ media shades often derive their palette
@@ -334,6 +347,16 @@ export class SessionBridge {
     this.#service = undefined
     this.#starting = undefined
     this.#lastSignature = ''
+    // Checkpoint at the stop moment — the TSDoc on `save()` names "just before
+    // a deliberate stopService()" as one of the moments worth taking, and this
+    // is why: the pause that precedes a stop round-trips through mpv and comes
+    // back as a broadcast *after* this teardown has already detached the tee,
+    // so without this line the last persisted position is whatever the last
+    // discontinuity happened to be — possibly minutes stale. `save()` re-projects
+    // the live anchor to now, so the resumption card resumes where the user
+    // actually pressed stop. (Verified on device: mirror read back 91.5 s where
+    // the stop happened at 120 s before this line existed.)
+    service?.save()
     await service?.stopService()
   }
 }

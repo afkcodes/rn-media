@@ -121,6 +121,47 @@ internal object MediaSessionController : CommandDispatcher {
   /** `true` once [dispatch] has held a command for a runtime that does not exist. */
   private var revivalPending = false
 
+  /**
+   * The app's `onRevivalRequested` callback — the one Nitro function that
+   * **survives [stop]**.
+   *
+   * Every other callback is cleared there, because after a stop nothing may
+   * reach a handler the app has discarded. This one is the exception by
+   * definition: it exists for exactly the window *after* a stop, when the OS
+   * starts the service again (System UI resumption card, media button) into a
+   * process whose JS runtime is alive but whose module scope — the thing that
+   * saves a cold revival — already ran and can never run again. Invoking it is
+   * how the service asks the live runtime to run its `init` path once more.
+   *
+   * Cleared only when the runtime it belongs to is about to die (the
+   * before-destroy hook in [initialize]) — a Nitro function from a destroyed
+   * runtime is not callable — and replaced by the next [initialize].
+   *
+   * `@Volatile`: written on the JS thread ([initialize]), read on the main
+   * thread ([requestRevival]).
+   */
+  @Volatile
+  private var revivalRequester: (() -> Unit)? = null
+
+  /**
+   * Ask the live JS runtime to re-run its `init` path, if the app registered
+   * for that. Main thread only (called from the service's runtime-ready hook).
+   *
+   * Returns whether a request was actually delivered — the caller logs the
+   * difference, because "the app will re-init any moment" and "only a
+   * module-scope init can save this revival" have different failure messages
+   * when the watchdog later fires.
+   *
+   * Harmless in a cold boot: a fresh process has no requester until its
+   * module-scope `init` reaches [initialize], and the TS side additionally
+   * swallows requests that race an init already in flight.
+   */
+  fun requestRevival(): Boolean {
+    val requester = revivalRequester ?: return false
+    requester()
+    return true
+  }
+
   fun snapshot(): Snapshot = current
 
   // MARK: - Lifecycle
@@ -167,10 +208,20 @@ internal object MediaSessionController : CommandDispatcher {
           "  </receiver>",
       )
     }
+    // The requester is registered before the main-thread hop so a revival
+    // racing this very initialize sees it — and, unlike `handlers`, it is NOT
+    // cleared by `stop` (see its declaration).
+    revivalRequester = handlers.onRevivalRequested
     // A dev reload destroys the JS runtime and every Nitro callback with it. If
     // that happens while a session is up, the notification would survive with
-    // dead buttons — so tear the session down first. See `ReactRuntime`.
-    beforeDestroy = ReactRuntime.addBeforeDestroyListener(application) { stop {} }
+    // dead buttons — so tear the session down first. See `ReactRuntime`. The
+    // revival requester dies here too: `stop` deliberately keeps it (it exists
+    // for the after-stop window), so the runtime's death is the one moment it
+    // must be dropped by hand.
+    beforeDestroy = ReactRuntime.addBeforeDestroyListener(application) {
+      revivalRequester = null
+      stop {}
+    }
     main.post {
       // **The handover.** In a playback resumption the service has already
       // built a `BroadcastPlayer` and handed it to a live `MediaLibrarySession`;
