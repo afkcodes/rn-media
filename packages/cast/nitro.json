@@ -1,0 +1,30 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": [
+    "rnmediacast"
+  ],
+  "ios": {
+    "iosModuleName": "RnMediaCast"
+  },
+  "android": {
+    "androidNamespace": [
+      "rnmediacast"
+    ],
+    "androidCxxLibName": "RnMediaCast"
+  },
+  "autolinking": {
+    "RnMediaCast": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridRnMediaCast"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridRnMediaCast"
+      }
+    }
+  },
+  "ignorePaths": [
+    "**/node_modules"
+  ]
+}

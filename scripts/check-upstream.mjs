@@ -329,6 +329,32 @@ function readMedia3Pin() {
 }
 
 /**
+ * The Cast sender pair (design doc: docs/design/cast.md §7 — "check-upstream
+ * gains rows"). Android pin lives in the gradle.properties key build.gradle
+ * reads (`RnMediaCast_castFrameworkVersion`); iOS is the exact-pinned
+ * `google-cast-sdk` dependency in the podspec. Both are exact pins on purpose
+ * — Google's own iOS 4.8.0/4.8.1 broke discovery — so lag must be LOUD here,
+ * never silent.
+ */
+function readCastAndroidPin() {
+  const file = join(REPO_ROOT, 'packages/cast/android/gradle.properties');
+  const text = readIfExists(file);
+  if (text == null) return { file, version: null, line: null, error: 'packages/cast/android/gradle.properties not found' };
+  const m = /^[ \t]*RnMediaCast_castFrameworkVersion[ \t]*=[ \t]*([^\s#]+)/m.exec(text);
+  if (!m) return { file, version: null, line: null, error: 'no RnMediaCast_castFrameworkVersion key' };
+  return { file, version: m[1], line: lineOf(text, /RnMediaCast_castFrameworkVersion[ \t]*=/), error: null };
+}
+
+function readCastIosPin() {
+  const file = join(REPO_ROOT, 'packages/cast/RnMediaCast.podspec');
+  const text = readIfExists(file);
+  if (text == null) return { file, version: null, line: null, error: 'packages/cast/RnMediaCast.podspec not found' };
+  const m = /s\.dependency\s+['"]google-cast-sdk['"]\s*,\s*['"]([^'"]+)['"]/.exec(text);
+  if (!m) return { file, version: null, line: null, error: 'no google-cast-sdk dependency in the podspec' };
+  return { file, version: m[1], line: lineOf(text, /s\.dependency\s+['"]google-cast-sdk['"]/), error: null };
+}
+
+/**
  * Every package.json in the workspace (root, packages/*, apps/*).
  * peerDependencies are deliberately excluded: those are compatibility FLOORS
  * (`react-native: ">=0.82.0"`), not pins, and treating a floor as a pin would
@@ -465,6 +491,38 @@ async function fetchMedia3Latest() {
   if (!m) return { error: '<release> not present in maven-metadata.xml' };
   const upd = /<lastUpdated>(\d{4})(\d{2})(\d{2})/.exec(r.text);
   return { version: m[1].trim(), date: upd ? `${upd[1]}-${upd[2]}-${upd[3]}` : '' };
+}
+
+/** play-services-cast-framework via Google Maven's maven-metadata.xml `<release>`. */
+async function fetchCastFrameworkLatest() {
+  const url =
+    'https://dl.google.com/dl/android/maven2/com/google/android/gms/play-services-cast-framework/maven-metadata.xml';
+  const r = await request(url, { headers: { accept: 'application/xml' } });
+  if (!r.ok) return { error: r.error };
+  const m = /<release>([^<]+)<\/release>/.exec(r.text);
+  if (!m) return { error: '<release> not present in maven-metadata.xml' };
+  const upd = /<lastUpdated>(\d{4})(\d{2})(\d{2})/.exec(r.text);
+  return { version: m[1].trim(), date: upd ? `${upd[1]}-${upd[2]}-${upd[3]}` : '' };
+}
+
+/**
+ * google-cast-sdk via the CocoaPods trunk API — the registry of record for
+ * pods (the CDN index files are sharded by name hash and are messier to
+ * parse). Versions like `4.8.1.2` sort fine through compareVersions.
+ */
+async function fetchCocoapodLatest(/** @type {string} */ pod) {
+  const r = await getJson(`https://trunk.cocoapods.org/api/v1/pods/${encodeURIComponent(pod)}`);
+  if (!r.ok) return { error: r.error };
+  const versions = r.data?.versions;
+  if (!Array.isArray(versions) || versions.length === 0) return { error: 'no versions in trunk payload' };
+  let best = null;
+  for (const v of versions) {
+    const name = String(v?.name ?? '');
+    if (!/^\d+(\.\d+){1,3}$/.test(name)) continue; // skip prereleases, if any ever appear
+    if (best == null || compareVersions(name, best.name) > 0) best = { name, date: isoDate(v?.created_at) };
+  }
+  if (best == null) return { error: 'no stable versions in trunk payload' };
+  return { version: best.name, date: best.date };
 }
 
 /**
@@ -656,6 +714,8 @@ async function collect() {
   const android = readAndroidEnginePin();
   const ios = readIosEnginePin();
   const media3Pin = readMedia3Pin();
+  const castAndroidPin = readCastAndroidPin();
+  const castIosPin = readCastIosPin();
   const pkgs = readWorkspacePackageJsons();
   const nitroRuntime = collapseNpmPin(pkgs, 'react-native-nitro-modules');
   const nitrogen = collapseNpmPin(pkgs, 'nitrogen');
@@ -686,6 +746,8 @@ async function collect() {
     mpv,
     ffmpeg,
     media3,
+    castFramework,
+    castIosSdk,
     nitroRuntimeLatest,
     nitrogenLatest,
     rnLatest,
@@ -698,6 +760,8 @@ async function collect() {
     fetchMpvLatest(),
     fetchFfmpegLines(),
     fetchMedia3Latest(),
+    fetchCastFrameworkLatest(),
+    fetchCocoapodLatest('google-cast-sdk'),
     fetchNpmLatest('react-native-nitro-modules'),
     fetchNpmLatest('nitrogen'),
     fetchNpmLatest('react-native'),
@@ -977,6 +1041,40 @@ async function collect() {
       notes: [
         media3Pin.version && `pin: ${rel(media3Pin.file)}${media3Pin.line ? `:${media3Pin.line}` : ''}`,
         'Google Maven <release>; date is the metadata lastUpdated',
+      ],
+    }),
+  );
+
+  // ── the Cast sender pair (docs/design/cast.md §7). Exact pins on purpose:
+  //    Google's own iOS 4.8.0/4.8.1 broke discovery, so "just float" is not an
+  //    option and lag must be surfaced here instead.
+  rows.push(
+    compareRow({
+      component: 'play-services-cast-framework',
+      ours: castAndroidPin.version,
+      oursError: castAndroidPin.error,
+      latest: 'error' in castFramework ? null : castFramework.version,
+      latestError: 'error' in castFramework ? castFramework.error : null,
+      released: 'error' in castFramework ? '' : castFramework.date,
+      notes: [
+        castAndroidPin.version &&
+          `pin: ${rel(castAndroidPin.file)}${castAndroidPin.line ? `:${castAndroidPin.line}` : ''}`,
+        'Google Maven <release>; the framework itself is a dynamite shell — the real code ships with Play services',
+      ],
+    }),
+  );
+  rows.push(
+    compareRow({
+      component: 'google-cast-sdk (iOS)',
+      ours: castIosPin.version,
+      oursError: castIosPin.error,
+      latest: 'error' in castIosSdk ? null : castIosSdk.version,
+      latestError: 'error' in castIosSdk ? castIosSdk.error : null,
+      released: 'error' in castIosSdk ? '' : castIosSdk.date,
+      notes: [
+        castIosPin.version &&
+          `pin: ${rel(castIosPin.file)}${castIosPin.line ? `:${castIosPin.line}` : ''}`,
+        'CocoaPods trunk; bump the podspec pin, not a lockfile — 4.8.0/4.8.1 shipped broken discovery, so re-verify on-device per the playbook',
       ],
     }),
   );

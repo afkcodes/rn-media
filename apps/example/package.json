@@ -14,6 +14,7 @@
   "dependencies": {
     "@react-native/new-app-screen": "0.86.2",
     "@rn-media/audio-session": "*",
+    "@rn-media/cast": "*",
     "@rn-media/media-session": "*",
     "@rn-media/player": "*",
     "react": "19.2.3",

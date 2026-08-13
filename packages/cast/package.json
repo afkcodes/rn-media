@@ -1,0 +1,141 @@
+{
+  "name": "@rn-media/cast",
+  "version": "0.1.0",
+  "description": "First-party Google Cast sender binding, audio-scoped: discovery, sessions, RemoteMediaClient + receiver queue, typed errors — powered by Nitro Modules",
+  "main": "./lib/commonjs/index.js",
+  "module": "./lib/module/index.js",
+  "types": "./lib/typescript/src/index.d.ts",
+  "react-native": "src/index",
+  "source": "src/index",
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p plugin/tsconfig.test.json",
+    "clean": "git clean -dfX",
+    "release": "semantic-release",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:android": "cd ../../apps/example/android && ./gradlew :rn-media_cast:testReleaseUnitTest -PreactNativeArchitectures=arm64-v8a",
+    "lint:android": "cd ../../apps/example/android && ./gradlew :rn-media_cast:lintRelease -PreactNativeArchitectures=arm64-v8a",
+    "build": "npm run typecheck && bob build && npm run build:plugin",
+    "build:plugin": "tsc -p plugin",
+    "codegen": "nitrogen --logLevel=\"debug\" && npm run build",
+    "pod": "npm --prefix ../../apps/example run pod"
+  },
+  "keywords": [
+    "react-native",
+    "nitro-modules",
+    "chromecast",
+    "google-cast",
+    "cast",
+    "remote-playback"
+  ],
+  "files": [
+    "src",
+    "!src/__tests__",
+    "lib",
+    "app.plugin.js",
+    "plugin/build",
+    "nitrogen",
+    "nitro.json",
+    "android/build.gradle",
+    "android/fix-prefab.gradle",
+    "android/gradle.properties",
+    "android/CMakeLists.txt",
+    "android/src",
+    "!android/src/test",
+    "ios/**/*.h",
+    "ios/**/*.m",
+    "ios/**/*.mm",
+    "ios/**/*.cpp",
+    "ios/**/*.swift",
+    "*.podspec",
+    "README.md"
+  ],
+  "repository": "https://github.com/afkcodes/rn-media.git",
+  "author": "Ashish Kumar",
+  "license": "MIT",
+  "bugs": "https://github.com/afkcodes/rn-media/issues",
+  "homepage": "https://github.com/afkcodes/rn-media#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "devDependencies": {
+    "@jamesacarr/eslint-formatter-github-actions": "^0.2.0",
+    "@semantic-release/changelog": "^7.0.0",
+    "@semantic-release/git": "^11.0.1",
+    "@types/node": "^26.2.0",
+    "@types/react": "19.2.0",
+    "conventional-changelog-conventionalcommits": "^10.2.1",
+    "expo": "^57.0.11",
+    "nitrogen": "^0.36.5",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-builder-bob": "^0.43.0",
+    "react-native-nitro-modules": "^0.36.5",
+    "semantic-release": "^25.0.7",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "expo": ">=55.0.0",
+    "react": "*",
+    "react-native": ">=0.82.0",
+    "react-native-nitro-modules": "*"
+  },
+  "peerDependenciesMeta": {
+    "expo": {
+      "optional": true
+    }
+  },
+  "eslintConfig": {
+    "root": true,
+    "extends": [
+      "@react-native",
+      "prettier"
+    ],
+    "plugins": [
+      "prettier"
+    ],
+    "rules": {
+      "prettier/prettier": [
+        "warn",
+        {
+          "quoteProps": "consistent",
+          "singleQuote": true,
+          "tabWidth": 2,
+          "trailingComma": "es5",
+          "useTabs": false
+        }
+      ]
+    }
+  },
+  "eslintIgnore": [
+    "node_modules/",
+    "lib/",
+    "android/build/",
+    "plugin/build/",
+    "nitrogen/"
+  ],
+  "prettier": {
+    "quoteProps": "consistent",
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "es5",
+    "useTabs": false,
+    "semi": false
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      "commonjs",
+      "module",
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json"
+        }
+      ]
+    ]
+  }
+}

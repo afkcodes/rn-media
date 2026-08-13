@@ -5,7 +5,12 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
-platform :ios, min_ios_version_supported
+# 16.0, not RN's `min_ios_version_supported` (15.1): @rn-media/cast depends on
+# the google-cast-sdk pod, whose own floor is iOS 16 — the same bump every app
+# installing the cast package makes (see packages/cast/README.md, "iOS 16
+# requirement"). CocoaPods enforces it at install time, so leaving 15.1 here
+# would fail `pod install` outright.
+platform :ios, '16.0'
 prepare_react_native_project!
 
 linkage = ENV['USE_FRAMEWORKS']
