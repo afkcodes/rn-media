@@ -739,6 +739,31 @@ export interface MediaSessionHandlers {
    * later whether or not you implement this.
    */
   onPlaybackResumption: () => void
+  /**
+   * Android only: a revival started while this JS runtime was **already
+   * alive**, and the service needs `initialize` to be called again before it
+   * can hand the session over.
+   *
+   * The one caller is `RnMediaMediaSessionService.onRuntimeReady`, and the one
+   * scenario is stop-then-resume without a process death: `stopService()` tore
+   * the session down (handlers cleared, service stopped), the System UI's
+   * resumption card or a media button starts the service again, and the
+   * runtime it finds is the same one that already ran its module scope — so
+   * the module-scope `init` that saves a *cold* revival can never run again.
+   * This callback is how native asks the live runtime to re-initialize.
+   *
+   * Unlike every other member of this struct, native retains it **across
+   * `stopService`** (see `MediaSessionController.revivalRequester`): it exists
+   * precisely for the window in which the ordinary handlers are gone. It is
+   * dropped when the runtime itself is torn down (dev reload), which is the
+   * only point it could dangle.
+   *
+   * The TS layer routes it to `MediaServiceConfig.android.onRevivalRequested`
+   * and swallows it while `init` is idle-less (already initializing or ready),
+   * so a cold revival — where module-scope `init` is already in flight when
+   * the runtime-ready signal fires — never double-initializes.
+   */
+  onRevivalRequested: () => void
 }
 
 /* -------------------------------------------------------------------------- */

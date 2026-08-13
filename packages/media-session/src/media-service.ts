@@ -60,6 +60,16 @@ export function createMediaService(
   let state: LifecycleState = 'idle'
   let handler: MediaHandler | undefined
   let onHandlerError = defaultOnHandlerError
+  /**
+   * The app's `android.onRevivalRequested` callback.
+   *
+   * Deliberately **not** cleared by `stopService()`: the one moment it exists
+   * for is *after* a stop, when the media service was started again (System UI
+   * resumption card, media button) into a runtime whose module scope already
+   * ran — see the native `MediaSessionHandlers.onRevivalRequested` docs.
+   * Replaced by the next `init`; dies with the runtime.
+   */
+  let revivalCallback: (() => void) | undefined
 
   /**
    * Invoke a handler method and return *now*.
@@ -137,6 +147,28 @@ export function createMediaService(
     onSleepTimer: () => dispatch('onSleepTimer', (h) => h.onSleepTimer?.()),
     onPlaybackResumption: () =>
       dispatch('onPlaybackResumption', (h) => h.onPlaybackResumption?.()),
+    onRevivalRequested: () => {
+      // Only a torn-down session has anything to revive into. `initializing`
+      // means a module-scope (cold-boot) init is already racing this signal and
+      // will complete the revival by itself; `ready` means there is nothing to
+      // do. Both are normal, not errors.
+      if (state !== 'idle') return
+      const target = revivalCallback
+      if (target === undefined) return
+      try {
+        target()
+      } catch (error) {
+        // Not routed through `onHandlerError`: that channel is typed to
+        // `keyof MediaHandler` and this is a config callback, not a handler —
+        // widening the union would break apps that annotated the parameter.
+        // Fire-and-forget has no caller left to reject to, so the console is
+        // the honest floor (never swallowed).
+        console.error(
+          '[media-session] android.onRevivalRequested threw:',
+          error
+        )
+      }
+    },
   }
 
   function assertReady(call: string): void {
@@ -240,6 +272,10 @@ export function createMediaService(
       try {
         const nativeConfig = normalizeConfig(config)
         onHandlerError = config.onHandlerError ?? defaultOnHandlerError
+        // Registered (or replaced) before the native call, and never cleared
+        // by `stopService()` — see its declaration for why it must outlive
+        // the session it was registered with.
+        revivalCallback = config.android?.onRevivalRequested
         handler = handlerFactory()
         await native.initialize(nativeConfig, handlers)
         state = 'ready'

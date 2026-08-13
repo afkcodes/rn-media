@@ -18,7 +18,7 @@ public extension MediaSessionHandlers {
   /**
    * Create a new instance of `MediaSessionHandlers`.
    */
-  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void) {
+  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void, onRevivalRequested: @escaping () -> Void) {
     self.init({ () -> bridge.Func_void in
       let __closureWrapper = Func_void(play)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
@@ -60,6 +60,9 @@ public extension MediaSessionHandlers {
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
     }(), { () -> bridge.Func_void in
       let __closureWrapper = Func_void(onPlaybackResumption)
+      return bridge.create_Func_void(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void in
+      let __closureWrapper = Func_void(onRevivalRequested)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
     }())
   }
@@ -198,6 +201,16 @@ public extension MediaSessionHandlers {
   var onPlaybackResumption: () -> Void {
     return { () -> () -> Void in
       let __wrappedFunction = bridge.wrap_Func_void(self.__onPlaybackResumption)
+      return { () -> Void in
+        __wrappedFunction.call()
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var onRevivalRequested: () -> Void {
+    return { () -> () -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void(self.__onRevivalRequested)
       return { () -> Void in
         __wrappedFunction.call()
       }

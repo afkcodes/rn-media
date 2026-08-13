@@ -542,6 +542,15 @@ export function normalizeConfig(
           `${JSON.stringify(android.playbackResumption)}.`
       )
     }
+    if (
+      android.onRevivalRequested !== undefined &&
+      typeof android.onRevivalRequested !== 'function'
+    ) {
+      throw invalidArgument(
+        `config.android.onRevivalRequested must be a function, got ` +
+          `${JSON.stringify(android.onRevivalRequested)}.`
+      )
+    }
     if (android.stopForegroundTimeoutMs !== undefined) {
       assertFinite(
         android.stopForegroundTimeoutMs,

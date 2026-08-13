@@ -284,6 +284,28 @@ describe('normalizeConfig', () => {
     })
   })
 
+  describe('onRevivalRequested', () => {
+    const base = {
+      notificationChannelId: 'playback',
+      notificationChannelName: 'Playback',
+    }
+
+    it('rejects a non-function rather than registering garbage', () => {
+      expect(() =>
+        normalizeConfig({
+          android: { ...base, onRevivalRequested: 'later' as any },
+        })
+      ).toThrowError(/onRevivalRequested must be a function/)
+    })
+
+    it('never reaches the native config — it is a JS-side registration', () => {
+      const native = normalizeConfig({
+        android: { ...base, onRevivalRequested: () => {} },
+      })
+      expect(native.android).not.toHaveProperty('onRevivalRequested')
+    })
+  })
+
   describe('stopForegroundTimeoutMs', () => {
     const base = {
       notificationChannelId: 'playback',

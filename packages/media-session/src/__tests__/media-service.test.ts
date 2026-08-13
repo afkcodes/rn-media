@@ -385,3 +385,145 @@ describe('repeat and shuffle fan-in (B2)', () => {
     })
   })
 })
+
+/* -------------------------------------------------------------------------- */
+/*                  onRevivalRequested (bug #47, stop-then-resume)            */
+/* -------------------------------------------------------------------------- */
+
+describe('android.onRevivalRequested', () => {
+  const withCallback = (onRevivalRequested: () => void) => ({
+    android: {
+      notificationChannelId: 'playback',
+      notificationChannelName: 'Playback',
+      onRevivalRequested,
+    },
+  })
+
+  it('re-runs the app init path when a revival starts after stopService', async () => {
+    const revive = vi.fn()
+    const { native, service } = await ready(withCallback(revive))
+    await service.stopService()
+
+    // The service found a live runtime whose module scope cannot run again,
+    // and asked for an init. This is the owner-reported bug: before the fix
+    // this had no path to the app at all and the card's play silently died.
+    native.emitRevivalRequested()
+
+    expect(revive).toHaveBeenCalledTimes(1)
+  })
+
+  it('a callback that calls init() brings the session fully back', async () => {
+    const native = new FakeNativeMediaSession()
+    const controller = createMediaService(native)
+    const revive = vi.fn(() => {
+      void controller.init(() => new RecordingHandler(), withCallback(revive))
+    })
+    const service = await controller.init(
+      () => new RecordingHandler(),
+      withCallback(revive)
+    )
+    await service.stopService()
+
+    native.emitRevivalRequested()
+    // The re-init is async (init awaits native.initialize); let it settle.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(revive).toHaveBeenCalledTimes(1)
+    expect(native.configs).toHaveLength(2)
+    // The revived session dispatches commands again.
+    native.emit().play()
+  })
+
+  it('is swallowed while the session is up — never a double init', async () => {
+    const revive = vi.fn()
+    const { native } = await ready(withCallback(revive))
+
+    // A runtime-ready signal racing an already-ready session (e.g. a cold
+    // boot whose module-scope init just finished) must not re-enter the app.
+    native.emitRevivalRequested()
+
+    expect(revive).not.toHaveBeenCalled()
+  })
+
+  it('is swallowed while an init is already in flight', async () => {
+    const revive = vi.fn()
+    class GatedNative extends FakeNativeMediaSession {
+      override initialize(
+        ...args: Parameters<FakeNativeMediaSession['initialize']>
+      ): Promise<void> {
+        // Capture handlers/requester synchronously — the Kotlin controller
+        // registers the requester at the top of initialize — but never
+        // resolve, freezing the service in `initializing`.
+        void super.initialize(...args)
+        return new Promise<void>(() => {})
+      }
+    }
+    const native = new GatedNative()
+    void createMediaService(native).init(
+      () => new RecordingHandler(),
+      withCallback(revive)
+    )
+
+    native.emitRevivalRequested()
+
+    expect(revive).not.toHaveBeenCalled()
+  })
+
+  it('survives stopService but is replaced by the next init', async () => {
+    const first = vi.fn()
+    const second = vi.fn()
+    const native = new FakeNativeMediaSession()
+    const controller = createMediaService(native)
+
+    const one = await controller.init(
+      () => new RecordingHandler(),
+      withCallback(first)
+    )
+    await one.stopService()
+    const two = await controller.init(
+      () => new RecordingHandler(),
+      withCallback(second)
+    )
+    await two.stopService()
+
+    native.emitRevivalRequested()
+
+    expect(first).not.toHaveBeenCalled()
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing (and does not throw) when the app registered no callback', async () => {
+    const { native, service } = await ready()
+    await service.stopService()
+
+    expect(() => native.emitRevivalRequested()).not.toThrow()
+  })
+
+  it('reports a throwing callback to the console instead of letting it escape', async () => {
+    const error = new Error('revive boom')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { native, service } = await ready(
+        withCallback(() => {
+          throw error
+        })
+      )
+      await service.stopService()
+
+      expect(() => native.emitRevivalRequested()).not.toThrow()
+      expect(consoleError).toHaveBeenCalledWith(
+        '[media-session] android.onRevivalRequested threw:',
+        error
+      )
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('never crosses the bridge: the native config carries no function field', async () => {
+    const { native } = await ready(withCallback(() => {}))
+
+    expect(native.configs[0]?.android).not.toHaveProperty('onRevivalRequested')
+  })
+})

@@ -90,6 +90,13 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     var startedAtMs = 0L
     /** `0` until the `ReactContext` exists — which of the two stages timed out. */
     var runtimeReadyAtMs = 0L
+    /**
+     * `true` when [MediaSessionController.requestRevival] delivered an
+     * `onRevivalRequested` to a live runtime. Only read by the watchdog, whose
+     * message has to distinguish "the app was asked to re-init and did not"
+     * from "nothing could have asked it" — the fixes are different.
+     */
+    var requestDelivered = false
   }
 
   override fun onCreate() {
@@ -356,11 +363,25 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   private fun onRuntimeReady() {
     val pending = revival ?: return
     pending.runtimeReadyAtMs = SystemClock.elapsedRealtime()
+    // Two ways an init can now arrive, and this call covers the one a cold
+    // boot cannot: a runtime that was ALREADY alive (stop-then-resume in the
+    // same process) has run its module scope once and will never run it
+    // again, so the app is asked to re-run its init path instead
+    // (`android.onRevivalRequested`). In a genuinely cold boot the requester
+    // is not registered yet and this is a no-op — module scope is about to
+    // call init by itself, and the TS side swallows a request that races an
+    // init already in flight, so the two paths cannot double-initialize.
+    pending.requestDelivered = MediaSessionController.requestRevival()
     Log.i(
       TAG,
       "Playback resumption: JS runtime up after " +
         "${pending.runtimeReadyAtMs - pending.startedAtMs} ms. " +
-        "Waiting for MediaService.init(...)."
+        if (pending.requestDelivered) {
+          "Asked the live runtime to re-initialize (android.onRevivalRequested); " +
+            "waiting for MediaService.init(...)."
+        } else {
+          "Waiting for the module-scope MediaService.init(...)."
+        }
     )
   }
 
@@ -393,13 +414,27 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   private val watchdog = Runnable {
     val pending = revival ?: return@Runnable
     abandonRevival(
-      if (pending.runtimeReadyAtMs == 0L) {
-        "the JS runtime did not start within $REVIVAL_TIMEOUT_MS ms"
-      } else {
-        "the JS runtime started but MediaService.init(...) was never called. Playback " +
-          "resumption requires init at JS MODULE SCOPE: a revived runtime loads your bundle " +
-          "but mounts no component, so an init inside a React effect or a screen never runs. " +
-          "Move it next to your player, at the top level of a module the bundle imports."
+      when {
+        pending.runtimeReadyAtMs == 0L ->
+          "the JS runtime did not start within $REVIVAL_TIMEOUT_MS ms"
+
+        pending.requestDelivered ->
+          "the app was asked to re-initialize (android.onRevivalRequested fired on the " +
+            "live runtime) but MediaService.init(...) never followed. That callback must " +
+            "run your init path — the same idempotent 'bring the session up' code your " +
+            "module scope runs, ending in MediaService.init(...)."
+
+        else ->
+          "the JS runtime started but MediaService.init(...) was never called. Two things " +
+            "have to be true for a revival to finish: (1) init must run at JS MODULE SCOPE, " +
+            "in a module your ENTRY file imports for its side effects " +
+            "(`import './src/playback'` in index.js) — Metro's release-mode inline requires " +
+            "defers a binding-only import (`import { x } from './m'`) to the first render, " +
+            "which a headless runtime never performs, so an init that is merely 'at module " +
+            "scope' of a lazily-required module still never runs; and (2) if this runtime " +
+            "was already alive (a stop-then-resume without process death), module scope " +
+            "cannot run twice — set android.onRevivalRequested to your init path so the " +
+            "service can ask for it."
       }
     )
   }

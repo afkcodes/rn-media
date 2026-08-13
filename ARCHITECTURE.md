@@ -704,7 +704,7 @@ whole thing) are held — bounded at 8, oldest dropped — and replayed after
 told about it afterwards. That is the opposite ordering to the sleep timer's, and
 for the opposite reason: there the work was already done, here it is about to be.
 
-Four decisions worth the words:
+Six decisions worth the words:
 1. **The seeded snapshot is forced to `stopped`, not `paused`.** `paused` maps to
    `STATE_READY`, and media3 shows a notification for any session that is not
    `STATE_IDLE` — which would put one on screen the instant the System UI merely
@@ -727,12 +727,52 @@ Four decisions worth the words:
    `init`.
 4. **Failure is bounded and says which half broke.** 10 s covers a React cold
    start several times over; on expiry the log distinguishes "the runtime never
-   started" from "the runtime started but `MediaService.init` was never called",
-   because the second has one fix: **init must be reachable at JS module scope.**
-   A revived runtime loads the bundle and starts no surface, so an `init` inside a
-   React effect never runs. Not configurable — an app that needs longer has a
-   startup problem no timeout fixes. Brownfield (`Application` is not a
+   started" from "the runtime started but `MediaService.init` was never called"
+   — and, since #47, splits the second into "the live runtime was asked to
+   re-init and did not" versus "nothing could have asked it", because the fixes
+   differ (see decisions 5 and 6). Not configurable — an app that needs longer
+   has a startup problem no timeout fixes. Brownfield (`Application` is not a
    `ReactApplication`) degrades to the old behaviour with one warning.
+5. **"Module scope" is not enough — init must be reachable through a bare
+   side-effect import from the entry file** (bug #47, diagnosed on device
+   2026-08-13). Metro's release-mode inline requires (`inlineRequires: true`,
+   the RN default since 0.64) rewrites every *binding* import — `import { x }
+   from './m'` — into a `require` at the first **use** of `x`; for a binding
+   used only inside a component that first use is the first render, which a
+   headless revived runtime never performs. The example regressed exactly this
+   way: while the playback layer lived at `App.tsx` module scope the entry's
+   own import chain kept it eager and §20's timings were real; the card-less
+   redesign moved it into `src/playback/` behind `import { usePlayback }`, and
+   every cold revival silently became a 10-second watchdog timeout (probe
+   bisect: in the revived process only `index.js` executed; the app's module
+   graph ran on first render, minutes later, when an Activity finally
+   arrived). The fix shape is one line — `import './src/playback'` in
+   `index.js` — because a side-effect import has no bindings to defer. The
+   watchdog message, the option TSDoc and the README recipe all now state the
+   entry-file requirement instead of the weaker "module scope".
+6. **A revival into a process that is still alive needs the app's help, and
+   `android.onRevivalRequested` is how it asks** (bug #47's second half —
+   the owner-reported symptom). `stopService()` ends background execution but
+   deliberately keeps the persisted session ("stop is not forget": the record
+   outlives the stop by design, §19), so the System UI keeps offering its
+   resumption card. Tapping play starts the service into a process whose JS
+   runtime is alive — `ReactHost.start()` resolves in ~15 ms — but whose module
+   scope, the thing that saves a *cold* revival, already ran and can never run
+   again; before #47 the revival then sat silent for 10 s and abandoned
+   ("MediaService.init(...) was never called", observed same-pid on device).
+   The mechanism: the handlers struct grew `onRevivalRequested`, the one Nitro
+   callback `MediaSessionController` retains **across `stop()`** (it exists
+   precisely for the after-stop window; every other callback is cleared there
+   so nothing can reach a discarded handler). `onRuntimeReady` invokes it; the
+   TS layer routes it to the app's `config.android.onRevivalRequested` and
+   swallows it unless init is truly idle, so a cold boot whose module-scope
+   init is already in flight cannot double-initialize. It dies with the
+   runtime (the before-destroy hook clears it by hand — `stop`, which that
+   hook also calls, deliberately does not). No auto-re-init fallback from
+   memoized `init` args, considered and rejected: every resumption-capable app
+   wraps the returned api (`withPersistence` is requirement #2), and a
+   library-internal re-init would leave the app's wrapper pointing at nothing
+   — the app's own idempotent init path is the only correct re-entry.
 
 Device evidence, two entry points, both from a process the OS had killed:
 - **Media button** (the framework's remembered `Last MediaButtonReceiver`):
@@ -1153,6 +1193,16 @@ point of the example.
   to the usual folklore — the framework still holds the app's
   `Last MediaButtonReceiver`, so a headset play still revives it. Only `am kill`
   reproduces the scenario users actually hit.
+- **Metro inline requires makes "module scope" a lie for headless boots.** With
+  `inlineRequires: true` (the RN default), a binding import used only inside a
+  component is required at first *render* — so in a revived process only the
+  entry file (and whatever it imports for side effects) executes at bundle
+  load. Code that must run with no surface (`MediaService.init` for playback
+  resumption) needs a bare `import './x'` in `index.js`; anything weaker
+  executes minutes later, when an Activity finally starts a surface (probe-
+  bisected on device, 2026-08-13, bug #47). Corollary for diagnosis: this
+  release template also emits **no `ReactNativeJS` logcat output at all**, so
+  headless JS execution must be probed via native calls, not `console.log`.
 - **The OS, not the app, grants the FGS start for a resumption.** Both entry
   points arrive with `code:TEMP_ALLOWED_WHILE_IN_USE;
   tempAllowListReason:<…,reasonCode:MEDIA_SESSION_CALLBACK,duration:10000>` —

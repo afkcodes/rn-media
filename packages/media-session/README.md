@@ -471,17 +471,57 @@ regenerated — so the [config plugin](#options) writes it for you:
 ["@rn-media/media-session", { "playbackResumption": true }]
 ```
 
-Three requirements, and the library logs which one you are missing:
+Four requirements, and the library logs which one you are missing:
 
 1. **`playbackResumption: true`.** Off by default — this path starts a foreground
    service in a process the user did not open.
 2. **`withPersistence(...)`.** It writes the snapshot the service reads. Nothing
    else does.
-3. **`MediaService.init(...)` reachable at JS *module scope*** — not in a
-   component, a hook or a screen. A revived runtime loads your bundle and starts
-   **no surface**, so nothing mounts and no effect ever runs. This is the single
-   most likely way to enable resumption and see it not work; the service waits
-   10 s, logs exactly that, and stops cleanly.
+3. **`MediaService.init(...)` reachable at JS *module scope*, in a module your
+   entry file imports for its side effects:**
+
+   ```js
+   // index.js
+   import './src/playback'   // ← this line is the requirement
+   import App from './App'
+   ```
+
+   Two separate platform facts make the bare entry-file import the only form
+   that works, and each kills resumption on its own:
+
+   - A revived runtime loads your bundle and starts **no surface**, so nothing
+     mounts and no effect ever runs — `init` in a component, hook or screen is
+     dead code in that process.
+   - Metro's release-mode **inline requires** (`inlineRequires: true`, the RN
+     default) rewrites every *binding* import — `import { x } from './m'` —
+     into a `require` at the first **use** of `x`. For anything used only
+     inside a component, that first use is the first *render*, which a
+     headless runtime never performs. So `App.tsx` importing your playback
+     hook does **not** execute your playback module at boot, however
+     module-scoped its `init` is. A bare side-effect import has no bindings to
+     defer; the entry file is the one module guaranteed to run.
+
+   This is the single most likely way to enable resumption and see it not
+   work; the service waits 10 s, logs exactly this, and stops cleanly.
+4. **`android.onRevivalRequested`** — the same recovery for a process that is
+   still **alive**. `stopService()` ends background execution but deliberately
+   keeps the persisted session (stop is not forget — see
+   [persistence](#surviving-process-death-withpersistence)), so the System UI
+   keeps offering its resumption card. Tapping play on it starts the service
+   into a process whose module scope already ran and cannot run again; the
+   service instead asks your app to re-run its init path:
+
+   ```ts
+   android: {
+     playbackResumption: true,
+     // Your idempotent "bring the session up" path — the same thing your
+     // module scope runs. Only invoked while no init is up or in flight.
+     onRevivalRequested: () => void playback.start(),
+   }
+   ```
+
+   Without it, play on the card after a stop silently does nothing for 10 s
+   and the service logs the reason.
 
 ### What actually happens
 
