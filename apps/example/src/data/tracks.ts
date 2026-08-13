@@ -233,6 +233,27 @@ export const TRACKS: readonly Track[] = [
     album: 'Fails fast · retryable · re-attempted twice, then skipped',
     uri: DEMO_BROKEN_URI,
   },
+  {
+    // Entry 8 (added with the cast handoff): a LOCAL file — the one shape a
+    // Cast receiver can never play, whatever its codec, because the receiver
+    // fetches URLs itself and `file://` is unreachable from it (cast.md §4;
+    // no local HTTP server in v1 by decision). mpv plays it fine, so this is
+    // the honest on-device demo of `canCastMedia` → `local-file`: the Cast
+    // section greys exactly this row, and a queue handoff skips it with a
+    // typed, surfaced reason. The path is a stock AOSP notification sound in
+    // `/product/media/audio` (where the system keeps sounds since the
+    // system/product split) — verified present on this repo's test device
+    // (POCO F4, Android 16). On a build that lacks it, *playing* the entry
+    // fails as `load-failed` — the honest answer for a missing local file —
+    // while the cast verdict (`local-file`) never even looks at the path.
+    // A couple of seconds long: its job is the verdict row and the skip
+    // notice, not the listening.
+    id: 'local-file-demo',
+    title: 'Local file (cannot cast)',
+    artist: 'This device',
+    album: 'file:// — plays on the phone, unreachable from a receiver',
+    uri: 'file:///product/media/audio/notifications/Adara.ogg',
+  },
 ]
 
 /**

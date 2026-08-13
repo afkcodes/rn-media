@@ -7,6 +7,7 @@
     "paths": {
       "@rn-media/player": ["../../packages/player/src"],
       "@rn-media/audio-session": ["../../packages/audio-session/src"],
+      "@rn-media/cast": ["../../packages/cast/src"],
       "@rn-media/media-session": ["../../packages/media-session/src"]
     }
   }

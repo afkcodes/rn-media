@@ -1163,6 +1163,101 @@ the event itself documents. The example app's banner now consumes this hook;
 the hand-rolled engine→controller→UI plumbing it replaced is gone, which is the
 point of the example.
 
+### 25. Casting is a URL handoff behind the existing fan-out — and the handoff lives in `@rn-media/cast`, not media-session
+
+**The decision** (2026-08-13, design in `docs/design/cast.md` — this section
+records what shipped and why it is shaped this way). Cast receivers fetch and
+decode URLs themselves; mpv's pipeline is invisible to every OS casting hook,
+so casting can never be an *output route* for our engine. It is a **handoff**:
+pause mpv, hand the receiver a URL queue, mirror the receiver's state, and
+take playback back at the receiver's position when the session ends. The old
+PLAN deferral ("CastPlayer abandons our engine") died on exactly this
+reframing — nothing is abandoned; the engine is paused.
+
+**The state machine** (cast.md §3, implemented verbatim as a pure reducer —
+`reduceCastHandoff` in `packages/cast/src/handoff-machine.ts`):
+
+```
+LOCAL → CONNECTING → HANDOFF_TO_CAST → CAST_ACTIVE → HANDOFF_TO_LOCAL → LOCAL
+                     (pause mpv · snapshot {queue,index,position,playWhenReady}
+                      · load receiver queue at index/position)
+any → error → typed error + fall back to LOCAL at last known position
+```
+
+The reducer is pure — `(state, event) → {state, effects}`, no clock (events
+carry timestamps), no promises — which is what makes every transition and
+every error fallback unit-testable without a receiver on the LAN; it is the
+best-tested code in the package on purpose (the handoff *is* the hard 20% of
+cast). `wireCastHandoff` executes the effects against the `CastApi` and a
+structural local player, and feeds completions back in as events. Both the
+in-app path (`castTo(deviceId)`) and the platform paths (cast dialog, Android
+13+ system output switcher) funnel into the same machine: a session appearing
+from anywhere triggers the same handoff.
+
+**Where it lives, and why.** In `@rn-media/cast` — **`media-session` is
+cast-free in both directions.** The media-session package's value is that it
+works with ANY player; teaching it about cast would have coupled it to one
+remote backend and doubled its test surface. Instead the handoff takes
+structural interfaces (the `AudioSessionPlayerLike` discipline): a local-player
+write surface (`play/pause/seekTo/skipToIndex/getPosition/isPlaying`), a
+queue-snapshot provider, and event outputs the app routes into its own
+broadcasts. media3's `CastPlayer.Builder().setLocalPlayer(...)` wrapper was
+declined for the same reason it was declined in the design doc: it would put
+the handoff inside media3 on Android while iOS needs our machine anyway — two
+architectures to keep in parity, and `transferState` would have to write into
+`BroadcastPlayer`, which is a broadcast facade, not a stateful player.
+
+**The channel contract while casting (§3 of the design, the load-bearing
+part).** During CAST_ACTIVE the app's broadcasts carry the **receiver's**
+state through the same three channels (`playbackState`, `mediaItem`, `queue`)
+that feed every surface — notification, lock screen, watch, the app's own UI.
+Zero new fan-out paths: the example's `SessionBridge.publishCast` maps the
+handoff's receiver snapshot into `setPlaybackState`/`setMediaItem` and
+suppresses local publishes for the session (the local player is deliberately
+paused; its snapshot is not news). Position obeys the library-wide rule
+unchanged: a cast `mediaStatus` is a discontinuity broadcast carrying an
+anchor `{position, at, rate}`; everything projects locally; nothing polls.
+**Position ownership is exclusive** — exactly one backend owns the clock at
+any time, and the two `castTransfer` events (`toCast`, `toLocal`) are the
+discontinuities where ownership moves. Fan-in mirrors fan-out: the example's
+controller forwards every transport command to whichever backend owns
+playback, so a notification button steers the receiver with no extra wiring.
+
+**Queue: JS is the source of truth; the receiver holds a projection.**
+The handoff filters the queue through `canCastMedia` (receiver codec table +
+local-file + header-auth rules), loads the castable projection with
+receiver-side advancement (`autoplay` per item — the queue survives the phone
+sleeping), and surfaces every skipped item with a typed reason — never
+silently. Every `mediaStatus` is reconciled back to a JS index through the
+`itemIds ↔ jsIndices` mapping the machine owns; queue edits while casting
+reload the projection anchored at the receiver's current item and projected
+position (`syncQueue`). The receiver queue dying with the session is fine —
+it is rebuilt from the JS queue on the next handoff. Signed-URL expiry
+mid-session is the same seam as the player's source resolver: a
+`cast-receiver-fetch` error → re-resolve the URL into the snapshot →
+`syncQueue()` (the example implements the recipe, bounded to one automatic
+attempt per track).
+
+**Platform truths (Android, from implementation; device round pending the
+receiver being on the LAN):**
+
+- A session can exist before JS wires anything (framework session resumption
+  runs at `CastContext` init). The handoff deliberately does NOT auto-cast
+  over it — destructive at app launch — and reuses it on the next `castTo`.
+- The connect-ordering rule (connect after the picker closes, *before*
+  `stopDiscovery`, or MediaRouter drops the route mid-handshake) is encoded
+  natively (deferred discovery teardown while a start is in flight) AND kept
+  visible in the example's `connect()`.
+- Cast on GMS-less Android is a typed `'unavailable'`, never a crash; the
+  example's Cast section renders that state honestly with zero dead controls.
+- The example carries a deliberate `file://` queue entry: mpv plays it, no
+  receiver ever can (receivers fetch URLs themselves) — the on-device truth
+  behind `canCastMedia`'s `local-file` verdict and the skip-notice path. Its
+  broken-URL sibling (`https://127.0.0.1:9/...`) is *castable on paper* and
+  fails on the receiver — the live demo that the receiver's network is not
+  the phone's (`cast-receiver-fetch` is its own error family for exactly
+  this).
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager

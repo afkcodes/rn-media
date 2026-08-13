@@ -39,6 +39,7 @@ import type {
 } from '@rn-media/media-session'
 import type { Track } from '../data/tracks'
 import { repeatToLoop } from './broadcast'
+import { CastIntegration } from './cast'
 import { createEngine, type Engine, type RetryNote } from './engine'
 import { DemoMediaHandler, type PlaybackCommands } from './handler'
 import { OutputOptions } from './output'
@@ -98,6 +99,10 @@ export class Playback implements PlaybackCommands {
     player: () => this.#engine?.player,
     onChange: (rows) => {
       this.#session.setQueue(rows.map((row) => row.track))
+      // The JS queue is the source of truth for the receiver queue too: while
+      // casting, an edit reloads the castable projection at the receiver's
+      // current item and projected position.
+      this.#cast.onQueueChanged()
       this.#notify()
     },
     onEdited: () => {
@@ -105,6 +110,34 @@ export class Playback implements PlaybackCommands {
       this.#done()
     },
     onError: (cause) => this.#fail(cause),
+  })
+
+  /**
+   * The cast side, wired per the handoff contracts: the receiver's state
+   * flows into the same `SessionBridge` channels the local player uses (§3 —
+   * the notification and every remote surface mirror the receiver), and a
+   * transfer-back resumes through the same focus gate every sound-starting
+   * command takes.
+   */
+  readonly #cast = new CastIntegration({
+    player: () => this.#engine?.player,
+    queue: () => this.#queue.tracks,
+    resume: () => this.#transport.play(),
+    onReceiverState: (snapshot) => {
+      this.#session.publishCast(
+        snapshot,
+        snapshot?.itemIndex === undefined
+          ? undefined
+          : this.#queue.at(snapshot.itemIndex)
+      )
+      // Casting over: repaint the channels from the local player, which has
+      // been silent (and un-broadcast) for the whole session.
+      if (snapshot === undefined) {
+        this.#session.refresh(this.#engine?.player.state)
+      }
+      this.#notify()
+    },
+    onChange: () => this.#notify(),
   })
 
   /* --- reads ------------------------------------------------------------- */
@@ -153,6 +186,10 @@ export class Playback implements PlaybackCommands {
   get shuffleEnabled(): boolean {
     return this.#shuffleEnabled
   }
+  /** The cast surface — state for the Cast section, commands for the sheet. */
+  get cast(): CastIntegration {
+    return this.#cast
+  }
 
   /** Re-render notification for the UI. Nothing else depends on it. */
   subscribe(listener: () => void): () => void {
@@ -173,6 +210,10 @@ export class Playback implements PlaybackCommands {
     // read through. Every later change arrives on the event.
     this.#queue.sync()
     await this.#session.ensure()
+    // Cast framework init is deliberately not awaited into the critical path:
+    // playback must not wait on Play services. It resolves 'unavailable'
+    // where casting cannot work, and the section renders that honestly.
+    void this.#cast.start()
   }
 
   async #restore(): Promise<void> {
@@ -261,28 +302,69 @@ export class Playback implements PlaybackCommands {
 
   /* --- transport (delegated) ---------------------------------------------- */
 
+  /*
+   * Every sound-affecting command branches on WHO owns playback right now.
+   * While `cast-active` the receiver does, so play/pause/seek/skip go to it —
+   * and because the media handler calls exactly these methods, a notification
+   * button or a car head unit steers the receiver with no extra wiring. That
+   * is the fan-in contract doing its job: one command vocabulary, two
+   * backends, exactly one of which owns the clock.
+   */
+
   play(): Promise<void> {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.play()
+      return Promise.resolve()
+    }
     return this.#transport.play()
   }
   pause(): void {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.pause()
+      return
+    }
     this.#transport.pause()
   }
   toggle(): void {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.toggle()
+      return
+    }
     this.#transport.toggle()
   }
   next(): void {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.next()
+      return
+    }
     this.#transport.next()
   }
   previous(): void {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.previous()
+      return
+    }
     this.#transport.previous()
   }
   jumpTo(index: number): Promise<void> {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.jumpTo(index)
+      return Promise.resolve()
+    }
     return this.#transport.jumpTo(index)
   }
   seekTo(seconds: number): void {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.seekTo(seconds)
+      return
+    }
     this.#transport.seekTo(seconds)
   }
   seekBy(deltaSeconds: number): void {
+    if (this.#cast.controlsPlayback) {
+      this.#cast.seekBy(deltaSeconds)
+      return
+    }
     this.#transport.seekBy(deltaSeconds)
   }
   setRate(rate: number): void {
@@ -397,6 +479,15 @@ export class Playback implements PlaybackCommands {
    * The player stays alive and so does the app; only the session goes.
    */
   async stop(): Promise<void> {
+    // Stop while casting: silence the receiver first (pause, then transfer
+    // back — the pause makes the transfer land with `playWhenReady: false`,
+    // so the restore does not start local audio the very stop is ending).
+    // The trailing local `pause()` below also covers the race where the end
+    // arrives before the receiver acknowledged the pause.
+    if (this.#cast.engaged) {
+      this.#cast.pause()
+      await this.#cast.disconnect(true)
+    }
     this.pause()
     try {
       await this.#session.stop()

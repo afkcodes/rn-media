@@ -10,9 +10,12 @@ platform-split feature.
 Casting is a **URL handoff**, not an output route: the sender hands the
 receiver a URL and the receiver fetches, decodes and plays it itself. Your
 local player goes silent for the session and resumes at the receiver's
-position when you transfer back. This package is the binding layer (Phase 2 of
-`docs/design/cast.md`); the automatic local↔remote handoff state machine lands
-in `@rn-media/media-session` (Phase 3).
+position when you transfer back. This package ships both layers: the binding
+(Phase 2 of `docs/design/cast.md`) and the automatic local↔remote **handoff
+state machine** (`wireCastHandoff`, Phase 3). The handoff deliberately lives
+here — not in `@rn-media/media-session`, which stays cast-free — and talks to
+your player and queue through structural interfaces, so it works with ANY
+player.
 
 > **⚠️ iOS 16 requirement.** The `google-cast-sdk` pod requires **iOS 16.0**
 > (React Native's default target is lower). Installing this package raises
@@ -126,6 +129,88 @@ await Cast.endSession({ transferBackToLocal: true })
 **Ordering rule** (encoded natively as a safety net, but do it right anyway):
 connect **after** the picker closes and **before** `stopDiscovery()` —
 stopping discovery mid-handshake makes the route vanish under the session.
+
+## The handoff — `wireCastHandoff`
+
+The state machine from `docs/design/cast.md` §3, ready-made:
+
+```
+LOCAL → CONNECTING → HANDOFF_TO_CAST → CAST_ACTIVE → HANDOFF_TO_LOCAL → LOCAL
+                     (pause local · snapshot queue · load receiver queue)
+any → error → typed error + fall back to LOCAL at the last known position
+```
+
+```ts
+import { wireCastHandoff } from '@rn-media/cast'
+
+const handoff = wireCastHandoff(
+  {
+    // Structural — adapt YOUR player; nothing here imports @rn-media/player.
+    play: () => player.play(),
+    pause: () => player.pause(),
+    seekTo: (s) => player.seekTo(s),
+    skipToIndex: (i) => player.playlist.jumpTo(i, { autoPlay: false }),
+    getPosition: () => player.getPosition(),
+    isPlaying: () => player.state.playing,
+  },
+  {
+    // One coherent read of YOUR queue at handoff time. Resolve signed /
+    // logical URLs here — the receiver fetches them itself.
+    snapshot: () => ({
+      items: queue.map((t) => ({
+        id: t.id,
+        url: resolve(t),
+        mimeType: t.mimeType,
+        metadata: { title: t.title, artist: t.artist, artworkUrl: t.artUrl },
+      })),
+      index: currentIndex,
+      position: player.getPosition(),
+      playWhenReady: player.state.playing,
+    }),
+    // While cast-active this is the ONLY truthful source for your
+    // playbackState/mediaItem broadcasts. `{position, at, rate}` is a
+    // position anchor: project locally, never poll.
+    onReceiverState: (s) => broadcastReceiverState(s),
+    // One per direction per handoff — a position discontinuity.
+    onTransfer: ({ direction, position, itemIndex }) => log(direction),
+    // canCastMedia-filtered items, typed reasons. Never silent.
+    onItemsSkipped: (skipped) => showSkipNotice(skipped),
+    onError: (error) => {
+      if (error.code === 'cast-receiver-fetch') {
+        // The re-resolve-and-reload recipe for expired signed URLs: get a
+        // fresh URL into your snapshot's `url`, then reload the projection.
+        refreshSignedUrls().then(() => handoff.syncQueue())
+      }
+    },
+  }
+)
+
+await handoff.castTo(devices[0].id)   // or let <CastButton/>/the system
+                                      // output switcher start the session —
+                                      // the same machine handles both.
+await handoff.stopCasting()           // transfer back; { transferBackToLocal:
+                                      // false } leaves the receiver playing.
+handoff.syncQueue()                   // JS queue edited while casting
+handoff.skipToNext()                  // receiver transport over the queue
+                                      // mapping (skips non-castable items)
+```
+
+Contracts worth knowing:
+
+- **The JS queue stays the source of truth.** The receiver queue is a
+  castable *projection* of it; every receiver status is reconciled back to a
+  JS index (`onReceiverState.itemIndex`, `receiverItemIndex`). Receiver-side
+  advancement is on (`autoplay` per item) so the queue survives the phone
+  sleeping; the receiver queue dying with the session is fine — it is rebuilt
+  from the JS queue next time.
+- **Position ownership is exclusive.** Local owns the clock until the
+  `toCast` transfer; the receiver owns it until `toLocal`. Both transfers are
+  discontinuities carrying `{position, itemIndex}`.
+- A session that exists *before* wiring (framework resumption) is left
+  alone — auto-casting over a receiver at app launch would be destructive;
+  the next `castTo` reuses it.
+- The pure reducer (`reduceCastHandoff`) and projection (`projectCastQueue`)
+  are exported for tests and custom orchestration.
 
 ### Which tracks can cast — `canCastMedia`
 

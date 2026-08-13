@@ -32,6 +32,13 @@ export type CastErrorCode =
    * `idleReason: 'error'` and the SDK's out-of-band media-error callback.
    */
   | 'cast-receiver-fetch'
+  /**
+   * A handoff found nothing the receiver could play: every queue item was
+   * filtered out by `canCastMedia` (codec / local-file / headers). TS-side
+   * only — never crosses the bridge; raised by the handoff state machine
+   * before any receiver call is made.
+   */
+  | 'no-castable-media'
   /** An argument failed validation before reaching the SDK. */
   | 'invalid-argument'
   /**
