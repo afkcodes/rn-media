@@ -91,7 +91,9 @@ describe('toCastMediaItem', () => {
       title: aariAari.title,
       artist: aariAari.artist,
       artworkUri: aariAari.artworkUri,
-      duration: 180_000,
+      // 180.4 s → 180 400 ms: milliseconds carry the receiver's sub-second
+      // truth (rounding the SECONDS first — the old bug — lost up to 500 ms).
+      duration: 180_400,
     })
   })
 

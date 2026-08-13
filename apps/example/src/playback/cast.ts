@@ -29,13 +29,14 @@ import {
   type CanCastVerdict,
   type CastConnectionState,
   type CastDeviceInfo,
+  type CastDeviceVolume,
   type CastHandoff,
   type CastHandoffPhase,
   type CastHandoffQueueSnapshot,
   type CastReceiverSnapshot,
   type SkippedCastItem,
 } from '@rn-media/cast'
-import type { Player } from '@rn-media/player'
+import type { Player, PlayerState } from '@rn-media/player'
 import { DEMO_SCHEME, type Track } from '../data/tracks'
 import { castMimeOf, castUrlOf } from './cast-broadcast'
 
@@ -76,6 +77,35 @@ export class CastIntegration {
   #transferNote: string | undefined
   /** Signed-URL recipe guard: one automatic re-resolve per track per session. */
   readonly #reResolved = new Set<string>()
+  /**
+   * Fingerprint of the queue the receiver last got. `QueueMirror` re-reads
+   * (and re-announces) the queue on events that change nothing the receiver
+   * cares about; a resync restarts the receiver item, so it only runs when
+   * the queue *content* actually moved.
+   */
+  #queuePrint = ''
+  /** Last known receiver *device* volume — the layer the in-app slider drives while casting. */
+  #deviceVolume: CastDeviceVolume | undefined
+  /**
+   * Transport intent arriving DURING the handoff (phase `handoff-to-cast`),
+   * kept to replay against the receiver the moment `cast-active` lands.
+   *
+   * Why this exists (device-found): the local player is already paused for
+   * the handoff, so routing a mid-handoff tap to mpv would *start phone
+   * audio in parallel with the speaker* — the one thing a handoff must never
+   * do. The receiver cannot take transport yet (its queue is still loading),
+   * so the intent is buffered, last-wins per kind, and flushed in order:
+   * cursor move first, then seek, then play/pause.
+   */
+  #pending:
+    | {
+        move?: { kind: 'jump'; index: number } | { kind: 'next' | 'previous' }
+        seek?: number
+        playing?: boolean
+      }
+    | undefined
+  /** Queue cursor + clock + intent at handoff time — the base `#pending` deltas apply to. */
+  #lastSnapshot: { index: number; position: number; playing: boolean } | undefined
 
   constructor(hooks: CastHooks) {
     this.#hooks = hooks
@@ -115,6 +145,20 @@ export class CastIntegration {
   get controlsPlayback(): boolean {
     return this.#phase === 'cast-active'
   }
+  /**
+   * Transport belongs to the cast side: casting, or handing off to it. The
+   * controller routes on THIS, not on {@link controlsPlayback} — during
+   * `handoff-to-cast` the local player is already paused for the session, so
+   * a command routed to mpv would start phone audio under the speaker's.
+   * Mid-handoff commands are buffered and replayed once the receiver is up.
+   */
+  get owns(): boolean {
+    return this.#phase === 'cast-active' || this.#phase === 'handoff-to-cast'
+  }
+  /** Receiver device volume (0..1) + mute, while a session is up. */
+  get deviceVolume(): CastDeviceVolume | undefined {
+    return this.#deviceVolume
+  }
   /** Reconciled JS index the receiver is on, while cast-active. */
   get receiverIndex(): number | undefined {
     return this.#handoff?.receiverItemIndex
@@ -153,20 +197,36 @@ export class CastIntegration {
     Cast.addListener('castState', (event) => {
       this.#castState = event.state
       this.#device = event.device
+      if (event.state === 'connected') {
+        // Prime the volume readout — the event stream only reports *changes*.
+        Cast.getDeviceVolume()
+          .then((volume) => {
+            this.#deviceVolume = volume
+            this.#hooks.onChange()
+          })
+          .catch(() => undefined) // the session may already be gone; the listener will catch up
+      } else {
+        this.#deviceVolume = undefined
+      }
       this.#hooks.onChange()
     })
     Cast.addListener('devices', (devices) => {
       this.#devices = devices
       this.#hooks.onChange()
     })
+    Cast.addListener('deviceVolume', (volume) => {
+      // The speaker's own knob, the Google Home app and our slider all land
+      // here — one fact, whoever moved it.
+      this.#deviceVolume = volume
+      this.#hooks.onChange()
+    })
 
     this.#handoff = wireCastHandoff(
       {
-        play: () => void this.#hooks.resume(),
+        play: () => this.#hooks.resume(),
         pause: () => this.#hooks.player()?.pause(),
         seekTo: (seconds) => this.#seekLocalWhenReady(seconds),
-        skipToIndex: (index) =>
-          this.#hooks.player()?.playlist.jumpTo(index, { autoPlay: false }),
+        skipToIndex: (index) => this.#jumpLocalTo(index),
         getPosition: () => this.#hooks.player()?.getPosition() ?? 0,
         isPlaying: () => this.#hooks.player()?.state.playing === true,
       },
@@ -174,11 +234,13 @@ export class CastIntegration {
         snapshot: () => this.#snapshot(),
         onPhaseChange: (phase) => {
           this.#phase = phase
+          if (phase === 'cast-active') this.#flushPending()
           if (phase === 'local') {
             // Casting is over: hand the broadcast channels back to the local
             // player and forget the session-scoped notes.
             this.#lastReceiver = undefined
             this.#skipped = []
+            this.#pending = undefined
             this.#reResolved.clear()
             this.#hooks.onReceiverState(undefined)
           }
@@ -261,7 +323,10 @@ export class CastIntegration {
 
   /** The JS queue changed while casting — reload the receiver projection. */
   onQueueChanged(): void {
-    if (this.controlsPlayback) this.#handoff?.syncQueue()
+    if (!this.controlsPlayback) return
+    const print = this.#fingerprint()
+    if (print === this.#queuePrint) return
+    this.#handoff?.syncQueue() // #snapshot() re-stamps the fingerprint
   }
 
   dismissError(): void {
@@ -271,49 +336,164 @@ export class CastIntegration {
 
   /* --- receiver transport (the controller forwards here while casting) ---- */
 
+  /*
+   * Every command below has a mid-handoff shape: while `handoff-to-cast` the
+   * receiver has no queue to steer yet, so the intent is remembered
+   * (last-wins) and `#flushPending` replays it the moment `cast-active`
+   * lands. See `#pending`'s doc for why it must not fall through to mpv.
+   */
+
   play(): void {
+    if (this.#buffering()) {
+      this.#pending = { ...this.#pending, playing: true }
+      return
+    }
     void Cast.play().catch((cause: unknown) => this.#fail(cause))
   }
   pause(): void {
+    if (this.#buffering()) {
+      this.#pending = { ...this.#pending, playing: false }
+      return
+    }
     void Cast.pause().catch((cause: unknown) => this.#fail(cause))
   }
   toggle(): void {
+    if (this.#buffering()) {
+      const playing =
+        this.#pending?.playing ?? this.#lastSnapshot?.playing ?? false
+      this.#pending = { ...this.#pending, playing: !playing }
+      return
+    }
     if (this.#lastReceiver?.playing === true) this.pause()
     else this.play()
   }
   seekTo(seconds: number): void {
+    if (this.#buffering()) {
+      this.#pending = { ...this.#pending, seek: Math.max(0, seconds) }
+      return
+    }
     void Cast.seek(seconds).catch((cause: unknown) => this.#fail(cause))
   }
   /**
    * Relative seek against the *projected* receiver clock — same anchor rule
    * as everywhere: the last `mediaStatus` plus elapsed × rate, never a poll.
+   * Mid-handoff the base is the handoff snapshot's clock (nothing advanced
+   * since — the local player is paused and the receiver has not started).
    */
   seekBy(deltaSeconds: number): void {
+    if (this.#buffering()) {
+      const base = this.#pending?.seek ?? this.#lastSnapshot?.position ?? 0
+      this.#pending = {
+        ...this.#pending,
+        seek: Math.max(0, base + deltaSeconds),
+      }
+      return
+    }
     const anchor = this.#lastReceiver
     if (anchor === undefined) return
     const position = projectReceiverPosition(anchor, Date.now()) + deltaSeconds
     this.seekTo(Math.max(0, position))
   }
   next(): void {
+    if (this.#buffering()) {
+      this.#pending = { ...this.#pending, move: { kind: 'next' }, seek: undefined }
+      return
+    }
     void this.#handoff?.skipToNext().catch((cause: unknown) => this.#fail(cause))
   }
   previous(): void {
+    if (this.#buffering()) {
+      this.#pending = {
+        ...this.#pending,
+        move: { kind: 'previous' },
+        seek: undefined,
+      }
+      return
+    }
     void this.#handoff
       ?.skipToPrevious()
       .catch((cause: unknown) => this.#fail(cause))
   }
   jumpTo(index: number): void {
+    if (this.#buffering()) {
+      // A cursor move obsoletes any earlier scrub — it was aimed at the old entry.
+      this.#pending = {
+        ...this.#pending,
+        move: { kind: 'jump', index },
+        seek: undefined,
+      }
+      return
+    }
     void this.#handoff
       ?.skipToItem(index)
       .catch((cause: unknown) => this.#fail(cause))
   }
 
+  /**
+   * In-app volume while casting drives the SPEAKER (device volume — the
+   * primary layer of the two-layer API; stream volume stays available for
+   * per-track trims). `0..1`, the same scale the local player uses.
+   */
+  setVolume(volume: number): void {
+    void Cast.setDeviceVolume(Math.max(0, Math.min(1, volume))).catch(
+      (cause: unknown) => this.#fail(cause)
+    )
+  }
+  toggleMuted(): void {
+    void Cast.setDeviceMuted(this.#deviceVolume?.muted !== true).catch(
+      (cause: unknown) => this.#fail(cause)
+    )
+  }
+
   /* --- internals ---------------------------------------------------------- */
+
+  /** `true` while transport intent must be buffered rather than sent. */
+  #buffering(): boolean {
+    return this.#phase === 'handoff-to-cast'
+  }
+
+  /** Replay what the user asked for mid-handoff, now that the receiver is up. */
+  #flushPending(): void {
+    const pending = this.#pending
+    this.#pending = undefined
+    if (pending === undefined) return
+    const handoff = this.#handoff
+    void (async () => {
+      try {
+        if (pending.move?.kind === 'jump') {
+          await handoff?.skipToItem(pending.move.index, pending.seek)
+        } else if (pending.move?.kind === 'next') {
+          await handoff?.skipToNext()
+        } else if (pending.move?.kind === 'previous') {
+          await handoff?.skipToPrevious()
+        } else if (pending.seek !== undefined) {
+          await Cast.seek(pending.seek)
+        }
+        if (pending.playing === true) await Cast.play()
+        else if (pending.playing === false) await Cast.pause()
+      } catch (cause) {
+        this.#fail(cause)
+      }
+    })()
+  }
+
+  #fingerprint(): string {
+    return this.#hooks
+      .queue()
+      .map((track) => `${track.id}|${track.uri}`)
+      .join('\n')
+  }
 
   /** One coherent read of queue + cursor + clock + intent, at handoff time. */
   #snapshot(): CastHandoffQueueSnapshot {
+    this.#queuePrint = this.#fingerprint()
     const player = this.#hooks.player()
     const state = player?.state
+    this.#lastSnapshot = {
+      index: state?.playlist.index ?? 0,
+      position: player?.getPosition() ?? 0,
+      playing: state?.playing === true,
+    }
     return {
       items: this.#hooks.queue().map((track) => ({
         id: track.id,
@@ -338,19 +518,86 @@ export class CastIntegration {
   }
 
   /**
-   * Seek that tolerates the entry still opening: a transfer-back does
-   * `jumpTo(index, {autoPlay: false})` and then seeks, but mpv can only seek
-   * once the entry is `ready`. Waits for that (bounded), then seeks — the
-   * same idea as the persistence layer's pending-resume, scoped to one call.
+   * The transfer-back cursor move, made race-free (device-found, the hard
+   * way): the naive `playlist.jumpTo` resolves when mpv ACCEPTS the command,
+   * not when the entry is open — the restore's seek then fired against a
+   * state snapshot that still said `ready` from *before* the jump, mpv
+   * rejected it (`error running command`) mid-reload, and the whole restore
+   * aborted at 0:00 paused.
+   *
+   * Two rules fix it structurally:
+   * - **Same entry: do not jump at all.** mpv faithfully *reloads* the
+   *   current entry, which both restarts a warm stream and opens the very
+   *   race above. The common transfer-back (came back to the same track the
+   *   handoff left) becomes an instant seek.
+   * - **Different entry: wait until the state SHOWS the target open** —
+   *   `index === target` plus a settled status. The stale pre-jump snapshot
+   *   can never satisfy that predicate, because its index is the old one.
+   */
+  async #jumpLocalTo(index: number): Promise<void> {
+    const player = this.#hooks.player()
+    if (player === undefined) return
+    if (player.state.playlist.index === index) return
+    await player.playlist.jumpTo(index, { autoPlay: false })
+    await this.#untilLocal(
+      (state) =>
+        state.playlist.index === index &&
+        (state.status === 'ready' ||
+          state.status === 'error' ||
+          state.status === 'ended')
+    )
+  }
+
+  /**
+   * Seek that tolerates the entry still opening: mpv can only seek once the
+   * entry is `ready`. Waits for that (bounded), seeks, and retries once if
+   * mpv still rejects (a reload can slip in between the state read and the
+   * command) — the same idea as the persistence layer's pending-resume,
+   * scoped to one call.
    */
   async #seekLocalWhenReady(seconds: number): Promise<void> {
     const player = this.#hooks.player()
     if (player === undefined) return
-    if (player.state.status === 'ready') {
-      await player.seekTo(seconds)
-      return
+    const settled = (state: PlayerState): boolean =>
+      state.status === 'ready' ||
+      state.status === 'error' ||
+      state.status === 'ended'
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // A failed first attempt means the state read was stale (mpv was mid-
+      // reload) — the retry waits for the next CHANGE, never the same snapshot.
+      await this.#untilLocal(settled, { fresh: attempt > 0 })
+      if (player.state.status !== 'ready') return // nothing to seek into; 0 is the honest result
+      try {
+        await player.seekTo(seconds)
+        return
+      } catch (cause) {
+        if (attempt > 0) {
+          console.warn('[example] cast: resume seek failed:', cause)
+        }
+      }
     }
-    await new Promise<void>((resolve) => {
+  }
+
+  /**
+   * Resolve once the player state satisfies `predicate` — checked against
+   * the CURRENT state first (unless `fresh`, which trusts only *changes*),
+   * then on every change. Bounded: a transfer-back is user-initiated and
+   * foreground, so a JS timer is legal here; ten seconds of not-ready means
+   * the entry is not coming and holding the restore hostage helps nobody.
+   */
+  #untilLocal(
+    predicate: (state: PlayerState) => boolean,
+    options?: { fresh?: boolean; timeoutMs?: number }
+  ): Promise<void> {
+    const timeoutMs = options?.timeoutMs ?? 10_000
+    const player = this.#hooks.player()
+    if (
+      player === undefined ||
+      (options?.fresh !== true && predicate(player.state))
+    ) {
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve) => {
       let done = false
       const finish = (): void => {
         if (done) return
@@ -360,19 +607,9 @@ export class CastIntegration {
         resolve()
       }
       const unsubscribe = player.onStateChange((state) => {
-        if (state.status === 'ready') {
-          player.seekTo(seconds).catch((cause: unknown) => {
-            console.warn('[example] cast: resume seek failed:', cause)
-          })
-          finish()
-        } else if (state.status === 'error' || state.status === 'ended') {
-          finish() // nothing to seek into; resuming at 0 is the honest result
-        }
+        if (predicate(state)) finish()
       })
-      // Bounded: a transfer-back is user-initiated and foreground, so a JS
-      // timer is legal here; ten seconds of not-ready means the entry is not
-      // coming and holding the restore hostage helps nobody.
-      const timer = setTimeout(finish, 10_000)
+      const timer = setTimeout(finish, timeoutMs)
     })
   }
 

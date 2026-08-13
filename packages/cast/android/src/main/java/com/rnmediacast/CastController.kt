@@ -9,6 +9,7 @@ import androidx.mediarouter.media.MediaRouteSelector
 import androidx.mediarouter.media.MediaRouter
 import com.google.android.gms.cast.Cast
 import com.google.android.gms.cast.CastDevice
+import com.google.android.gms.cast.CastStatusCodes
 import com.google.android.gms.cast.MediaError
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
@@ -428,8 +429,29 @@ internal class CastController(
       promise.resolve(Unit)
       return
     }
+    if (stopReceiver) {
+      // Silence the receiver's MEDIA explicitly before ending. The options
+      // provider sets stopReceiverApplicationWhenEndingSession(false) so the
+      // keep-playing path survives (device-proven: with it true, even a
+      // false `stopCasting` parameter stopped the receiver app), which means
+      // the transfer-back path must stop playback itself — a transfer back
+      // that leaves the speaker playing would double the audio. Best-effort:
+      // the session is being torn down, so a late failure is expected noise.
+      attachedRmc?.stop()?.setResultCallback { /* teardown race — fine */ }
+    }
     pendingEnd?.resolve(Unit) // an earlier caller is satisfied by the same end
     pendingEnd = promise
+    // Honest ceiling, measured on hardware (POCO F4 → Mi Smart Speaker,
+    // cast framework 22.3.1): `stopReceiver = false` CANNOT keep the
+    // receiver playing on Android. Every teardown path was tried —
+    // `endCurrentSession(false)` with the stop-receiver option on and off,
+    // and a raw `MediaRouter.unselect(UNSELECT_REASON_DISCONNECTED)` — and
+    // the framework stopped receiver playback on session end every time,
+    // while the RECEIVER itself demonstrably supports last-sender-leave
+    // continuation (a bare pychromecast sender's disconnect left the same
+    // queue playing). What `false` still honestly delivers: no local
+    // transfer-back, and the receiver APP is left to idle out rather than
+    // being explicitly stopped.
     castContext.sessionManager.endCurrentSession(stopReceiver)
   }
 
@@ -535,14 +557,52 @@ internal class CastController(
     promise: Promise<Unit>,
   ) {
     val rmc = requireRmc(promise) ?: return
+    val startIndex = (options.startIndex ?: 0.0).toInt()
+    val repeatMode =
+      CastMapping.toFrameworkRepeatMode(options.repeatMode ?: CastRepeatMode.OFF)
+    val startPosition = options.startPosition ?: 0.0
+    if (options.credentials == null && options.credentialsType == null) {
+      // The classic queue-load API, NOT MediaLoadRequestData+MediaQueueData.
+      // Device-found (POCO F4 → Mi Smart Speaker, Default Media Receiver):
+      // `MediaQueueData.Builder.setStartTime` does not deliver a start
+      // position — the receiver began at 0:00 every time, whatever unit was
+      // written (the wire-level `queueData.startTime` is documented in
+      // SECONDS on the Web Receiver while this builder takes a long, and the
+      // receiver ignored/clamped what arrived). This overload's
+      // `playPosition` is milliseconds and lands exactly — it is the call
+      // media3's CastPlayer ships on, which is as production-proven as cast
+      // APIs get.
+      rmc
+        .queueLoad(
+          items.map(::queueItem).toTypedArray(),
+          startIndex,
+          repeatMode,
+          CastMapping.secondsToMillis(startPosition),
+          null,
+        )
+        .bridge(promise, family = "load-failed", operation = "queueLoad")
+      return
+    }
+    // Credentials only travel on MediaLoadRequestData, so that path stays for
+    // custom receivers that need them. The start position rides ON THE START
+    // ITEM (MediaQueueItem times are SECONDS, honored by receivers) because
+    // queueData.startTime is broken — see above. Caveat, documented here on
+    // purpose: an item-level startTime is sticky, so jumping back to the
+    // start item later in the session resumes it at this offset rather
+    // than 0.
     val queueData =
       MediaQueueData.Builder()
-        .setItems(items.map(::queueItem))
-        .setStartIndex((options.startIndex ?: 0.0).toInt())
-        .setStartTime(CastMapping.secondsToMillis(options.startPosition ?: 0.0))
-        .setRepeatMode(
-          CastMapping.toFrameworkRepeatMode(options.repeatMode ?: CastRepeatMode.OFF)
+        .setItems(
+          items.mapIndexed { index, input ->
+            if (index == startIndex && startPosition > 0) {
+              MediaQueueItem.Builder(queueItem(input)).setStartTime(startPosition).build()
+            } else {
+              queueItem(input)
+            }
+          }
         )
+        .setStartIndex(startIndex)
+        .setRepeatMode(repeatMode)
         .build()
     val request =
       MediaLoadRequestData.Builder()
@@ -659,6 +719,14 @@ internal class CastController(
     attachedRmc = rmc
     rmc.registerCallback(rmcCallback)
     rmc.mediaQueue.registerCallback(queueCallback)
+    // Prime the media channel. Device-found (POCO F4, rejoined session): a
+    // session that REJOINS a running receiver app has no media status yet,
+    // and a queueLoad issued in that state never settled — no ack, no error,
+    // handoff stuck. media3's CastPlayer issues exactly this requestStatus()
+    // when a session becomes available; after it, commands flow. Best-effort
+    // by design: on a fresh session there is nothing to report and the
+    // result is irrelevant.
+    rmc.requestStatus().setResultCallback { /* prime only */ }
   }
 
   private fun detach() {
@@ -800,7 +868,11 @@ internal class CastController(
   ) {
     setResultCallback { result ->
       val status = result.status
-      if (status.isSuccess) {
+      if (status.isSuccess || status.statusCode == CastStatusCodes.REPLACED) {
+        // REPLACED (2103) is not a failure: a newer request of the same type
+        // superseded this one — the notification's seek bar routinely fires
+        // two seeks milliseconds apart (device-observed), and rejecting the
+        // first would put a scary error on screen for a seek that landed.
         promise.resolve(Unit)
       } else {
         promise.reject(

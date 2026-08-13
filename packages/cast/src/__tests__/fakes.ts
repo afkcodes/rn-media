@@ -39,6 +39,8 @@ export class FakeNativeCast implements RnMediaCast {
   queueSlice: CastQueueItemSnapshot[] = []
   /** When set, every command method rejects with `Error(rejectWith)`. */
   rejectWith: string | undefined
+  /** When set, the named command's promise never settles (hung PendingResult). */
+  hangCommand: string | undefined
 
   private nextId = 1
   private readonly castStateListeners = new Map<
@@ -282,6 +284,11 @@ export class FakeNativeCast implements RnMediaCast {
 
   private command(name: string, ...args: unknown[]): Promise<void> {
     this.calls.push([name, ...args])
+    if (this.hangCommand === name) {
+      // A PendingResult that never settles — the device-observed shape of a
+      // queueLoad issued against a just-rejoined session.
+      return new Promise<void>(() => undefined)
+    }
     return this.rejectWith != null
       ? Promise.reject(new Error(this.rejectWith))
       : Promise.resolve()

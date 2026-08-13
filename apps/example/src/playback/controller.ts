@@ -304,64 +304,67 @@ export class Playback implements PlaybackCommands {
 
   /*
    * Every sound-affecting command branches on WHO owns playback right now.
-   * While `cast-active` the receiver does, so play/pause/seek/skip go to it —
-   * and because the media handler calls exactly these methods, a notification
-   * button or a car head unit steers the receiver with no extra wiring. That
-   * is the fan-in contract doing its job: one command vocabulary, two
-   * backends, exactly one of which owns the clock.
+   * From `handoff-to-cast` onward the cast side does (`cast.owns`): during
+   * the handoff the local player is already paused for the session — a
+   * command routed to mpv there would start phone audio underneath the
+   * speaker's — and while `cast-active` the receiver holds the clock. The
+   * media handler calls exactly these methods, so a notification button or a
+   * car head unit steers the receiver with no extra wiring. That is the
+   * fan-in contract doing its job: one command vocabulary, two backends,
+   * exactly one of which owns the clock.
    */
 
   play(): Promise<void> {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.play()
       return Promise.resolve()
     }
     return this.#transport.play()
   }
   pause(): void {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.pause()
       return
     }
     this.#transport.pause()
   }
   toggle(): void {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.toggle()
       return
     }
     this.#transport.toggle()
   }
   next(): void {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.next()
       return
     }
     this.#transport.next()
   }
   previous(): void {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.previous()
       return
     }
     this.#transport.previous()
   }
   jumpTo(index: number): Promise<void> {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.jumpTo(index)
       return Promise.resolve()
     }
     return this.#transport.jumpTo(index)
   }
   seekTo(seconds: number): void {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.seekTo(seconds)
       return
     }
     this.#transport.seekTo(seconds)
   }
   seekBy(deltaSeconds: number): void {
-    if (this.#cast.controlsPlayback) {
+    if (this.#cast.owns) {
       this.#cast.seekBy(deltaSeconds)
       return
     }
@@ -386,10 +389,24 @@ export class Playback implements PlaybackCommands {
   chapters(): readonly ChapterEntry[] {
     return this.player?.getChapters() ?? []
   }
+  /**
+   * Volume is per-OUTPUT, so it follows playback ownership: while casting it
+   * drives the speaker's device volume (what Spotify's in-app slider does on
+   * a Cast device); locally it is mpv's software volume. Same 0..1 scale on
+   * both sides.
+   */
   setVolume(volume: number): void {
+    if (this.#cast.owns) {
+      this.#cast.setVolume(volume)
+      return
+    }
     this.#transport.setVolume(volume)
   }
   toggleMuted(): void {
+    if (this.#cast.owns) {
+      this.#cast.toggleMuted()
+      return
+    }
     this.#transport.toggleMuted()
   }
 

@@ -104,7 +104,7 @@ export function toCastMediaItem(
     duration:
       track.isLive === true || snapshot.duration === undefined
         ? undefined
-        : Math.round(snapshot.duration) * 1000,
+        : Math.round(snapshot.duration * 1000),
     trackNumber: track.trackNumber,
     year: track.year,
     isLive: track.isLive,
