@@ -9,6 +9,7 @@ import {
   endInterruption,
   FakeNativeAudioSession,
   FakePlayer,
+  PlayingAwareFakePlayer,
 } from './fakes'
 
 let native: FakeNativeAudioSession
@@ -166,6 +167,133 @@ describe('wireAudioSession — escalation between duck and pause', () => {
 
     native.emitInterruption(endInterruption(true))
     expect(player.calls).toEqual(['pause', 'play'])
+  })
+})
+
+describe('wireAudioSession — a user pause is sacred (#45)', () => {
+  /** Wire a state-reporting player, like the real `Player`. */
+  function wireAware(playing: boolean): PlayingAwareFakePlayer {
+    const aware = new PlayingAwareFakePlayer(playing)
+    wireAudioSession(aware, { session })
+    return aware
+  }
+
+  it('paused before a transient loss → gain with shouldResume → still paused', () => {
+    // The incident shape: pause manually, watch an Instagram reel (transient
+    // focus steal), reel ends (focus gain, shouldResume=true). The music must
+    // NOT start by itself.
+    const aware = wireAware(false)
+
+    native.emitInterruption(beginInterruption('pause'))
+    // Nothing was playing: no pause call, and — critically — no claim.
+    expect(aware.calls).toEqual([])
+
+    native.emitInterruption(endInterruption(true))
+    expect(aware.calls).toEqual([])
+  })
+
+  it('playing before the loss → auto-paused → gain resumes as before', () => {
+    const aware = wireAware(true)
+
+    native.emitInterruption(beginInterruption('pause'))
+    expect(aware.calls).toEqual(['pause'])
+    aware.reportPlaying(false) // the pause round-trips
+
+    native.emitInterruption(endInterruption(true))
+    expect(aware.calls).toEqual(['pause', 'play'])
+  })
+
+  it('survives transient-focus flapping: a re-loss lands before our own resume is reported', () => {
+    // Measured on device: Instagram re-requests focus 14 ms after abandoning
+    // it, faster than an mpv property round-trip. The helper must keep
+    // treating the player as "ours to pause" until the player confirms.
+    const aware = wireAware(true)
+
+    native.emitInterruption(beginInterruption('pause')) // loss
+    aware.reportPlaying(false)
+    native.emitInterruption(endInterruption(true)) // gain → play()
+    // No report yet: isPlaying() would still say false here.
+    native.emitInterruption(beginInterruption('pause')) // re-loss, 14 ms later
+    aware.reportPlaying(false)
+    native.emitInterruption(endInterruption(true)) // re-gain
+
+    expect(aware.calls).toEqual(['pause', 'play', 'pause', 'play'])
+  })
+
+  it('the echo of our own pause does not retire a pending resume', () => {
+    // pause and play writes round-trip in order, so the pause's `playing:
+    // false` echo can land *after* the wire's play() call. Only a `playing:
+    // true` confirmation may retire the pending resume.
+    const aware = wireAware(true)
+
+    native.emitInterruption(beginInterruption('pause'))
+    native.emitInterruption(endInterruption(true)) // play() before any echo
+    aware.reportPlaying(false) // the earlier pause's late echo
+    native.emitInterruption(beginInterruption('pause')) // flap re-loss
+    native.emitInterruption(endInterruption(true))
+
+    expect(aware.calls).toEqual(['pause', 'play', 'pause', 'play'])
+  })
+
+  it('a stale resume claim dies with the player’s next report', () => {
+    const aware = wireAware(true)
+
+    native.emitInterruption(beginInterruption('pause'))
+    aware.reportPlaying(false)
+    native.emitInterruption(endInterruption(true)) // resume
+    aware.reportPlaying(true) // resume confirmed
+    aware.reportPlaying(false) // ...and then the user pauses
+
+    // A new interruption now finds a paused player and takes no claim.
+    native.emitInterruption(beginInterruption('pause'))
+    native.emitInterruption(endInterruption(true))
+
+    expect(aware.calls).toEqual(['pause', 'play'])
+  })
+
+  it('user paused during a duck: the duck is restored but no resume is owed', () => {
+    const aware = wireAware(true)
+
+    native.emitInterruption(beginInterruption('duck'))
+    expect(aware.calls).toEqual(['setVolume(0.3)'])
+    aware.reportPlaying(false) // the user pauses mid-duck
+
+    native.emitInterruption(beginInterruption('pause')) // duck escalates
+    // Volume restored, but the paused player is not touched and not claimed.
+    expect(aware.calls).toEqual(['setVolume(0.3)', 'setVolume(1)'])
+
+    native.emitInterruption(endInterruption(true))
+    expect(aware.calls).toEqual(['setVolume(0.3)', 'setVolume(1)'])
+  })
+
+  it('becoming noisy still pauses even when the player reports paused', () => {
+    // "The headphones are gone" is not a resume-claim question; a redundant
+    // pause is harmless and the conservative choice.
+    const aware = wireAware(false)
+
+    native.emitBecomingNoisy()
+
+    expect(aware.calls).toEqual(['pause'])
+  })
+
+  it('a player without isPlaying keeps the old resume-always behaviour', () => {
+    // `FakePlayer` has neither isPlaying nor onStateChange — the helper has
+    // nothing to consult and must not break resume-after-call for it.
+    wire()
+
+    native.emitInterruption(beginInterruption('pause'))
+    native.emitInterruption(endInterruption(true))
+
+    expect(player.calls).toEqual(['pause', 'play'])
+  })
+
+  it('unwire removes the state subscription', () => {
+    const aware = new PlayingAwareFakePlayer(true)
+    const unwire = wireAudioSession(aware, { session })
+    expect(aware.stateListenerCount).toBe(1)
+
+    unwire()
+    expect(aware.stateListenerCount).toBe(0)
   })
 })
 

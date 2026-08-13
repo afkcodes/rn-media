@@ -102,6 +102,15 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
           lostFocusTransiently = true
           emitInterruption(begin = true, type = AudioInterruptionType.DUCK, permanent = false)
         }
+        // NOTE: focus events are delivered to the focus *holder* regardless of
+        // whether it is actually playing — a paused app that kept its focus
+        // request (as it should across a short pause) still receives the full
+        // LOSS_TRANSIENT/GAIN cycle when another app borrows focus. So
+        // `shouldResume` below can only mean "the system permits resuming
+        // after a transient loss", never "you were playing". This layer is
+        // player-agnostic and cannot know; the was-it-playing latch lives in
+        // `wireAudioSession` (see AudioSessionPlayerLike.isPlaying), which is
+        // the layer that can ask the player. (#45)
         AudioManager.AUDIOFOCUS_GAIN -> {
           val shouldResume = lostFocusTransiently
           lostFocusTransiently = false

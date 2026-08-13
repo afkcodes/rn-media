@@ -537,6 +537,23 @@ describe('Player — transport commands', () => {
     expect(client.written.get(MpvProperty.pause)).toBe(false)
   })
 
+  it('isPlaying mirrors the observed pause property, not the written one', async () => {
+    // The wireAudioSession pause-latch contract (#45): isPlaying() answers
+    // from the *observed* state, so it stays stale until the property
+    // round-trips — which is exactly what the wire's resume-pending flag
+    // compensates for.
+    const player = await createPlayer()
+    expect(player.isPlaying()).toBe(false)
+
+    player.play()
+    expect(player.isPlaying()).toBe(false) // written, not yet observed
+    client.emit([propertyEvent(MpvProperty.pause, false)])
+    expect(player.isPlaying()).toBe(true)
+
+    client.emit([propertyEvent(MpvProperty.pause, true)])
+    expect(player.isPlaying()).toBe(false)
+  })
+
   it('seekTo issues an absolute exact seek and clamps negatives', async () => {
     const player = await createPlayer()
     await player.seekTo(42.5)

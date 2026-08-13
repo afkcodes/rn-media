@@ -1353,6 +1353,44 @@ point of the example.
   task (matched by name pattern, so new variants inherit it; debug loads from
   Metro and has no bundle task). Note when reproducing: Gradle fingerprints file
   *content*, so `touch` alone proves nothing — the input has to actually change.
+- **Focus/interruption events are delivered to the focus *holder* regardless of
+  whether it is playing — so "interruption ended, shouldResume" never means
+  "you were playing".** Both platforms: Android delivers the full
+  `AUDIOFOCUS_LOSS_TRANSIENT`/`AUDIOFOCUS_GAIN` cycle to a paused app that kept
+  its focus request (which it should, across a short pause), and AVAudioSession
+  sends `began`/`ended(.shouldResume)` to an active session whose player sits
+  paused. Resuming on the end-event alone therefore restarts music the user
+  explicitly stopped — bug #45, observed 2026-08-13: owner paused via the
+  notification, watched Instagram reels (transient focus steals, request/abandon
+  cycles as fast as 14 ms apart per `dumpsys audio`), and playback started by
+  itself on the reel's focus abandon. The native layers are player-agnostic and
+  *cannot* carry a was-playing bit; the latch lives in `wireAudioSession`, which
+  consults the player through two optional structural members —
+  `isPlaying()` for the answer and `onStateChange()` for its freshness (a
+  resume the wire itself issued is stale in `isPlaying()` until the mpv
+  property round-trips, and interruptions really do land inside that window —
+  hence the wire's resume-pending flag, cleared by the player's next report).
+  A user pause is sacred: no claim is taken on an already-paused player, so no
+  resume is ever owed for it. Players exposing neither member keep the old
+  resume-always behaviour, documented on `AudioSessionPlayerLike`.
+- **`stopForeground(STOP_FOREGROUND_REMOVE)` cannot remove a media3
+  notification once the service has been demoted.** media3's
+  `stopForegroundOnPause` demotion posts the notification with
+  `NotificationManager.notify(id, …)` *then* calls
+  `stopForeground(removeNotification = false)`
+  (`MediaNotificationManager.updateNotificationInternal`, 1.11.0) — after which
+  the notification is an ordinary posted notification the foreground-service
+  API no longer owns. media3's own removal spells this out
+  (`MediaNotificationManager.removeNotification`: both `stopForeground(true)`
+  *and* `cancel(notificationId)` are required), and while media3 does run that
+  removal when a released session's notification controller disconnects, it is
+  an async future chain racing the service's own `stopSelf()`. Bug #46,
+  observed 2026-08-13: "stop & dismiss" ended playback but the notification
+  survived 14 s with live buttons (the owner's tap on its play button is in the
+  logcat as a `MEDIA_SESSION_CALLBACK` FGS grant). `releaseAndStop()` therefore
+  cancels `DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID` (1001 —
+  ours by the same no-`setNotificationId` invariant the resumption bridge
+  notification relies on) synchronously, right after `stopForeground`.
 
 ## Update policy
 
