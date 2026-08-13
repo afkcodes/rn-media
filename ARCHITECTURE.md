@@ -1238,12 +1238,97 @@ mid-session is the same seam as the player's source resolver: a
 `syncQueue()` (the example implements the recipe, bounded to one automatic
 attempt per track).
 
-**Platform truths (Android, from implementation; device round pending the
-receiver being on the LAN):**
+**Platform truths (Android, found on hardware — POCO F4 (AOSP custom ROM) +
+Mi Smart Speaker, device rounds 2026-08-13; every item below was measured,
+not read about):**
+
+- **`MediaQueueData.Builder.setStartTime` does not deliver a start
+  position.** Whatever was written there, the receiver began at 0:00 — the
+  owner-reported "starts from the beginning" bug. The wire-level
+  `queueData.startTime` is documented in *seconds* on the Web Receiver while
+  the builder takes a `long`, and the Default Media Receiver
+  ignored/clamped everything we sent through it. The fix is the classic
+  `RemoteMediaClient.queueLoad(items, startIndex, repeatMode,
+  playPositionMs, customData)` — milliseconds, honored exactly, and the
+  call media3's `CastPlayer` ships on. (When credentials force the
+  `MediaLoadRequestData` path, the start position rides on the start ITEM —
+  `MediaQueueItem` times are seconds — with the documented stickiness
+  caveat.)
+- **The receiver's first non-idle status arrives before it applies the start
+  position** (buffering at 0.0 s for a 42 s handoff). The machine floors the
+  completing anchor/transfer at the projection's `startPosition` for the
+  start item; later statuses carry real clocks and correct it within one
+  update.
+- **The sender-side `MediaQueue` mirror populates *after* the `queueLoad`
+  ack.** Item ids read together with the ack are routinely empty, which
+  killed the itemId↔JS-index mapping: every receiver jump rejected
+  `invalid-argument` while playback ran fine. The fix is structural, not a
+  sleep: the orchestrator re-reads the ids on every native `queueChanged`
+  and the machine adopts any non-empty read (`queueItemIds` event); an empty
+  read never clears known ids.
+- **A `queueLoad` issued against a just-REJOINED session can hang forever** —
+  PendingResult never settles, no error, machine stuck in `handoff-to-cast`.
+  Two-part fix: `attach()` primes the media channel with `requestStatus()`
+  (exactly what media3's CastPlayer does on session-available), and
+  `wireCastHandoff` bounds the phase with `handoffTimeoutMs` (default 15 s)
+  → typed `load-failed` → fallback to LOCAL at the pre-handoff snapshot. An
+  honest error, never a hang.
+- **`setStopReceiverApplicationWhenEndingSession(true)` overrides
+  `endCurrentSession(stopCasting = false)`** — logcat showed
+  `stopApplication` on a false-parameter end. Deeper ceiling underneath:
+  with the option false, and even via
+  `MediaRouter.unselect(UNSELECT_REASON_DISCONNECTED)`, **the GMS sender
+  stack still stops receiver playback whenever its session ends** — while
+  the same receiver demonstrably keeps playing when a bare CastV2 sender
+  (pychromecast control test) disconnects. "Disconnect and keep playing" is
+  therefore not achievable through play-services-cast-framework 22.3.1; the
+  API documents what `transferBackToLocal: false` still honestly delivers
+  (no local resume; receiver app left to idle out).
+- **The transfer-back restore has an mpv race** (example-layer truth): a
+  `playlist.jumpTo` resolves when the command is ACCEPTED, not when the
+  entry is open, so a seek issued against the still-`ready` pre-jump
+  snapshot is rejected mid-reload (`error running command`) and the whole
+  restore used to land paused at 0:00. Rules that fix it structurally:
+  never reload the entry already current; after a real jump, wait until the
+  state SHOWS the target open (`index === target` + settled status); retry
+  a rejected seek once on a FRESH state change only.
+- **Kotlin `Promise.reject(Throwable)` reaches JS class-prefixed**
+  (`"java.lang.IllegalStateException: [no-session] …"`) — an anchored
+  `^\[code\]` match silently reclassified every typed native rejection as
+  `native` and broke the `no-session` filters. `toCastError` matches the
+  marker anywhere in the message.
+- **`REPLACED` (2103) is not a failure.** The notification's seek bar fires
+  two seeks milliseconds apart; the older command's `PendingResult` fails
+  with REPLACED even though the seek landed. The Kotlin bridge resolves it.
+- **Hardware volume keys do not reach the receiver by default.** This
+  library disables the Cast framework's own MediaSession (the media-session
+  package owns the app's session — the fan-out contract), and that framework
+  session is exactly what would have carried volume keys to the receiver.
+  The app's media3 session advertises LOCAL playback, so the keys move the
+  phone's silent music stream. The example forwards VOLUME_UP/DOWN to the
+  cast session from `MainActivity.dispatchKeyEvent` (device-verified: exact
+  5 % steps land on the speaker) — foreground only, by construction.
+  Background/lock-screen volume keys need a remote-playback media session
+  (`setPlaybackToRemote`), which is a future media-session-package feature,
+  not an example-app patch.
+- **The receiver pushes a media status roughly every 3 s while playing.**
+  Each is a genuine position-anchor discontinuity and flows through
+  `setPlaybackState`; the `mediaItem` channel is signature-gated in
+  `publishCast` so metadata/artwork are not re-broadcast per status.
+- **mpv normalises `file://` URIs to bare paths** before handing them back
+  through the playlist — any app joining queue rows by URI must compare with
+  the scheme stripped (the example's `matchTrack` does now).
 
 - A session can exist before JS wires anything (framework session resumption
   runs at `CastContext` init). The handoff deliberately does NOT auto-cast
   over it — destructive at app launch — and reuses it on the next `castTo`.
+- This phone carries TWO cast route providers (stock GMS and a
+  `app.revanced.android.gms` microG fork), and their route churn can end a
+  session unsolicited — observed correlated with screen-off. The machine's
+  design absorbs it: unsolicited `sessionEnded` restores LOCAL at the
+  projected receiver position, and the framework's `resumed` event re-runs
+  the handoff from the restored snapshot, so a flap costs a beat of silence,
+  not the listening position.
 - The connect-ordering rule (connect after the picker closes, *before*
   `stopDiscovery`, or MediaRouter drops the route mid-handshake) is encoded
   natively (deferred discovery teardown while a start is in flight) AND kept

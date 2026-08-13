@@ -434,6 +434,43 @@ describe('HANDOFF_TO_CAST', () => {
     expect(snapshot.itemIndex).toBe(0)
   })
 
+  it('an early status at 0.0 anchors the START item at the requested position (device-found)', () => {
+    // The receiver's first non-idle status routinely arrives BEFORE it has
+    // applied the load's start position — on hardware it reported buffering
+    // at 0.0 s for a 42.5 s handoff, and every surface then announced the
+    // session began at 0:00. The requested position is the honest floor.
+    const t = drive(
+      [
+        loaded([11, 12, 13]),
+        status({ currentItemId: 11, playerState: 'buffering', position: 0 }),
+      ],
+      handingOff
+    )
+    expect(t.state.phase).toBe('cast-active')
+    expect(findEffect(t, 'emitTransfer').transfer.position).toBe(42.5)
+    expect(findEffect(t, 'emitReceiverState').snapshot.position).toBe(42.5)
+  })
+
+  it('a status beyond the requested start keeps the receiver clock (no floor once real)', () => {
+    const t = drive(
+      [loaded([11, 12, 13]), status({ currentItemId: 11, position: 50.2 })],
+      handingOff
+    )
+    expect(findEffect(t, 'emitTransfer').transfer.position).toBe(50.2)
+  })
+
+  it('the floor never applies to a non-start item — its clock starts at 0 for real', () => {
+    const t = drive(
+      [loaded([11, 12, 13]), status({ currentItemId: 12, position: 0 })],
+      handingOff
+    )
+    expect(findEffect(t, 'emitTransfer').transfer).toEqual({
+      direction: 'toCast',
+      position: 0,
+      itemIndex: 2,
+    })
+  })
+
   it('a paused handoff completes on the receiver reporting paused', () => {
     const t = drive([
       started(mixedSnapshot({ playWhenReady: false })),
@@ -465,6 +502,25 @@ describe('HANDOFF_TO_CAST', () => {
       handingOff
     )
     expect(findEffect(t, 'emitTransfer').transfer.itemIndex).toBe(2)
+  })
+
+  it('adopts a late queueItemIds read — the sender mirror lags the load ack (device-found)', () => {
+    // The ack came back before the mirror populated: empty ids.
+    const acked = reduceCastHandoff(handingOff, loaded([])).state
+    const refreshed = reduceCastHandoff(acked, {
+      type: 'queueItemIds',
+      itemIds: [11, 12, 13],
+      at: 1_150,
+    }).state
+    const t = reduceCastHandoff(refreshed, status({ currentItemId: 12 }))
+    expect(t.state.phase).toBe('cast-active')
+    expect(findEffect(t, 'emitTransfer').transfer.itemIndex).toBe(2)
+  })
+
+  it('an empty queueItemIds read never clears known ids', () => {
+    const acked = reduceCastHandoff(handingOff, loaded([11, 12, 13])).state
+    const t = reduceCastHandoff(acked, { type: 'queueItemIds', itemIds: [], at: 1_150 })
+    expect(t.state).toBe(acked)
   })
 
   it('castQueueLoadFailed falls back to LOCAL at the pre-handoff snapshot, error first', () => {
@@ -732,6 +788,37 @@ describe('CAST_ACTIVE', () => {
     })
     expect(t.state.phase).toBe('cast-active')
     expect(findEffect(t, 'emitError').error.code).toBe('no-castable-media')
+  })
+
+  it('a queueItemIds refresh heals a mapping that entered cast-active empty', () => {
+    // The device-found failure shape: cast-active with itemIds [] — every
+    // jump rejected until a queueChanged-driven refresh landed.
+    const emptyActive = drive([
+      started(mixedSnapshot()),
+      loaded([]),
+      status({ currentItemId: 11 }),
+    ]).state
+    const healed = reduceCastHandoff(emptyActive, {
+      type: 'queueItemIds',
+      itemIds: [11, 12, 13],
+      at: 2_000,
+    }).state
+    const t = reduceCastHandoff(healed, status({ currentItemId: 13 }, 3_000))
+    expect(findEffect(t, 'emitReceiverState').snapshot.itemIndex).toBe(3)
+  })
+
+  it('a queueItemIds read arriving mid-resync is ignored — its generation is unknowable', () => {
+    const resynced = reduceCastHandoff(activeState(), {
+      type: 'resync',
+      snapshot: mixedSnapshot(),
+      at: 3_200,
+    }).state
+    const t = reduceCastHandoff(resynced, {
+      type: 'queueItemIds',
+      itemIds: [91, 92, 93],
+      at: 3_250,
+    })
+    expect(t.state).toBe(resynced)
   })
 
   it('a resync queueLoad failure keeps the session and surfaces the error', () => {

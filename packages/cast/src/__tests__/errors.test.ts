@@ -39,6 +39,19 @@ describe('toCastError', () => {
     expect(error.statusCode).toBe(2100)
   })
 
+  it('classifies a bridge-prepended exception class (device-found shape)', () => {
+    // A Kotlin `Promise.reject(Throwable)` reaches JS with the exception
+    // class name prepended — the code marker is NOT at the start. An
+    // anchored match silently reclassified every typed rejection as
+    // `native`, which broke the `no-session` filters.
+    const error = toCastError(
+      new Error(
+        'java.lang.IllegalStateException: [no-session] No connected cast session. Call requestSession() first.'
+      )
+    )
+    expect(error.code).toBe('no-session')
+  })
+
   it('an unprefixed error becomes code native with the text preserved', () => {
     const error = toCastError(new Error('kaboom'))
     expect(error.code).toBe('native')

@@ -451,6 +451,92 @@ describe('wireCastHandoff — receiver transport over the mapping', () => {
   })
 })
 
+describe('wireCastHandoff — the sender-mirror lag (device-found)', () => {
+  it('an empty ids read at the load ack is healed by the queueChanged refresh', async () => {
+    const h = harness()
+    h.native.queueItemIds = [] // mirror not populated yet — the real timing
+    await h.toCastActive()
+
+    // Mapping dead: every receiver jump rejects.
+    await expect(h.handoff.skipToItem(2)).rejects.toMatchObject({
+      code: 'invalid-argument',
+    })
+
+    // The mirror fills in and fires its queueChanged.
+    h.native.queueItemIds = [11, 12]
+    h.native.emitQueueChanged()
+    await flush()
+
+    await h.handoff.skipToItem(2)
+    expect(h.native.calls).toContainEqual(['queueJumpTo', 12, undefined])
+    // Reconciliation heals too.
+    h.native.emitMediaStatus(playingStatus({ currentItemId: 12 }))
+    await flush()
+    expect(h.handoff.receiverItemIndex).toBe(2)
+  })
+
+  it('queueChanged outside a session phase reads nothing', async () => {
+    const h = harness()
+    h.native.emitQueueChanged()
+    await flush()
+    expect(h.native.calls.filter(([name]) => name === 'getQueueItemIds')).toEqual(
+      []
+    )
+  })
+})
+
+describe('wireCastHandoff — the bounded handoff (device-found hang)', () => {
+  it('a queueLoad that never settles falls back to LOCAL with a typed load-failed', async () => {
+    // The real shape (POCO F4, rejoined session): the PendingResult of a
+    // queueLoad issued right after rejoining a running receiver app never
+    // fired — no ack, no error, machine stuck in handoff-to-cast forever.
+    const native = new FakeNativeCast()
+    native.castState = 'idle'
+    native.hangCommand = 'queueLoad'
+    const cast = createCast(native)
+    const local = new FakeLocalPlayer()
+    const phases: CastHandoffPhase[] = []
+    const errors: CastError[] = []
+    const handoff = wireCastHandoff(local, {
+      cast,
+      snapshot: () => snapshot(),
+      onPhaseChange: (phase) => phases.push(phase),
+      onError: (error) => errors.push(error),
+      handoffTimeoutMs: 25,
+    })
+
+    const connect = handoff.castTo('dev-1')
+    native.emitSession({
+      type: 'started',
+      device: { id: 'dev-1', name: 'Speaker' },
+    })
+    await connect
+    await flush()
+    expect(handoff.phase).toBe('handoff-to-cast')
+
+    // Real timer, tiny bound: the fallback must fire on its own.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await flush()
+
+    expect(handoff.phase).toBe('local')
+    expect(errors.map((e) => e.code)).toContain('load-failed')
+    // Restored at the pre-handoff snapshot: cursor, clock, intent.
+    expect(local.calls).toContainEqual(['skipToIndex', 0])
+    expect(local.calls).toContainEqual(['seekTo', 42.5])
+    expect(local.calls).toContainEqual(['play'])
+    handoff.dispose()
+  })
+
+  it('a completed handoff never fires the bound — the timer dies with the phase', async () => {
+    const h = harness()
+    await h.toCastActive()
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    await flush()
+    expect(h.handoff.phase).toBe('cast-active')
+    expect(h.errors).toEqual([])
+  })
+})
+
 describe('wireCastHandoff — queue resync', () => {
   it('syncQueue reloads the projection anchored at the receiver clock and swaps the mapping on ack', async () => {
     const h = harness()

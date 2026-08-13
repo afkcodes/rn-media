@@ -588,6 +588,13 @@ function reduceHandoffToCast(
         state: { ...state, loaded: true, itemIds: event.itemIds },
         effects: [],
       }
+    case 'queueItemIds':
+      // The sender-side mirror filled in (it lags the load ack) — see the
+      // event's doc. Never *clears* known ids: an empty read is the mirror
+      // still catching up, not a truth.
+      return event.itemIds.length > 0
+        ? { state: { ...state, itemIds: event.itemIds }, effects: [] }
+        : stay(state)
     case 'castQueueLoadFailed':
       return fallBackToLocal(state.snapshot, event.error)
     case 'castError':
@@ -609,15 +616,30 @@ function reduceHandoffToCast(
         return stay(state)
       }
       const { projection } = state
+      const startJsIndex = projection.jsIndices[projection.startIndex]
       const itemIndex =
         reconcileItemIndex(
           state.itemIds,
           projection.jsIndices,
           status.currentItemId
         ) ??
-        projection.jsIndices[projection.startIndex] ??
+        startJsIndex ??
         state.snapshot.index
-      const snapshot = receiverSnapshot(status, event.at, itemIndex)
+      // The first non-idle status routinely arrives BEFORE the receiver has
+      // applied the load's start position (device-observed: buffering at
+      // 0.0 s for a 62 s handoff). For the start item, the position we ASKED
+      // for is the honest floor — otherwise the transfer event and the first
+      // anchor would tell every surface the session began at 0:00. Later
+      // statuses carry real positions and correct the anchor within one
+      // update either way.
+      const position =
+        itemIndex === startJsIndex
+          ? Math.max(status.position, projection.startPosition)
+          : status.position
+      const snapshot = {
+        ...receiverSnapshot(status, event.at, itemIndex),
+        position,
+      }
       return {
         state: {
           phase: 'cast-active',
@@ -625,7 +647,7 @@ function reduceHandoffToCast(
           jsIndices: projection.jsIndices,
           itemIndex,
           anchor: {
-            position: status.position,
+            position,
             at: event.at,
             rate: snapshot.rate,
           },
@@ -637,7 +659,7 @@ function reduceHandoffToCast(
             type: 'emitTransfer',
             transfer: {
               direction: 'toCast',
-              position: status.position,
+              position,
               itemIndex,
             },
           },

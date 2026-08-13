@@ -89,6 +89,20 @@ export interface WireCastHandoffOptions {
   onError?: (error: CastError) => void
   /** Clock, injectable for tests. @default Date.now */
   now?: () => number
+  /**
+   * Upper bound on the `handoff-to-cast` phase. If the receiver has not
+   * produced a queue-load ack AND a first status by then, the machine falls
+   * back to LOCAL at the pre-handoff snapshot with a typed `load-failed` —
+   * an honest error instead of a hang. Device truth behind the number: a
+   * healthy load acks in under a second on a LAN, but a `queueLoad` issued
+   * against a just-rejoined session was observed to never settle at all
+   * (see `CastController.attach`'s requestStatus priming — this timeout is
+   * the belt to that suspender). A JS timer is legal here for the same
+   * reason it is in the example's restore waits: a handoff is user-initiated
+   * and foreground.
+   * @default 15_000
+   */
+  handoffTimeoutMs?: number
 }
 
 /** The running handoff — one per app; dispose before creating another. */
@@ -163,6 +177,9 @@ export function wireCastHandoff(
   let localWaiters: Array<() => void> = []
   /** The in-flight `requestSession` promise, for `castTo` to await. */
   let connecting: Promise<void> | undefined
+  const handoffTimeoutMs = options.handoffTimeoutMs ?? 15_000
+  /** Armed while `handoff-to-cast`; fires the bounded-handoff fallback. */
+  let handoffTimer: ReturnType<typeof setTimeout> | undefined
 
   function dispatch(event: CastHandoffEvent): void {
     if (disposed) return
@@ -170,6 +187,30 @@ export function wireCastHandoff(
     const { state: next, effects } = reduceCastHandoff(state, event)
     state = next
     if (next.phase !== previous.phase) {
+      // The bounded handoff (see `handoffTimeoutMs`): the timer lives
+      // exactly as long as the phase it bounds.
+      if (next.phase === 'handoff-to-cast') {
+        handoffTimer = setTimeout(() => {
+          handoffTimer = undefined
+          // Re-check the phase: on a stalled-then-resumed JS thread
+          // (device-observed) the overdue timer runs AFTER the queued native
+          // completions — by which point the handoff may have finished, and
+          // a spurious castQueueLoadFailed would surface a phantom error.
+          if (state.phase !== 'handoff-to-cast') return
+          dispatch({
+            type: 'castQueueLoadFailed',
+            error: new CastError(
+              'load-failed',
+              `The receiver did not start the queue within ${String(
+                handoffTimeoutMs
+              )} ms — falling back to local playback.`
+            ),
+          })
+        }, handoffTimeoutMs)
+      } else if (handoffTimer !== undefined) {
+        clearTimeout(handoffTimer)
+        handoffTimer = undefined
+      }
       options.onPhaseChange?.(next.phase)
       if (next.phase === 'local') {
         const waiters = localWaiters
@@ -301,6 +342,28 @@ export function wireCastHandoff(
     cast.addListener('mediaStatus', (status) => {
       dispatch({ type: 'mediaStatus', status, at: now() })
     }),
+    cast.addListener('queueChanged', () => {
+      // The sender-side MediaQueue mirror populates asynchronously AFTER the
+      // queueLoad ack (device-verified: the ids read with the ack are
+      // routinely empty, and every receiver jump then fails). Each mirror
+      // change re-reads the ids and feeds the machine, which adopts any
+      // non-empty read — this is what keeps the itemId ↔ JS-index mapping
+      // honest for the whole session.
+      if (state.phase !== 'handoff-to-cast' && state.phase !== 'cast-active') {
+        return
+      }
+      cast
+        .getQueueItemIds()
+        .then((itemIds) => {
+          dispatch({ type: 'queueItemIds', itemIds, at: now() })
+        })
+        .catch((cause: unknown) => {
+          // `no-session` here means the session raced away between the event
+          // and the read — its own `sessionEnded` is already on the way.
+          const error = toCastError(cause)
+          if (error.code !== 'no-session') onError(error)
+        })
+    }),
     cast.addListener('error', (error) => {
       dispatch({ type: 'castError', error })
     }),
@@ -427,6 +490,10 @@ export function wireCastHandoff(
     dispose(): void {
       if (disposed) return
       disposed = true
+      if (handoffTimer !== undefined) {
+        clearTimeout(handoffTimer)
+        handoffTimer = undefined
+      }
       for (const unsubscribe of unsubscribers) unsubscribe()
       // Nothing left to wait for; release rather than hang.
       const waiters = localWaiters

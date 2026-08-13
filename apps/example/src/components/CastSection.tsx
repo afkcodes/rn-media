@@ -110,7 +110,10 @@ export const CastSection = React.memo(function CastSection({
         </Detail>
       ) : null}
 
-      {/* End-session: the two honest meanings of "stop casting". */}
+      {/* End-session: the two honest meanings of "stop casting". The second
+          is narrower on Android than its name suggests — see the Detail
+          below; the platform stops receiver playback on session end
+          (device-verified ceiling, ARCHITECTURE §25). */}
       {casting ? (
         <ChipRow>
           <Chip
@@ -119,7 +122,7 @@ export const CastSection = React.memo(function CastSection({
             onPress={() => void cast.disconnect(true)}
           />
           <Chip
-            label="Disconnect, keep playing"
+            label="Disconnect"
             tone="danger"
             disabled={cast.phase !== 'cast-active'}
             onPress={() => void cast.disconnect(false)}

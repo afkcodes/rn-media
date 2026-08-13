@@ -79,7 +79,15 @@ export interface EndSessionOptions {
   /**
    * `true` (the transfer-back flow): stop receiver playback — read the last
    * `mediaStatus` position first and resume locally from it. `false`: just
-   * disconnect and leave the receiver playing.
+   * disconnect, without transferring playback back to this device.
+   *
+   * **Android ceiling, measured on hardware (cast framework 22.3.1):**
+   * `false` cannot leave the receiver *playing*. The framework stops
+   * receiver playback whenever its session ends, whatever teardown path is
+   * used — even though Cast receivers themselves support last-sender-leave
+   * continuation. What `false` still delivers: local playback is not
+   * resumed, and the receiver app is left to idle out rather than being
+   * explicitly stopped.
    *
    * @default true
    */

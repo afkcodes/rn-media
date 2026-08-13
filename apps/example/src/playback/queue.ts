@@ -210,8 +210,18 @@ export class QueueMirror {
 function matchTrack(uri: string): Track | undefined {
   return (
     TRACKS.find((track) => track.uri === uri) ??
+    // mpv normalises `file://` URIs to bare paths before handing them back
+    // (observed on device: `file:///product/media/...` came back as
+    // `/product/media/...`, and the row rendered "Not in TRACKS"). Compare
+    // with the scheme stripped from both sides.
+    TRACKS.find((track) => stripFileScheme(track.uri) === stripFileScheme(uri)) ??
     TRACKS.find((track) => uri.endsWith(track.uri))
   )
+}
+
+/** `file:///x` → `/x`; anything else unchanged. */
+function stripFileScheme(uri: string): string {
+  return uri.startsWith('file://') ? uri.slice('file://'.length) : uri
 }
 
 /** A queue row for something this app did not put there. */

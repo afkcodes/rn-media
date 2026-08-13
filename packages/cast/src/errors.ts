@@ -86,17 +86,25 @@ const NATIVE_CODES: readonly CastErrorCode[] = [
 ]
 
 /**
- * Native rejections cross the bridge as plain `Error`s whose message starts
- * with `[<code>]` from the closed set above (the spec's error contract). This
- * is the single place that turns one into a typed {@link CastError};
- * anything unprefixed becomes `code: 'native'` with the original text in
+ * Native rejections cross the bridge as plain `Error`s whose message carries
+ * a `[<code>]` marker from the closed set above (the spec's error contract).
+ * This is the single place that turns one into a typed {@link CastError};
+ * anything unmarked becomes `code: 'native'` with the original text in
  * `raw` — never swallowed, never guessed at.
+ *
+ * The marker is matched anywhere in the message, not just at the start:
+ * device truth is that a Kotlin `Promise.reject(Throwable)` arrives in JS as
+ * `"java.lang.IllegalStateException: [no-session] …"` — the exception class
+ * name is prepended by the bridge, and an anchored match silently
+ * reclassified every typed rejection as `native` (found because a
+ * receiver-death test surfaced a `no-session` that a filter should have
+ * dropped).
  */
 export function toCastError(error: unknown): CastError {
   if (error instanceof CastError) return error
   const raw =
     error instanceof Error ? error.message : String(error ?? 'unknown error')
-  const match = /^\s*\[([a-z-]+)\]\s*(.*)$/s.exec(raw)
+  const match = /\[([a-z-]+)\]\s*((?:.|\n)*)$/.exec(raw)
   if (match !== null) {
     const code = NATIVE_CODES.find((c) => c === match[1])
     if (code !== undefined) {

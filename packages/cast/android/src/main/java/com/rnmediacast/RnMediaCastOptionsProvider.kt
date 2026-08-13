@@ -46,10 +46,14 @@ class RnMediaCastOptionsProvider : OptionsProvider {
       // here because Phase 3's handoff machine depends on resumed sessions
       // arriving via `onSessionResumed`).
       .setResumeSavedSession(true)
-      // Ending the session stops the receiver app unless the user picked
-      // "leave playing" (endSession(stopReceiver = false) maps to
-      // endCurrentSession(false) at call time, which overrides this default).
-      .setStopReceiverApplicationWhenEndingSession(true)
+      // FALSE, device-proven (POCO F4 → Mi Smart Speaker): with this true,
+      // `endCurrentSession(stopCasting = false)` STILL issued stopApplication
+      // — the option overrides the parameter, killing "disconnect and keep
+      // playing" (logcat: `stopApplication CC1AD845` on a false-parameter
+      // end). With it false, the parameter decides; the transfer-back path
+      // additionally stops receiver MEDIA explicitly (endSession in
+      // CastController), so no path leaks a receiver that should be silent.
+      .setStopReceiverApplicationWhenEndingSession(false)
       .build()
 
   override fun getAdditionalSessionProviders(

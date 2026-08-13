@@ -56,6 +56,8 @@ export class SessionBridge {
   #castActive = false
   /** Last broadcast discontinuity signature — see {@link publish}. */
   #lastSignature = ''
+  /** Last cast `mediaItem` signature — see {@link publishCast}. */
+  #lastCastItem = ''
   /**
    * Published duration per track id, in ms, as the player learns them.
    *
@@ -192,12 +194,22 @@ export class SessionBridge {
       // Force the next local publish through: the local signature is stale by
       // an entire cast session.
       this.#lastSignature = ''
+      this.#lastCastItem = ''
       return
     }
     this.#castActive = true
     const service = this.#service
     if (service === undefined) return
-    service.setMediaItem(track && toCastMediaItem(track, snapshot))
+    // The receiver pushes a status every few seconds (device-measured ~3 s);
+    // each one is a genuine position discontinuity, so the playback state
+    // always goes out — but the ITEM channel (title, artwork, duration) only
+    // changes on track boundaries, and re-sending it per status would make
+    // every surface re-resolve metadata it already has.
+    const itemSignature = `${track?.id ?? ''}|${String(snapshot.duration)}|${String(snapshot.itemIndex)}`
+    if (itemSignature !== this.#lastCastItem) {
+      this.#lastCastItem = itemSignature
+      service.setMediaItem(track && toCastMediaItem(track, snapshot))
+    }
     service.setPlaybackState(toCastPlaybackState(snapshot))
   }
 

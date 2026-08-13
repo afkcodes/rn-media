@@ -63,6 +63,7 @@ import { runCastSelfTest } from './playback/cast-selftest'
 import { sameShell, selectShell } from './playback/shell'
 import { formatTime } from './components/SeekBar'
 import { CastSection } from './components/CastSection'
+import { useCastProgress } from './components/useCastProgress'
 import { ErrorBanner } from './components/ErrorBanner'
 import { EqualizerSection } from './components/EqualizerSection'
 import { LoudnessSection } from './components/LoudnessSection'
@@ -95,16 +96,32 @@ function App(): React.JSX.Element {
     console.log(`[example] milestone ${String(percent)}% of entry ${String(index)}`)
   })
 
+  // While casting the RECEIVER owns the clock: its anchor (projected on a UI
+  // ticker) replaces the local player's progress, and the current row is the
+  // receiver's reconciled queue index — so the hero, the scrubber and the
+  // notification all describe the same playback, which is the §3 contract.
+  const castProgress = useCastProgress(playback)
+  const casting = castProgress !== undefined
+  const index = playback.cast.receiverIndex ?? shell.index
+
   const ready = player !== undefined
   // The queue is app state, not player state — it can be edited — so the
   // current track is looked up here, where both subscriptions have been read.
-  const track = playback.queue[shell.index]
+  const track = playback.queue[index]
   // The same duration the media session gets: `undefined` for a live stream,
   // where mpv's raw `state.duration` is just how much it has cached. One
-  // function, so the notification and this screen cannot disagree.
-  const published = track === undefined ? undefined : durationMs(track, shell)
-  const song = track === undefined ? undefined : nowPlaying(track, shell)
-  const live = progress.isLive || track?.isLive === true
+  // function, so the notification and this screen cannot disagree. While
+  // casting, the receiver's duration is that number.
+  const published = casting
+    ? castProgress.duration === undefined
+      ? undefined
+      : Math.round(castProgress.duration * 1000)
+    : track === undefined
+      ? undefined
+      : durationMs(track, shell)
+  const song =
+    track === undefined || casting ? undefined : nowPlaying(track, shell)
+  const live = track?.isLive === true || (!casting && progress.isLive)
   // Chapters are a PULL, like the queue's contents: one node read, taken when
   // the entry changes rather than kept in state and pushed on every update.
   // Most entries have none, and this costs exactly one native call per track.
@@ -128,7 +145,7 @@ function App(): React.JSX.Element {
         <NowPlaying
           track={track}
           shell={shell}
-          progress={progress}
+          progress={castProgress ?? progress}
           station={playback.station}
           song={song}
           durationMs={published}
@@ -139,7 +156,7 @@ function App(): React.JSX.Element {
         />
 
         <TransportControls
-          playing={shell.playing}
+          playing={casting ? playback.cast.receiver?.playing === true : shell.playing}
           ready={ready}
           hasNext={shell.hasNext}
           hasPrevious={shell.hasPrevious}
@@ -177,8 +194,8 @@ function App(): React.JSX.Element {
 
         <QueueList
           queue={playback.queueRows}
-          index={shell.index}
-          playing={shell.playing}
+          index={index}
+          playing={casting ? playback.cast.receiver?.playing === true : shell.playing}
           ready={ready}
           onJump={(index) => void playback.jumpTo(index)}
           onPlayNext={(item) => void playback.playNext(item)}
@@ -209,11 +226,20 @@ function App(): React.JSX.Element {
           onShuffle={(enabled) => void playback.setShuffleEnabled(enabled)}
         />
 
+        {/* While casting, the volume row shows and drives the SPEAKER's
+            device volume — the controller routes `setVolume` to whichever
+            output owns playback, and this reads the matching fact back. */}
         <OutputControls
           rate={shell.rate}
           pitch={shell.pitch}
-          volume={shell.volume}
-          muted={shell.muted}
+          volume={
+            casting
+              ? (playback.cast.deviceVolume?.volume ?? shell.volume)
+              : shell.volume
+          }
+          muted={
+            casting ? playback.cast.deviceVolume?.muted === true : shell.muted
+          }
           buffered={formatTime(progress.buffered)}
           ready={ready}
           onRate={(rate) => playback.setRate(rate)}
