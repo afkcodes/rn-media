@@ -1,7 +1,7 @@
 const path = require('path')
 
 /** Every workspace package this app links against, by directory name. */
-const LOCAL_PACKAGES = ['player', 'audio-session', 'media-session']
+const LOCAL_PACKAGES = ['player', 'audio-session', 'cast', 'media-session']
 
 /**
  * @type {import('@react-native-community/cli-types').Config}

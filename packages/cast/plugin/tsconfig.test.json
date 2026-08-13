@@ -1,0 +1,12 @@
+{
+  // Type-check only: the tests are never emitted, so they are kept out of the
+  // build project (which would otherwise ship them under `plugin/build`).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src", "__tests__"]
+}

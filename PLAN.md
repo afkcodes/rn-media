@@ -402,6 +402,18 @@ loudness-aware fade points recorded as the only worthwhile revisit).
    REASON: media3 CastPlayer abandons our engine and AirPlay-from-mpv does
    not exist — fails the parity gate; revisit only if a documented
    platform-shaped feature becomes acceptable.
+6. **Casting — design APPROVED 2026-08-13, superseding review of item 5's
+   deferral in progress** (`docs/design/cast.md` is the owner-approved design:
+   first-party `@rn-media/cast` binding over the official sender SDKs on both
+   platforms, receiver-side queue, no local-file HTTP server in v1, AirPlay
+   honestly out of scope). Phasing per cast.md §6: Phase 1 sign-off DONE;
+   Phase 2 — the `@rn-media/cast` package (Nitro Kotlin/Swift binding + expo
+   plugin, pins 22.3.1/4.8.6 registry-verified 2026-08-13) — BUILT, device
+   verification pending; Phase 3 — the media-session handoff state machine —
+   next; Phase 4 — device verification (owner's receiver: Mi Smart Speaker
+   with Google Assistant, audio-only); Phase 5 — docs/scoreboard. The item-5
+   casting verdict prose above stays as-is until Phase 3 lands (the
+   decision-change rule: verdict and implementation move in one commit).
 
 **Standing maintenance queue:** darwin `-dead_strip` size stage via CI
 (deferred from the size release, size-only); mbedTLS section-flags (~1.1 MB

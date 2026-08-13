@@ -16,10 +16,13 @@ on:
       - 'packages/audio-session/nitrogen/generated/android/**'
       - 'packages/media-session/nitrogen/generated/shared/**'
       - 'packages/media-session/nitrogen/generated/android/**'
+      - 'packages/cast/nitrogen/generated/shared/**'
+      - 'packages/cast/nitrogen/generated/android/**'
       - 'packages/player/cpp/**'
       - 'packages/player/android/**'
       - 'packages/audio-session/android/**'
       - 'packages/media-session/android/**'
+      - 'packages/cast/android/**'
       # The Kotlin resumption reader duplicates this file's
       # `PERSISTENCE_SCHEMA_VERSION`, and `SchemaVersionSyncTest` is what keeps
       # the two in step — so a change here has to run this workflow even though
@@ -38,6 +41,7 @@ on:
       - 'packages/player/android/**'
       - 'packages/audio-session/android/**'
       - 'packages/media-session/android/**'
+      - 'packages/cast/android/**'
       - 'packages/media-session/src/persistence.ts'
       - '**/package-lock.json'
       - '**/react-native.config.js'
@@ -101,17 +105,21 @@ jobs:
           :rn-media_player:lintRelease
           :rn-media_audio-session:lintRelease
           :rn-media_media-session:lintRelease
+          :rn-media_cast:lintRelease
           -PreactNativeArchitectures=arm64-v8a
           --no-daemon --build-cache
 
       # The JVM half of `media-session`: the resumption record parser, the
       # channel-priority merge, and the guard that keeps Kotlin's
-      # `SCHEMA_VERSION` equal to `persistence.ts`'s. No device, no emulator,
-      # no CMake — these tasks do not touch the NDK.
-      - name: Run Kotlin unit tests (media-session)
+      # `SCHEMA_VERSION` equal to `persistence.ts`'s. Plus `cast`'s framework-
+      # constant mappings (`CastMappingTest`). No device, no emulator, no CMake
+      # — these tasks do not touch the NDK.
+      - name: Run Kotlin unit tests (media-session, cast)
         working-directory: apps/example/android
         run: >-
-          ./gradlew :rn-media_media-session:testReleaseUnitTest
+          ./gradlew
+          :rn-media_media-session:testReleaseUnitTest
+          :rn-media_cast:testReleaseUnitTest
           -PreactNativeArchitectures=arm64-v8a
           --no-daemon --build-cache
 
@@ -124,6 +132,7 @@ jobs:
             packages/*/android/build/reports/lint-results-*.html
             packages/*/android/build/reports/lint-results-*.txt
             packages/media-session/android/build/reports/tests/**
+            packages/cast/android/build/reports/tests/**
           if-no-files-found: ignore
           retention-days: 7
 
