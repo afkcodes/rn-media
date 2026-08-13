@@ -514,8 +514,9 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * service will be destroyed when all sessions are released", and releasing it
    * is also what disconnects the internal notification controller so nothing
    * re-posts the notification behind us. `stopForeground(STOP_FOREGROUND_REMOVE)`
-   * then guarantees the notification is gone even if the service outlives this
-   * call because something is still bound to it.
+   * then removes the notification *if it is still the foreground notification*
+   * — and `cancelMediaNotification()` removes it when it is not, which is the
+   * common case (see below, and bug #46).
    */
   internal fun releaseAndStop() {
     session?.let {
@@ -524,7 +525,39 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     }
     session = null
     stopForeground(STOP_FOREGROUND_REMOVE)
+    cancelMediaNotification()
     stopSelf()
+  }
+
+  /**
+   * Cancel the media notification explicitly — `stopForeground` alone cannot.
+   *
+   * **The trap (#46):** once the service has been *demoted* — media3's
+   * `stopForegroundOnPause` behaviour, which runs `notificationManager.notify(id,
+   * notification)` followed by `stopForeground(removeNotification = false)`
+   * (`MediaNotificationManager.updateNotificationInternal`, media3 1.11.0) —
+   * the media notification is an ordinary posted notification that no longer
+   * belongs to the foreground service. A later
+   * `stopForeground(STOP_FOREGROUND_REMOVE)` is then a no-op on it, and
+   * `stopService()` leaves a live-buttoned notification behind (observed on
+   * device: stop pressed at 01:01:36, notification still tappable at 01:01:50,
+   * 2026-08-13). media3's own removal spells out the recipe this method
+   * completes — `MediaNotificationManager.removeNotification`: "To hide the
+   * notification on all API levels, we need to call both
+   * Service.stopForeground(true) and notificationManagerCompat.cancel(
+   * notificationId)" (media3 1.11.0). media3 does run that removal itself when
+   * the released session's controller disconnects, but that cleanup is an
+   * async future chain racing our `stopSelf()`; this synchronous cancel does
+   * not race anything.
+   *
+   * The id is `DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID`
+   * (1001) by the same invariant [postResumptionNotification] relies on: the
+   * provider is built without `setNotificationId`, so that constant is the id
+   * it uses.
+   */
+  private fun cancelMediaNotification() {
+    getSystemService(NotificationManager::class.java)
+      ?.cancel(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID)
   }
 
   override fun onDestroy() {

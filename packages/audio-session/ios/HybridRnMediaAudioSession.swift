@@ -230,6 +230,13 @@ final class HybridRnMediaAudioSession: HybridRnMediaAudioSessionSpec {
         )
       )
     case .ended:
+      // NOTE: `.shouldResume` means "the system permits resuming" — never
+      // "you were playing". An *active* AVAudioSession receives the full
+      // began/ended cycle even while the app's player sits user-paused, so
+      // resuming on this flag alone restarts audio the user explicitly
+      // stopped. This layer cannot know what the player was doing; the
+      // was-it-playing latch lives in `wireAudioSession` (see
+      // AudioSessionPlayerLike.isPlaying), same as on Android. (#45)
       let optionsRaw =
         notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
       let shouldResume = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)

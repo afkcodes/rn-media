@@ -158,6 +158,49 @@ export class FakePlayer implements AudioSessionPlayerLike {
   }
 }
 
+/**
+ * A {@link FakePlayer} that can also answer `isPlaying()` and report state
+ * changes — the full `AudioSessionPlayerLike` surface a real `Player` offers.
+ *
+ * Deliberately does **not** flip `playing` inside `play()`/`pause()`: on the
+ * real player those are asynchronous (an mpv property round-trip), and the
+ * staleness of `isPlaying()` in that window is exactly what the wire's
+ * resume-pending latch exists for. Tests drive the "round trip" explicitly
+ * with {@link reportPlaying}.
+ */
+export class PlayingAwareFakePlayer extends FakePlayer {
+  playing: boolean
+  private readonly stateListeners = new Set<
+    (state: { readonly playing: boolean }) => void
+  >()
+
+  constructor(playing: boolean, initialVolume = 1) {
+    super(initialVolume)
+    this.playing = playing
+  }
+
+  isPlaying(): boolean {
+    return this.playing
+  }
+
+  onStateChange(
+    listener: (state: { readonly playing: boolean }) => void
+  ): () => void {
+    this.stateListeners.add(listener)
+    return () => this.stateListeners.delete(listener)
+  }
+
+  get stateListenerCount(): number {
+    return this.stateListeners.size
+  }
+
+  /** The "mpv round trip": update the observed state and notify subscribers. */
+  reportPlaying(playing: boolean): void {
+    this.playing = playing
+    for (const listener of [...this.stateListeners]) listener({ playing })
+  }
+}
+
 /** `begin: true` interruption fixture. */
 export function beginInterruption(
   type: 'duck' | 'pause',

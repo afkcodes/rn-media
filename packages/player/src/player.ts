@@ -2391,6 +2391,25 @@ export class Player {
     return this.#state
   }
 
+  /**
+   * Whether playback is currently un-paused — {@link PlayerState.playing} as a
+   * method.
+   *
+   * A convenience, but not only that: it is what makes a `Player` satisfy
+   * `@rn-media/audio-session`'s `AudioSessionPlayerLike.isPlaying`, which
+   * `wireAudioSession` consults to tell its own interruption pause apart from
+   * one the user asked for — a user pause must never be auto-resumed when the
+   * interruption ends.
+   *
+   * Reflects the *observed* mpv `pause` property: for a few milliseconds after
+   * {@link play}/{@link pause} it still reports the previous value, until the
+   * property change round-trips through the native event loop. Subscribe with
+   * {@link onStateChange} when the transition itself matters.
+   */
+  isPlaying(): boolean {
+    return this.#state.playing
+  }
+
   /** Whether {@link destroy} has been called. */
   get destroyed(): boolean {
     return this.#destroyed
