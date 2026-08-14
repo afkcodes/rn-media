@@ -8,6 +8,7 @@ import type {
   MediaItem,
   MediaServiceApi,
   PlaybackState,
+  RemotePlayback,
   SleepTimerState,
 } from './types'
 
@@ -497,6 +498,15 @@ export function withPersistence(
 
     setResumptionSnapshot(snapshot?: string): void {
       service.setResumptionSnapshot(snapshot)
+    },
+
+    // Pass-through, and deliberately NOT persisted: which device the audio was
+    // coming out of is a fact about a *live* session. A restored record that
+    // claimed "remote" would route volume keys to a backend this process has
+    // no connection to, and the resumption card's job is to resume on the
+    // phone anyway.
+    setRemotePlayback(remote?: RemotePlayback): void {
+      service.setRemotePlayback(remote)
     },
 
     stopService(): Promise<void> {

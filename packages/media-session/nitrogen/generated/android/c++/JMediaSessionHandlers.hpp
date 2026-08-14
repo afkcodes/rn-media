@@ -60,6 +60,14 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<JFunc_void_MediaRepeatMode::javaobject> setRepeatMode = this->getFieldValue(fieldSetRepeatMode);
       static const auto fieldSetShuffle = clazz->getField<JFunc_void_bool::javaobject>("setShuffle");
       jni::local_ref<JFunc_void_bool::javaobject> setShuffle = this->getFieldValue(fieldSetShuffle);
+      static const auto fieldSetDeviceVolume = clazz->getField<JFunc_void_double::javaobject>("setDeviceVolume");
+      jni::local_ref<JFunc_void_double::javaobject> setDeviceVolume = this->getFieldValue(fieldSetDeviceVolume);
+      static const auto fieldIncreaseDeviceVolume = clazz->getField<JFunc_void::javaobject>("increaseDeviceVolume");
+      jni::local_ref<JFunc_void::javaobject> increaseDeviceVolume = this->getFieldValue(fieldIncreaseDeviceVolume);
+      static const auto fieldDecreaseDeviceVolume = clazz->getField<JFunc_void::javaobject>("decreaseDeviceVolume");
+      jni::local_ref<JFunc_void::javaobject> decreaseDeviceVolume = this->getFieldValue(fieldDecreaseDeviceVolume);
+      static const auto fieldSetDeviceMuted = clazz->getField<JFunc_void_bool::javaobject>("setDeviceMuted");
+      jni::local_ref<JFunc_void_bool::javaobject> setDeviceMuted = this->getFieldValue(fieldSetDeviceMuted);
       static const auto fieldOnTaskRemoved = clazz->getField<JFunc_void::javaobject>("onTaskRemoved");
       jni::local_ref<JFunc_void::javaobject> onTaskRemoved = this->getFieldValue(fieldOnTaskRemoved);
       static const auto fieldCustomAction = clazz->getField<JFunc_void_std__string_std__string::javaobject>("customAction");
@@ -161,6 +169,42 @@ namespace margelo::nitro::rnmediamediasession {
             return JNICallable<JFunc_void_bool, void(bool)>(std::move(setShuffleRef));
           }
         }(),
+        [&]() -> std::function<void(double /* volume */)> {
+          if (setDeviceVolume->isInstanceOf(JFunc_void_double_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_double_cxx::javaobject>(setDeviceVolume);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto setDeviceVolumeRef = jni::make_global(setDeviceVolume);
+            return JNICallable<JFunc_void_double, void(double)>(std::move(setDeviceVolumeRef));
+          }
+        }(),
+        [&]() -> std::function<void()> {
+          if (increaseDeviceVolume->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_cxx::javaobject>(increaseDeviceVolume);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto increaseDeviceVolumeRef = jni::make_global(increaseDeviceVolume);
+            return JNICallable<JFunc_void, void()>(std::move(increaseDeviceVolumeRef));
+          }
+        }(),
+        [&]() -> std::function<void()> {
+          if (decreaseDeviceVolume->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_cxx::javaobject>(decreaseDeviceVolume);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto decreaseDeviceVolumeRef = jni::make_global(decreaseDeviceVolume);
+            return JNICallable<JFunc_void, void()>(std::move(decreaseDeviceVolumeRef));
+          }
+        }(),
+        [&]() -> std::function<void(bool /* muted */)> {
+          if (setDeviceMuted->isInstanceOf(JFunc_void_bool_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_bool_cxx::javaobject>(setDeviceMuted);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto setDeviceMutedRef = jni::make_global(setDeviceMuted);
+            return JNICallable<JFunc_void_bool, void(bool)>(std::move(setDeviceMutedRef));
+          }
+        }(),
         [&]() -> std::function<void()> {
           if (onTaskRemoved->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
             auto downcast = jni::static_ref_cast<JFunc_void_cxx::javaobject>(onTaskRemoved);
@@ -215,7 +259,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JMediaSessionHandlers::javaobject> fromCpp(const MediaSessionHandlers& value) {
-      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_MediaRepeatMode::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>);
+      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_MediaRepeatMode::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -230,6 +274,10 @@ namespace margelo::nitro::rnmediamediasession {
         JFunc_void_double_cxx::fromCpp(value.setRate),
         JFunc_void_MediaRepeatMode_cxx::fromCpp(value.setRepeatMode),
         JFunc_void_bool_cxx::fromCpp(value.setShuffle),
+        JFunc_void_double_cxx::fromCpp(value.setDeviceVolume),
+        JFunc_void_cxx::fromCpp(value.increaseDeviceVolume),
+        JFunc_void_cxx::fromCpp(value.decreaseDeviceVolume),
+        JFunc_void_bool_cxx::fromCpp(value.setDeviceMuted),
         JFunc_void_cxx::fromCpp(value.onTaskRemoved),
         JFunc_void_std__string_std__string_cxx::fromCpp(value.customAction),
         JFunc_void_cxx::fromCpp(value.onSleepTimer),

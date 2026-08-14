@@ -36,6 +36,10 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaCapability; }
 namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
+// Forward declaration of `NativeRemotePlayback` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
+// Forward declaration of `RemoteVolumeControl` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; }
 // Forward declaration of `NativeSleepTimerState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 // Forward declaration of `SleepTimerMode` to properly resolve imports.
@@ -59,6 +63,8 @@ namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 #include "MediaCustomAction.hpp"
 #include "NativeMediaItem.hpp"
 #include <unordered_map>
+#include "NativeRemotePlayback.hpp"
+#include "RemoteVolumeControl.hpp"
 #include "NativeSleepTimerState.hpp"
 #include "SleepTimerMode.hpp"
 
@@ -140,6 +146,12 @@ namespace margelo::nitro::rnmediamediasession {
     }
     inline void setResumptionSnapshot(const std::optional<std::string>& snapshot) override {
       auto __result = _swiftPart.setResumptionSnapshot(snapshot);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setRemotePlayback(const std::optional<NativeRemotePlayback>& remote) override {
+      auto __result = _swiftPart.setRemotePlayback(remote);
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }

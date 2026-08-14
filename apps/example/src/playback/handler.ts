@@ -27,6 +27,9 @@ export interface PlaybackCommands {
   setRate(rate: number): void
   setRepeatMode(mode: MediaRepeatMode): void
   setShuffleEnabled(enabled: boolean): Promise<void>
+  /** `0..1`, routed to whichever output owns playback. */
+  setVolume(volume: number): void
+  setMuted(muted: boolean): void
 }
 
 /**
@@ -104,6 +107,34 @@ export class DemoMediaHandler extends BaseMediaHandler {
   override onSetShuffle(enabled: boolean): void {
     this.#log(`onSetShuffle(${String(enabled)})`)
     return void this.target().setShuffleEnabled(enabled)
+  }
+
+  /**
+   * The **remote device's** volume, asked for by a surface that speaks levels.
+   *
+   * Two things arrive here and both matter. One is the system's remote volume
+   * slider (the panel Android draws while a session reports remote playback).
+   * The other is a **hardware volume key press with this app in the background
+   * or the screen locked** — the library turned the notch into a level using
+   * the range the app published through `MediaService.setRemotePlayback`.
+   * Neither is reachable without that publish, which is the whole point: an
+   * Activity's `dispatchKeyEvent` cannot run when there is no Activity.
+   *
+   * `Playback.setVolume` routes by output ownership, so this lands on
+   * `Cast.setDeviceVolume` while the receiver is playing. The acknowledgement
+   * is the receiver's own `deviceVolume` event coming back and being
+   * republished — the same request/acknowledge contract as every other command
+   * here.
+   */
+  override onSetDeviceVolume(volume: number): void {
+    this.#log(`onSetDeviceVolume(${volume.toFixed(2)})`)
+    this.target().setVolume(volume)
+  }
+
+  /** Mute/unmute the remote device. See {@link onSetDeviceVolume}. */
+  override onSetDeviceMuted(muted: boolean): void {
+    this.#log(`onSetDeviceMuted(${String(muted)})`)
+    this.target().setMuted(muted)
   }
 
   /**

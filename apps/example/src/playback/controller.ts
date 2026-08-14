@@ -137,6 +137,10 @@ export class Playback implements PlaybackCommands {
       }
       this.#notify()
     },
+    // Volume follows the output: while the receiver owns playback the session
+    // is told so, which is what puts the phone's hardware volume keys on the
+    // speaker even with the screen locked (see `SessionBridge`).
+    onRemoteVolume: (volume) => this.#session.publishRemotePlayback(volume),
     onChange: () => this.#notify(),
   })
 
@@ -394,6 +398,11 @@ export class Playback implements PlaybackCommands {
    * drives the speaker's device volume (what Spotify's in-app slider does on
    * a Cast device); locally it is mpv's software volume. Same 0..1 scale on
    * both sides.
+   *
+   * Three callers now, all landing here: the in-app slider, the media
+   * handler's `onSetDeviceVolume` (the lock screen's remote volume slider) and
+   * — via that same handler — a **hardware volume key press while the app is
+   * backgrounded**, which the library has already turned into a level.
    */
   setVolume(volume: number): void {
     if (this.#cast.owns) {
@@ -401,6 +410,13 @@ export class Playback implements PlaybackCommands {
       return
     }
     this.#transport.setVolume(volume)
+  }
+  setMuted(muted: boolean): void {
+    if (this.#cast.owns) {
+      this.#cast.setMuted(muted)
+      return
+    }
+    this.#transport.setMuted(muted)
   }
   toggleMuted(): void {
     if (this.#cast.owns) {

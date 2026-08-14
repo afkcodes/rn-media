@@ -6,6 +6,7 @@ import type {
   MediaRepeatMode,
   NativeMediaItem,
   PositionAnchor,
+  RemoteVolumeControl,
   SleepTimerMode,
 } from './specs/media-session.nitro'
 
@@ -62,6 +63,58 @@ export interface PlaybackState {
   /** Current shuffle state. Same rules as {@link repeatMode}. @default false */
   shuffleEnabled?: boolean
 }
+
+/**
+ * "Playback is coming out of another device right now, and here is that
+ * device's volume."
+ *
+ * Published with {@link MediaServiceApi.setRemotePlayback} while some remote
+ * backend owns the audio — a Cast receiver, a UPnP renderer, a multi-room
+ * protocol — and cleared when the phone takes it back. Nothing here is
+ * cast-specific: this package works with any player and any output.
+ */
+export interface RemotePlayback {
+  /**
+   * The remote device's current volume, `0..1`.
+   *
+   * The same scale an app's own slider uses, and the one every remote backend
+   * already speaks. Quantising it into the platform's integer notches is this
+   * package's job — see {@link steps}.
+   */
+  volume: number
+  /** Whether the remote device is muted. @default false */
+  muted?: boolean
+  /**
+   * How many notches a hardware volume key press moves through, silent to
+   * full. @default 20
+   *
+   * 20 is media3's own choice for a Cast receiver
+   * (`RemoteCastPlayer.MAX_VOLUME`, media3 1.11.0), so an app that says nothing
+   * gets the step size Android users already feel from every other cast-enabled
+   * app.
+   */
+  steps?: number
+  /**
+   * How much of that volume the backend can actually drive. @default 'absolute'
+   *
+   * `'absolute'` (a level can be set *and* nudged) is what a Cast receiver, a
+   * UPnP renderer and essentially every network audio target support, so it is
+   * the default. `'fixed'` deliberately leaves the hardware keys dead — the
+   * honest state for a device whose volume the sender may not touch.
+   */
+  volumeControl?: RemoteVolumeControl
+  /**
+   * Android only: the `MediaRouter2` routing-controller id of the route the
+   * audio is on, when the backend exposes one.
+   *
+   * Lets the system output switcher tie the volume slider it draws to the route
+   * that is playing. A refinement — omit it and everything else still works.
+   */
+  routingControllerId?: string
+}
+
+/** Which way a hardware volume key moved. See {@link MediaHandler.onAdjustDeviceVolume}. */
+export type RemoteVolumeDirection = 'up' | 'down'
 
 /**
  * What the native sleep timer is doing, as {@link MediaServiceApi.getSleepTimer}
@@ -126,6 +179,54 @@ export interface MediaHandler {
    * `setShuffle` capability, optional for the same reason.
    */
   onSetShuffle?(enabled: boolean): void | Promise<void>
+  /**
+   * A remote surface asked for an absolute volume on the **remote device**,
+   * `0..1`.
+   *
+   * Reachable only while {@link MediaServiceApi.setRemotePlayback} has
+   * published a device with `volumeControl: 'absolute'` — from the surfaces
+   * that express a level (Android's remote volume dialog, the output switcher,
+   * a `MediaController`) **and** from the hardware volume keys, whose notch the
+   * library converts for you (see {@link onAdjustDeviceVolume}).
+   *
+   * **A request, not a fact** — the same contract as every other handler
+   * method. Move the backend, then republish through `setRemotePlayback`; that
+   * republish is what moves the slider on every surface.
+   *
+   * Optional for the reason {@link onSleepTimer} is: a method added after v1
+   * must not break structural implementors. `BaseMediaHandler` supplies a
+   * no-op.
+   */
+  onSetDeviceVolume?(volume: number): void | Promise<void>
+  /**
+   * A **hardware volume key** moved one notch on a backend that can only be
+   * nudged — `volumeControl: 'relative'`.
+   *
+   * Most apps never implement this. With the default `'absolute'` the library
+   * turns the notch into a level itself (one `1 / steps` step from the last
+   * published volume, quantised and clamped) and delivers
+   * {@link onSetDeviceVolume} instead — so a Cast or UPnP backend needs one
+   * method, not two, and the step arithmetic is written and tested once rather
+   * than in every app.
+   *
+   * Which of the two you get is decided by what you published, never by which
+   * methods you defined: `'relative'` → this, `'absolute'` →
+   * `onSetDeviceVolume`, `'fixed'` → neither.
+   *
+   * Either way, the *routing* is the point. With the app backgrounded or the
+   * screen locked there is no Activity to receive a key event; the platform
+   * hands the press to the media session's volume provider, which exists only
+   * because {@link MediaServiceApi.setRemotePlayback} made the session
+   * advertise remote playback.
+   */
+  onAdjustDeviceVolume?(
+    direction: RemoteVolumeDirection
+  ): void | Promise<void>
+  /**
+   * A remote surface asked to mute or unmute the remote device. Same
+   * request/acknowledge contract as {@link onSetDeviceVolume}.
+   */
+  onSetDeviceMuted?(muted: boolean): void | Promise<void>
   /**
    * Android only: the app's task was swiped out of Recents.
    *
@@ -431,6 +532,49 @@ export interface MediaServiceApi {
    */
   setResumptionSnapshot(snapshot?: string): void
   /**
+   * Say that playback is coming out of **another device** right now — and hand
+   * over that device's volume. Pass nothing when the phone takes it back.
+   *
+   * ```ts
+   * // while the receiver owns playback
+   * service.setRemotePlayback({ volume: receiverVolume, muted: receiverMuted })
+   * // …and when the transfer back completes
+   * service.setRemotePlayback()
+   * ```
+   *
+   * Not a fourth broadcast channel — it describes the *output*, not what is
+   * playing — and it is **sticky**: an ordinary `setPlaybackState` does not
+   * clear it, because "the audio is on the speaker" is a mode rather than a
+   * per-broadcast fact. Publish it once when the handoff completes, then again
+   * whenever the remote device's volume moves (the backend's own volume events
+   * — a speaker's physical knob counts).
+   *
+   * ## What it buys on Android: volume keys with the screen locked
+   * The session starts advertising `DeviceInfo.PLAYBACK_TYPE_REMOTE`, media3
+   * puts the platform session into remote volume handling
+   * (`MediaSession.setPlaybackToRemote`, whose own documentation says it "must
+   * be called to receive volume button events, otherwise the system will adjust
+   * the appropriate stream volume for this session"), and hardware volume
+   * presses arrive at {@link MediaHandler.onAdjustDeviceVolume} — with the app
+   * backgrounded, from the lock screen, from a Bluetooth remote. Clearing it
+   * puts the keys back on the phone's own stream; there is no residue.
+   *
+   * Without it the phone's music stream moves while the other device plays on,
+   * which is the bug this exists to fix.
+   *
+   * ## iOS: a documented no-op, not a silent one
+   * iOS gives an app no way to take over the hardware volume buttons —
+   * `MPVolumeView` is the *system* slider, `AVAudioSession.outputVolume` is
+   * read-only, and even Google's Cast SDK documents its
+   * `physicalVolumeButtonsWillControlDeviceVolume` as having no effect from iOS
+   * 15 on. So this call changes nothing there. Write it once, unconditionally;
+   * it is free on iOS and load-bearing on Android.
+   *
+   * @throws {MediaSessionError} `invalidArgument` for a volume outside `0..1`,
+   * a `steps` that is not a positive integer, or an unknown `volumeControl`.
+   */
+  setRemotePlayback(remote?: RemotePlayback): void
+  /**
    * End background execution. The ONLY thing that does — `pause()` never does
    * (PLAN §5.4). After this resolves, `init` may be called again.
    */
@@ -519,5 +663,6 @@ export type {
   MediaPlaybackStatus,
   MediaRepeatMode,
   PositionAnchor,
+  RemoteVolumeControl,
   SleepTimerMode,
 }

@@ -19,6 +19,7 @@ namespace margelo::nitro::rnmediamediasession {
       prototype.registerHybridMethod("setMediaItem", &HybridRnMediaMediaSessionSpec::setMediaItem);
       prototype.registerHybridMethod("setQueue", &HybridRnMediaMediaSessionSpec::setQueue);
       prototype.registerHybridMethod("setResumptionSnapshot", &HybridRnMediaMediaSessionSpec::setResumptionSnapshot);
+      prototype.registerHybridMethod("setRemotePlayback", &HybridRnMediaMediaSessionSpec::setRemotePlayback);
       prototype.registerHybridMethod("stopService", &HybridRnMediaMediaSessionSpec::stopService);
       prototype.registerHybridMethod("setSleepTimer", &HybridRnMediaMediaSessionSpec::setSleepTimer);
       prototype.registerHybridMethod("setSleepTimerToTrackEnd", &HybridRnMediaMediaSessionSpec::setSleepTimerToTrackEnd);

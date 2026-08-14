@@ -3,6 +3,7 @@ import type {
   MediaSessionHandlers,
   NativeMediaItem,
   NativePlaybackState,
+  NativeRemotePlayback,
   NativeSleepTimerState,
   RnMediaMediaSession,
   SleepTimerMode,
@@ -12,6 +13,7 @@ import type {
   MediaItem,
   MediaRepeatMode,
   PlaybackState,
+  RemoteVolumeDirection,
 } from '../types'
 
 /**
@@ -76,6 +78,13 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
 
   setResumptionSnapshot(snapshot?: string): void {
     this.resumptionSnapshots.push(snapshot)
+  }
+
+  /** Every `setRemotePlayback` payload, in order. `undefined` = back to local. */
+  readonly remotePlaybacks: (NativeRemotePlayback | undefined)[] = []
+
+  setRemotePlayback(remote?: NativeRemotePlayback): void {
+    this.remotePlaybacks.push(remote)
   }
 
   /* --- Sleep timer: a fake platform timer, driven by `fireSleepTimer()` --- */
@@ -234,6 +243,15 @@ export class RecordingHandler implements MediaHandler {
   }
   onSetShuffle(enabled: boolean) {
     return this.record(`onSetShuffle(${enabled})`)
+  }
+  onSetDeviceVolume(volume: number) {
+    return this.record(`onSetDeviceVolume(${volume})`)
+  }
+  onAdjustDeviceVolume(direction: RemoteVolumeDirection) {
+    return this.record(`onAdjustDeviceVolume(${direction})`)
+  }
+  onSetDeviceMuted(muted: boolean) {
+    return this.record(`onSetDeviceMuted(${muted})`)
   }
   onTaskRemoved() {
     return this.record('onTaskRemoved')

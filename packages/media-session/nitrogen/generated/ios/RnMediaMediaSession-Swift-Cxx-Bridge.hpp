@@ -24,8 +24,12 @@ namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
 namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
+// Forward declaration of `NativeRemotePlayback` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
 // Forward declaration of `NativeSleepTimerState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
+// Forward declaration of `RemoteVolumeControl` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; }
 // Forward declaration of `SleepTimerMode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 
@@ -42,7 +46,9 @@ namespace RnMediaMediaSession { class HybridRnMediaMediaSessionSpec_cxx; }
 #include "MediaCustomAction.hpp"
 #include "MediaRepeatMode.hpp"
 #include "NativeMediaItem.hpp"
+#include "NativeRemotePlayback.hpp"
 #include "NativeSleepTimerState.hpp"
+#include "RemoteVolumeControl.hpp"
 #include "SleepTimerMode.hpp"
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/PromiseHolder.hpp>
@@ -403,6 +409,21 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     std::vector<NativeMediaItem> vector;
     vector.reserve(size);
     return vector;
+  }
+  
+  // pragma MARK: std::optional<NativeRemotePlayback>
+  /**
+   * Specialized version of `std::optional<NativeRemotePlayback>`.
+   */
+  using std__optional_NativeRemotePlayback_ = std::optional<NativeRemotePlayback>;
+  inline std::optional<NativeRemotePlayback> create_std__optional_NativeRemotePlayback_(const NativeRemotePlayback& value) noexcept {
+    return std::optional<NativeRemotePlayback>(value);
+  }
+  inline bool has_value_std__optional_NativeRemotePlayback_(const std::optional<NativeRemotePlayback>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline NativeRemotePlayback get_std__optional_NativeRemotePlayback_(const std::optional<NativeRemotePlayback>& optional) noexcept {
+    return optional.value();
   }
   
   // pragma MARK: std::optional<NativeSleepTimerState>

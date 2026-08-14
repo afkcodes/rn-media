@@ -179,6 +179,48 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     // No-op by design. See above.
   }
 
+  /// Android-only, and a **platform ceiling** rather than an omission.
+  ///
+  /// On Android this call makes the media session advertise
+  /// `DeviceInfo.PLAYBACK_TYPE_REMOTE`, which puts the platform session into
+  /// remote volume handling and routes the hardware volume keys to the app —
+  /// including with the screen locked. iOS has no equivalent, and not for want
+  /// of looking:
+  ///
+  /// - There is no remote-playback mode on `MPNowPlayingInfoCenter` or
+  ///   `MPRemoteCommandCenter`. The command centre's vocabulary is transport
+  ///   (play/pause/seek/skip/rating/like); volume is not in it, and Apple
+  ///   removed `MPRemoteCommandCenter`'s only volume-adjacent hook long ago.
+  /// - `AVAudioSession.outputVolume` is **read-only**, and observing it to
+  ///   "detect" a button press is the trick App Review has rejected for years —
+  ///   it also cannot suppress the system HUD or stop the phone's own volume
+  ///   from moving, so it would change the speaker *and* the phone.
+  /// - `MPVolumeView` renders the **system** volume slider; it drives the
+  ///   device's own output, not a remote one, and its private slider subview is
+  ///   not API. `AVRoutePickerView` picks AirPlay routes, which is a different
+  ///   mechanism (AirPlay volume is handled by the OS because the OS owns the
+  ///   route — a Cast receiver is not a route).
+  /// - Google's own Cast SDK cannot do it either, and says so where its
+  ///   `GCKCastOptions.physicalVolumeButtonsWillControlDeviceVolume` flag is
+  ///   explained (https://developers.google.com/cast/docs/ios_sender/integrate,
+  ///   read 2026-08-14): "Due to changes in iOS, controlling the volume of a
+  ///   Cast session using the physical volume buttons is currently not
+  ///   supported for iOS 15+. We are exploring alternatives to restore this
+  ///   functionality in a future release." (The 4.7.0 release note from 2021
+  ///   that says the feature was "restored" is older than that sentence; the
+  ///   integration guide is the current statement, and the flag is still
+  ///   shipped.) The same page's answer for iOS is the software slider:
+  ///   `GCKUIDeviceVolumeController`.
+  ///
+  /// So the honest behaviour is to accept the call and change nothing, rather
+  /// than to ship a fake symmetry. The same app code runs on both platforms;
+  /// it is load-bearing on Android and free here. On iOS the in-app volume
+  /// control remains the way to drive a remote device's volume — which is also
+  /// what Google's own iOS cast apps do.
+  func setRemotePlayback(remote: NativeRemotePlayback?) throws {
+    // No-op by design. See above.
+  }
+
   func stopService() throws -> Promise<Void> {
     // Synchronously, before the hop: `stopService` discards the handlers, and a
     // timer left armed would fire into them.

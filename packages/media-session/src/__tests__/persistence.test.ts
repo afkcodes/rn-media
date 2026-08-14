@@ -208,6 +208,7 @@ describe('save → restore round trip', () => {
       setMediaItem: () => calls.push('item'),
       setQueue: () => calls.push('queue'),
       setResumptionSnapshot: () => {},
+      setRemotePlayback: () => {},
       setSleepTimer: () => {},
       setSleepTimerToTrackEnd: () => {},
       cancelSleepTimer: () => {},

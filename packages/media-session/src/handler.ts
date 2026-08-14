@@ -1,4 +1,9 @@
-import type { MediaHandler, MediaItem, MediaRepeatMode } from './types'
+import type {
+  MediaHandler,
+  MediaItem,
+  MediaRepeatMode,
+  RemoteVolumeDirection,
+} from './types'
 
 /**
  * No-op implementation of every {@link MediaHandler} method.
@@ -27,6 +32,26 @@ export class BaseMediaHandler implements MediaHandler {
   onSetRepeatMode(_mode: MediaRepeatMode): void | Promise<void> {}
   /** Default: nothing. See {@link onSetRepeatMode}. */
   onSetShuffle(_enabled: boolean): void | Promise<void> {}
+  /**
+   * Default: nothing — and unreachable until the app publishes a remote device
+   * with `setRemotePlayback`, so an app whose audio never leaves the phone can
+   * ignore these three entirely.
+   *
+   * With the usual `volumeControl: 'absolute'`, this is also where a **hardware
+   * volume key** lands: the library turns the notch into a level first (see
+   * {@link onAdjustDeviceVolume}), so an absolute backend needs this method and
+   * nothing else.
+   */
+  onSetDeviceVolume(_volume: number): void | Promise<void> {}
+  /**
+   * Default: nothing. Only ever called for a `volumeControl: 'relative'`
+   * device — see {@link MediaHandler.onAdjustDeviceVolume}.
+   */
+  onAdjustDeviceVolume(
+    _direction: RemoteVolumeDirection
+  ): void | Promise<void> {}
+  /** Default: nothing. See {@link onSetDeviceVolume}. */
+  onSetDeviceMuted(_muted: boolean): void | Promise<void> {}
   onTaskRemoved(): void | Promise<void> {}
   customAction(
     _name: string,
@@ -109,6 +134,17 @@ export class CompositeMediaHandler implements MediaHandler {
   }
   onSetShuffle(enabled: boolean): void | Promise<void> {
     return this.inner.onSetShuffle?.(enabled)
+  }
+  onSetDeviceVolume(volume: number): void | Promise<void> {
+    return this.inner.onSetDeviceVolume?.(volume)
+  }
+  onAdjustDeviceVolume(
+    direction: RemoteVolumeDirection
+  ): void | Promise<void> {
+    return this.inner.onAdjustDeviceVolume?.(direction)
+  }
+  onSetDeviceMuted(muted: boolean): void | Promise<void> {
+    return this.inner.onSetDeviceMuted?.(muted)
   }
   onTaskRemoved(): void | Promise<void> {
     return this.inner.onTaskRemoved()

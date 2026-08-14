@@ -32,10 +32,14 @@ namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
+// Forward declaration of `NativeRemotePlayback` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
 // Forward declaration of `NativeSleepTimerState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 // Forward declaration of `PositionAnchor` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct PositionAnchor; }
+// Forward declaration of `RemoteVolumeControl` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; }
 // Forward declaration of `SleepTimerMode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 
@@ -52,8 +56,10 @@ namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 #include "MediaSessionHandlers.hpp"
 #include "NativeMediaItem.hpp"
 #include "NativePlaybackState.hpp"
+#include "NativeRemotePlayback.hpp"
 #include "NativeSleepTimerState.hpp"
 #include "PositionAnchor.hpp"
+#include "RemoteVolumeControl.hpp"
 #include "SleepTimerMode.hpp"
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/Result.hpp>

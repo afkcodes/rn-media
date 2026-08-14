@@ -14,6 +14,7 @@ import com.margelo.nitro.rnmediamediasession.MediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaSessionHandlers
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import com.margelo.nitro.rnmediamediasession.NativePlaybackState
+import com.margelo.nitro.rnmediamediasession.NativeRemotePlayback
 import com.margelo.nitro.rnmediamediasession.NativeSleepTimerState
 import com.margelo.nitro.rnmediamediasession.SleepTimerMode
 
@@ -337,6 +338,33 @@ internal object MediaSessionController : CommandDispatcher {
       current = next
       player?.update(next, acknowledgesCommands = false)
       retargetTrackEndTimer(next)
+    }
+  }
+
+  /**
+   * Publish (or clear) the remote output. Called from the JS thread.
+   *
+   * Not a broadcast channel — it says nothing about what is playing, and it is
+   * **sticky**: `setPlaybackState` neither carries nor clears it, because "the
+   * audio is on another device" is a mode. `null` restores local handling and
+   * needs no undo: the facade falls back to `State.Builder`'s own
+   * `DeviceInfo.UNKNOWN` (`PLAYBACK_TYPE_LOCAL`), media3 sees the change and
+   * calls `MediaSessionCompat.setPlaybackToLocal`, and volume keys go back to
+   * the phone's music stream.
+   *
+   * Published through [BroadcastPlayer.updateRemotePlayback] rather than
+   * `update`, so it acknowledges the device-volume command it is answering and
+   * not an unrelated transport command that happens to be in flight.
+   */
+  fun setRemotePlayback(remote: NativeRemotePlayback?) {
+    // Converted here, on the JS thread, rather than inside `getState()`:
+    // media3 calls that many times per broadcast and this is pure arithmetic
+    // over a value that only changes when the app says so.
+    val device = remote?.toDevice()
+    main.post {
+      val next = current.copy(remote = device)
+      current = next
+      player?.updateRemotePlayback(next)
     }
   }
 
