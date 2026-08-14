@@ -196,7 +196,7 @@ On iOS both map to `MPRemoteCommandCenter.changeRepeatModeCommand` /
 `MPShuffleType.collections` (shuffle albums, keep tracks in order) has no
 cross-platform twin and is read as "shuffle on" rather than dropped.
 
-## Remote playback: hardware volume keys with the screen locked
+## Remote playback: hardware volume keys drive the other device
 
 When the audio is coming out of **another device** — a Cast receiver, a UPnP
 renderer, a multi-room protocol, anything the phone is not producing itself —
@@ -211,8 +211,9 @@ service.setRemotePlayback()
 
 That is the whole API. In return, **the phone's hardware volume keys drive the
 remote device instead of the phone's own music stream — with your app
-backgrounded, from the lock screen, from a Bluetooth remote.** Presses arrive on
-your handler:
+foregrounded, backgrounded, or with the screen off** (with one platform
+precondition on the screen-off case, spelled out below — read it before you
+promise it to a user). Presses arrive on your handler:
 
 ```ts
 class MyHandler extends BaseMediaHandler {
@@ -245,10 +246,37 @@ live on the **media session**, and Android's own contract for it is the feature:
 volume handling, and clearing it puts the keys back on the phone's stream with
 nothing left behind.
 
-One platform condition worth knowing, because it looks like a bug: **Android
-routes volume keys to a session only while that session is actually playing.**
-Paused, the keys go back to the phone's stream. That is the platform's rule, not
-this package's.
+### Two platform conditions, because both look like bugs
+
+**1. Android routes volume keys to a session only while that session is
+actually playing.** Paused, the keys go back to the phone's stream. That is the
+platform's rule (`MediaSessionStack.getDefaultVolumeSession` keeps only sessions
+whose `PlaybackState.isActive()`), not this package's.
+
+**2. With the screen off, a system sound can take the keys away until you play
+locally again.** `MediaSessionService.dispatchAdjustVolumeLocked` contains a
+heuristic (b/275185436) that discards the chosen session when the *caller's* uid
+was the last to play local audio. With the screen off the caller is
+`PhoneWindowManager` — uid 1000, the system — so any system-played sound
+(notification, ringtone) makes the platform prefer the phone's local stream.
+Your session is dropped, and because a remote backend plays nothing on the local
+`STREAM_MUSIC`, the key is discarded entirely: neither device moves.
+
+It is sticky, not momentary — the platform's list never removes its head entry,
+and an app whose audio is remote never plays locally to displace it. The
+foreground case is immune, because a foregrounded `Activity` routes presses
+straight to its own session by token, bypassing the heuristic.
+
+Diagnose it in one command — the first `uid=` line is the value the heuristic
+compares against:
+
+```sh
+adb shell dumpsys media_session | grep -A3 "Audio playback"
+```
+
+`uid=1000` at the top with the screen off means the next volume press will be
+swallowed. Verified on Android 16 (API 36); the same code is in
+`android15-release` and `main`.
 
 ### Options, and their defaults
 

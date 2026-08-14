@@ -549,15 +549,25 @@ export interface MediaServiceApi {
    * whenever the remote device's volume moves (the backend's own volume events
    * — a speaker's physical knob counts).
    *
-   * ## What it buys on Android: volume keys with the screen locked
+   * ## What it buys on Android: the volume keys drive the other device
    * The session starts advertising `DeviceInfo.PLAYBACK_TYPE_REMOTE`, media3
    * puts the platform session into remote volume handling
    * (`MediaSession.setPlaybackToRemote`, whose own documentation says it "must
    * be called to receive volume button events, otherwise the system will adjust
    * the appropriate stream volume for this session"), and hardware volume
    * presses arrive at {@link MediaHandler.onAdjustDeviceVolume} — with the app
-   * backgrounded, from the lock screen, from a Bluetooth remote. Clearing it
-   * puts the keys back on the phone's own stream; there is no residue.
+   * foregrounded, backgrounded, or with the screen off. Clearing it puts the
+   * keys back on the phone's own stream; there is no residue.
+   *
+   * Two platform preconditions apply to the **screen-off** case, both of them
+   * the platform's rules rather than this library's, and both documented with
+   * source citations in the package README ("Two platform conditions"):
+   * the session must be actually PLAYING, and no *system*-uid sound (a
+   * notification, a ringtone) may have been the last audio played locally —
+   * `MediaSessionService` prefers the local stream over the chosen session in
+   * that case (b/275185436), and since a remote backend plays nothing locally,
+   * the press is then dropped by both devices. Foregrounded presses are immune,
+   * because an `Activity` routes them to its own session by token.
    *
    * Without it the phone's music stream moves while the other device plays on,
    * which is the bug this exists to fix.
