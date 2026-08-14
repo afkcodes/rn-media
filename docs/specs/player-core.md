@@ -308,7 +308,10 @@ type PlayerError =
 `setAudioFilters(filters)` / `clearAudioFilters()` / `getAudioFilters()` — typed
 chain over mpv's `af` property (one mpv entry per filter, mpv's own serializer
 incl. `%N%` UTF-8 byte-count escaping), factories range-validated against ffmpeg
-n6.0 AVOptions, 22 EQ presets with summed-response headroom pre-amp. NOTE: `af`
+n8.1.2 AVOptions (re-audited bound-for-bound 2026-08-14, #51 — originally taken
+from n6.0, which the engine has not shipped since the `rnmedia.5`/`.4` move; no
+wrapped range actually moved), 22 EQ presets with summed-response headroom
+pre-amp. NOTE: `af`
 is a GLOBAL option, not per-entry — filters survive track changes by design.
 Requires Android binaries ≥ v1.1.9-rnmedia.2 or iOS binaries ≥ v0.7.2-rnmedia.2
 — both pins now carry the identical 16-filter set, so no platform branching. On

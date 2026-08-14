@@ -28,8 +28,9 @@
  *
  * None — deliberately. mpv appends its speed handling *after* the user chain:
  * `af` entries become `p->user_filters`, while the `aspeed` auto-filter that
- * inserts `scaletempo2` lives in `p->post_filters`
- * (`filters/f_output_chain.c`, `filters/f_auto_filters.c:337`). mpv offers the
+ * inserts `scaletempo2` lives in `p->post_filters` (mpv 0.41.0
+ * `filters/f_output_chain.c:30-34`, `filters/f_auto_filters.c:462-513` — the
+ * `MP_VERBOSE(f, "adding scaletempo2")` branch is at `:490`). mpv offers the
  * speed command to user filters first and only mpv's own `scaletempo`/
  * `scaletempo2`/`rubberband` ever accept it, so a lavfi filter never swallows
  * it. EQ therefore applies at the source rate and pitch correction happens
@@ -259,7 +260,7 @@ export function compileAudioFilters(filters: readonly AudioFilter[]): string {
 /**
  * How a biquad filter's `width` is interpreted (ffmpeg's `width_type`/`t`).
  *
- * From `libavfilter/af_biquads.c: WIDTH_TYPE_OPTION` — `h` Hz, `q` Q-factor,
+ * From `af_biquads.c:1480-1487` (`WIDTH_TYPE_OPTION`) — `h` Hz, `q` Q-factor,
  * `o` octave, `s` slope, `k` kHz.
  */
 export type BiquadWidthType = 'h' | 'q' | 'o' | 's' | 'k'
@@ -276,15 +277,24 @@ function widthType(value: BiquadWidthType | undefined, what: string): string {
   return value
 }
 
-/** Options common to the `equalizer`/`bass`/`treble` biquad filters. */
+/**
+ * Options common to the `equalizer`/`bass`/`treble` biquad filters.
+ *
+ * All three share one option table shape (`af_biquads.c:1522-1533`,
+ * `:1539-1552`, `:1565-1578`): `f` 0–999999 Hz, `w` 0–99999 (`WIDTH_OPTION`,
+ * `:1476-1478`), `g` −900…+900 dB.
+ */
 interface BiquadShapingOptions {
-  /** Centre frequency in Hz (`f`). */
+  /** Centre frequency in Hz (`f`), 0–999999. */
   readonly frequency?: number
-  /** Band width, interpreted per {@link widthType} (`w`). */
+  /**
+   * Band width, 0–99999, interpreted per {@link widthType} (`w`). ffmpeg
+   * defaults to 1.0 for `equalizer` and 0.5 for the shelves.
+   */
   readonly width?: number
-  /** How `width` is read (`t`). Defaults to `'q'` (Q-factor). */
+  /** How `width` is read (`t`). Defaults to `'q'` (Q-factor), as ffmpeg does. */
   readonly widthType?: BiquadWidthType
-  /** Gain in dB (`g`). */
+  /** Gain in dB (`g`), −900…+900. */
   readonly gain: number
 }
 
@@ -314,23 +324,34 @@ function optional(
 
 /** {@link AudioFilters.equalizer} options. */
 export interface EqualizerOptions extends BiquadShapingOptions {
-  /** Centre frequency in Hz. Required — the ffmpeg default of `0` is useless. */
+  /**
+   * Centre frequency in Hz. Required — the ffmpeg default of `0`
+   * (`af_biquads.c:1523`) is useless.
+   */
   readonly frequency: number
 }
 
 /** {@link AudioFilters.bass} / {@link AudioFilters.treble} options. */
 export interface ShelfOptions extends BiquadShapingOptions {
-  /** Shelf slope: 1 or 2 poles (`p`). Defaults to ffmpeg's 2. */
+  /**
+   * Shelf slope: 1 or 2 poles (`p`). Defaults to ffmpeg's 2
+   * (`af_biquads.c:1546-1547`, `:1572-1573`).
+   */
   readonly poles?: 1 | 2
 }
 
-/** {@link AudioFilters.lowpass} / {@link AudioFilters.highpass} options. */
+/**
+ * {@link AudioFilters.lowpass} / {@link AudioFilters.highpass} options.
+ *
+ * `af_biquads.c:1629-1640` / `:1646-1657`. Same bounds as the shaping filters;
+ * ffmpeg's default width for both is 0.707 (Butterworth Q).
+ */
 export interface PassOptions {
-  /** Corner (−3 dB) frequency in Hz (`f`). */
+  /** Corner (−3 dB) frequency in Hz (`f`), 0–999999. */
   readonly frequency: number
-  /** Band width, interpreted per {@link widthType} (`w`). */
+  /** Band width, 0–99999, interpreted per {@link widthType} (`w`). */
   readonly width?: number
-  /** How `width` is read (`t`). Defaults to `'q'`. */
+  /** How `width` is read (`t`). Defaults to `'q'`, as ffmpeg does. */
   readonly widthType?: BiquadWidthType
   /** 1 or 2 poles (`p`). Defaults to ffmpeg's 2. */
   readonly poles?: 1 | 2
@@ -343,11 +364,12 @@ export interface GraphicEqualizerOptions {
    * {@link GRAPHIC_EQUALIZER_BANDS}.
    *
    * ffmpeg's `superequalizer` takes *linear* gains in `[0, 20]` with `1` as
-   * unity (`af_superequalizer.c:330-347`; the value lands in `param[i].gain`
-   * and is used as an amplitude multiplier when the FIR is designed). This
-   * API takes dB because that is what an EQ UI has, and converts with
-   * `10 ** (dB / 20)` — so the usable range is `-Infinity … +26.02 dB`, and
-   * anything above +26.02 dB is rejected rather than silently clamped.
+   * unity (`af_superequalizer.c:330-347`, one `AV_OPT_TYPE_FLOAT` per band;
+   * the value lands in `param[i].gain` and is used as an amplitude multiplier
+   * when the FIR is designed). This API takes dB because that is what an EQ UI
+   * has, and converts with `10 ** (dB / 20)` — so **the `+26.02 dB` ceiling is
+   * ours**, the dB spelling of ffmpeg's linear 20, and anything above it is
+   * rejected rather than silently clamped.
    */
   readonly gainsDb: readonly number[]
 }
@@ -358,10 +380,17 @@ export const GRAPHIC_EQUALIZER_BANDS: readonly number[] = [
   8372, 11840, 16744, 20000,
 ]
 
-/** ffmpeg caps each `superequalizer` band's linear gain at 20 (≈ +26.02 dB). */
+/**
+ * ffmpeg caps each `superequalizer` band's linear gain at 20 (≈ +26.02 dB)
+ * — `af_superequalizer.c:330-347`, the max column of every `<n>b` option.
+ */
 const GRAPHIC_EQUALIZER_MAX_LINEAR = 20
 
-/** {@link AudioFilters.crossfeed} options. */
+/**
+ * {@link AudioFilters.crossfeed} options.
+ *
+ * `af_crossfeed.c:356-363`. `block_size` (0–32768) is not exposed.
+ */
 export interface CrossfeedOptions {
   /** Crossfeed strength, 0–1 (`strength`). ffmpeg default 0.2. */
   readonly strength?: number
@@ -375,7 +404,13 @@ export interface CrossfeedOptions {
   readonly levelOut?: number
 }
 
-/** {@link AudioFilters.compressor} options (ffmpeg `acompressor`). */
+/**
+ * {@link AudioFilters.compressor} options (ffmpeg `acompressor`).
+ *
+ * `af_sidechaincompress.c:75-95` — one table shared with
+ * `sidechaincompress`, which is why `level_sc` is in it and not here (this
+ * filter has no sidechain input).
+ */
 export interface CompressorOptions {
   /** Input gain, 0.015625–64 (`level_in`). */
   readonly levelIn?: number
@@ -401,7 +436,12 @@ export interface CompressorOptions {
   readonly mix?: number
 }
 
-/** {@link AudioFilters.limiter} options (ffmpeg `alimiter`). */
+/**
+ * {@link AudioFilters.limiter} options (ffmpeg `alimiter`).
+ *
+ * `af_alimiter.c:81-92`. `latency` (delay compensation, default off) is not
+ * exposed.
+ */
 export interface LimiterOptions {
   /** Input level, 0.015625–64 (`level_in`). */
   readonly levelIn?: number
@@ -421,59 +461,135 @@ export interface LimiterOptions {
   readonly autoLevel?: boolean
 }
 
-/** {@link AudioFilters.dynamicNormalizer} options (ffmpeg `dynaudnorm`). */
+/**
+ * {@link AudioFilters.dynamicNormalizer} options (ffmpeg `dynaudnorm`).
+ *
+ * `af_dynaudnorm.c:129-155`. `correctdc`/`c`, `altboundary`/`b`,
+ * `channels`/`h`, `overlap`/`o` and the `curve` expression are not exposed;
+ * reach them through {@link AudioFilters.custom} if ever needed.
+ */
 export interface DynamicNormalizerOptions {
-  /** Frame length in ms, 10–8000 (`f`). */
+  /**
+   * Frame length in ms, 10–8000 (`f`). ffmpeg default 500. The option is
+   * `AV_OPT_TYPE_INT` (`af_dynaudnorm.c:130-131`), so a fractional value would
+   * be rounded by `av_opt_set` behind the caller's back — this factory
+   * requires an integer instead.
+   */
   readonly frameLengthMs?: number
-  /** Gaussian window size, 3–301, odd (`g`). */
+  /**
+   * Gaussian window size, 3–301 (`g`). ffmpeg default 31. Must be an **odd**
+   * integer — see {@link AudioFilters.dynamicNormalizer} for why we reject an
+   * even one where ffmpeg silently fixes it.
+   */
   readonly gaussSize?: number
-  /** Target peak, 0–1 (`p`). */
+  /** Target peak, 0–1 (`p`). ffmpeg default 0.95. */
   readonly peak?: number
-  /** Max amplification, 1–100 (`m`). */
+  /** Max amplification, 1–100 (`m`). ffmpeg default 10. */
   readonly maxGain?: number
-  /** Target RMS, 0–1; 0 disables RMS targeting (`r`). */
+  /** Target RMS, 0–1; 0 (ffmpeg's default) disables RMS targeting (`r`). */
   readonly targetRms?: number
-  /** Couple channels so the stereo image is preserved (`n`). */
+  /**
+   * Couple channels so the stereo image is preserved (`n`). ffmpeg default
+   * `true`.
+   */
   readonly coupling?: boolean
-  /** Compress factor, 0–30; 0 disables (`s`). */
+  /** Compress factor, 0–30; 0 (ffmpeg's default) disables (`s`). */
   readonly compress?: number
-  /** Input threshold, 0–1 (`t`). */
+  /** Input threshold, 0–1 (`t`). ffmpeg default 0. */
   readonly threshold?: number
 }
 
-/** {@link AudioFilters.loudnorm} options (ffmpeg `loudnorm`, EBU R128). */
+/**
+ * {@link AudioFilters.loudnorm} options (ffmpeg `loudnorm`, EBU R128).
+ *
+ * `af_loudnorm.c:106-129`. The four `measured_*` inputs of the two-pass
+ * workflow, `print_format` and `stats_file` are not exposed: a live player has
+ * no analysis pass to feed them (see {@link AudioFilters.loudnorm}).
+ */
 export interface LoudnormOptions {
-  /** Integrated loudness target in LUFS, −70…−5 (`I`). ffmpeg default −24. */
+  /**
+   * Integrated loudness target in LUFS, −70…−5 (`I`, `af_loudnorm.c:107`).
+   * ffmpeg default −24.
+   */
   readonly integrated?: number
-  /** Loudness range target in LU, 1–50 (`LRA`). */
+  /**
+   * Loudness range target in LU, 1–50 (`LRA`, `af_loudnorm.c:109`). ffmpeg
+   * default 7.
+   */
   readonly loudnessRange?: number
-  /** Maximum true peak in dBTP, −9…0 (`TP`). */
+  /**
+   * Maximum true peak in dBTP, −9…0 (`TP`, `af_loudnorm.c:111`). ffmpeg
+   * default −2.
+   */
   readonly truePeak?: number
-  /** Offset gain in dB, −99…99 (`offset`). */
+  /** Offset gain in dB, −99…99 (`offset`, `af_loudnorm.c:120`). */
   readonly offset?: number
-  /** Normalise linearly when possible (`linear`). ffmpeg default `true`. */
+  /**
+   * Normalise linearly when possible (`linear`, `af_loudnorm.c:121`). ffmpeg
+   * default `true` — but inert in live playback, see
+   * {@link AudioFilters.loudnorm}.
+   */
   readonly linear?: boolean
-  /** Treat mono as dual-mono (`dual_mono`). */
+  /** Treat mono as dual-mono (`dual_mono`, `af_loudnorm.c:122`). */
   readonly dualMono?: boolean
 }
 
 /** {@link AudioFilters.volume} options. */
 export interface VolumeOptions {
-  /** Gain in dB. Negative values buy headroom ahead of an EQ boost. */
+  /**
+   * Gain in dB. Negative values buy headroom ahead of an EQ boost.
+   *
+   * **The ±100 dB bound is ours, not ffmpeg's.** `volume`'s only gain option
+   * is an *expression string* (`af_volume.c:67-68`, `AV_OPT_TYPE_STRING`
+   * defaulting to `"1.0"`) evaluated by `av_expr_eval`, so libavfilter imposes
+   * no numeric range at all. We write `<n>dB`, which libavutil's expression
+   * parser understands natively and — importantly — parses sign-first, so
+   * `-6dB` is −6 dB and not `-(6dB)` (`libavutil/eval.c:120-123` and the
+   * `parse_dB` special case at `:574-587`).
+   */
   readonly gainDb: number
 }
 
 /**
  * Factories for the audio filters this library ships bindings for.
  *
- * Every factory validates its arguments against the *documented ffmpeg n6.0
- * ranges* of the underlying filter and throws `invalid-state` rather than
+ * ## Where the ranges come from
+ *
+ * Every factory validates its arguments and throws `invalid-state` rather than
  * letting mpv reject the whole chain with a generic message. Values the caller
  * omits are simply not written, so ffmpeg's own defaults apply.
  *
+ * Unless a doc comment says otherwise, a bound here is **read off the
+ * `AVOption` table of the filter in FFmpeg n8.1.2** — the tree our engine
+ * binaries are actually built from (`packages/player/android/libmpv.gradle`
+ * `ffmpegVersion`, `packages/player/ios/libmpv.pin` `LIBMPV_FFMPEG_VERSION`).
+ * Every citation below is `libavfilter/<file>:<line>` at the `n8.1.2` tag. The
+ * AVOption table is the truth; `doc/filters.texi` is prose about it and is
+ * cited only where it says something the table cannot.
+ *
+ * Re-audited in full against n8.1.2 (2026-08-14). Nothing in the wrapped
+ * surface moved between n6.0 — which these bounds were originally taken from,
+ * and which the engine has not shipped since the `rnmedia.5`/`rnmedia.4`
+ * engine move — and n8.1.2: the only changes to these seven option tables are
+ * a cosmetic `.unit =` designated-initializer refactor and `loudnorm` gaining
+ * a `stats_file` option this API does not expose. What was stale was the
+ * *label* on the ranges, not the ranges.
+ *
+ * ## Where a range is OURS
+ *
+ * Three bounds in this file are deliberately not ffmpeg's, and each says so at
+ * its own definition:
+ *   - {@link AudioFilters.volume} — ffmpeg's `volume` option is an *expression
+ *     string* with no numeric bounds at all; ±100 dB is our sanity limit.
+ *   - {@link AudioFilters.graphicEqualizer} — takes dB and converts, so
+ *     ffmpeg's linear `[0, 20]` becomes a `+26.02 dB` ceiling.
+ *   - {@link AudioFilters.dynamicNormalizer} `gaussSize` — ffmpeg *warns and
+ *     silently rounds* an even window up to odd; we reject it instead.
+ *
  * Anything not listed here — including `firequalizer` and `anequalizer`, which
  * are compiled in but configured through ffmpeg expression strings rather than
- * scalars — is reachable through {@link AudioFilters.custom}.
+ * scalars (`af_anequalizer.c:84`'s `params` is one `AV_OPT_TYPE_STRING`) — is
+ * reachable through {@link AudioFilters.custom}.
  */
 export const AudioFilters = {
   /**
@@ -676,22 +792,31 @@ export const AudioFilters = {
    * Prefer this over {@link AudioFilters.loudnorm} for live playback: it works
    * at the stream's own sample rate, whereas `loudnorm` forces the whole chain
    * through 192 kHz.
+   *
+   * `frameLengthMs` and `gaussSize` map to `AV_OPT_TYPE_INT` options
+   * (`af_dynaudnorm.c:130-133`) and are required to be integers here, because
+   * `av_opt_set` would otherwise round a fractional value silently. `gaussSize`
+   * must additionally be odd: **that rejection is ours** — ffmpeg logs
+   * `"filter size %d is invalid. Changing to an odd value."` and ORs the low
+   * bit in (`af_dynaudnorm.c:165-167`), i.e. it runs a *different* filter from
+   * the one that was asked for, with the warning buried in mpv's log.
    */
   dynamicNormalizer(options: DynamicNormalizerOptions = {}): AudioFilter {
     const out: AudioFilterOption[] = []
-    optional(
-      out,
-      'f',
-      options.frameLengthMs,
-      10,
-      8000,
-      'dynamicNormalizer.frameLengthMs'
-    )
+    if (options.frameLengthMs !== undefined) {
+      range(options.frameLengthMs, 10, 8000, 'dynamicNormalizer.frameLengthMs')
+      if (!Number.isInteger(options.frameLengthMs)) {
+        invalid(
+          `dynamicNormalizer.frameLengthMs must be an integer (ffmpeg's \`f\` is AV_OPT_TYPE_INT and would round a fraction silently), got ${String(options.frameLengthMs)}.`
+        )
+      }
+      out.push(['f', String(options.frameLengthMs)])
+    }
     if (options.gaussSize !== undefined) {
       range(options.gaussSize, 3, 301, 'dynamicNormalizer.gaussSize')
       if (!Number.isInteger(options.gaussSize) || options.gaussSize % 2 === 0) {
         invalid(
-          `dynamicNormalizer.gaussSize must be an odd integer (ffmpeg requires an odd Gaussian window), got ${String(options.gaussSize)}.`
+          `dynamicNormalizer.gaussSize must be an odd integer (ffmpeg would round an even window up to odd and run a different filter than you asked for), got ${String(options.gaussSize)}.`
         )
       }
       out.push(['g', String(options.gaussSize)])
@@ -750,6 +875,9 @@ export const AudioFilters = {
    * volume) and from ReplayGain. Its job here is headroom: put
    * `AudioFilters.volume({ gainDb: -6 })` at the head of a chain whose EQ
    * boosts 6 dB and nothing clips.
+   *
+   * The ±100 dB bound is this library's, not libavfilter's — see
+   * {@link VolumeOptions.gainDb}.
    */
   volume(options: VolumeOptions): AudioFilter {
     const gainDb = range(options.gainDb, -100, 100, 'volume.gainDb')

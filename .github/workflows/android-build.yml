@@ -28,6 +28,7 @@ on:
       # the two in step — so a change here has to run this workflow even though
       # nothing Android moved.
       - 'packages/media-session/src/persistence.ts'
+      - 'scripts/check-workspace-links.mjs'
       - '**/package-lock.json'
       - '**/react-native.config.js'
       - '**/nitro.json'
@@ -43,6 +44,7 @@ on:
       - 'packages/media-session/android/**'
       - 'packages/cast/android/**'
       - 'packages/media-session/src/persistence.ts'
+      - 'scripts/check-workspace-links.mjs'
       - '**/package-lock.json'
       - '**/react-native.config.js'
       - '**/nitro.json'
@@ -66,6 +68,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Before anything is compiled: does every workspace package actually
+      # resolve from the example app? On 2026-08-14 `@rn-media/cast` passed
+      # every gate we own and shipped in nothing, because its workspace link
+      # was missing and the build simply succeeded WITHOUT it. Autolinking
+      # skipping a package is not an error — it is a smaller APK. This step is
+      # the only thing between that and a green pipeline.
+      - name: Check workspace links
+        run: node scripts/check-workspace-links.mjs
+
       - name: Setup JDK 17
         uses: actions/setup-java@v5
         with:
@@ -86,6 +97,17 @@ jobs:
       - name: Run Gradle build
         working-directory: apps/example/android
         run: ./gradlew assembleDebug --no-daemon --build-cache
+
+      # …and the same question asked of the ARTIFACT, which is where the answer
+      # actually matters. Every package's Android module produces
+      # `lib/<abi>/lib<PACKAGE_NAME>.so`, and `lib/` entries survive R8
+      # untouched, so this is a name lookup in the APK's zip directory — no
+      # SDK tools, nothing to be flaky about. The link check above can only
+      # prove the tree is right; this proves the APK is.
+      - name: Check the APK contains every package
+        run: >-
+          node scripts/check-workspace-links.mjs
+          --apk apps/example/android/app/build/outputs/apk/debug/app-debug.apk
 
       # A build is not a check. `lintRelease` was broken at HEAD for days while
       # this workflow stayed green, because assembling never runs lint — the
