@@ -34,6 +34,8 @@ namespace margelo::nitro::rnmediacast { enum class CastRepeatMode; }
 namespace margelo::nitro::rnmediacast { enum class CastSeekResumeState; }
 // Forward declaration of `CastSessionEventType` to properly resolve imports.
 namespace margelo::nitro::rnmediacast { enum class CastSessionEventType; }
+// Forward declaration of `HybridRnMediaCastButtonSpec` to properly resolve imports.
+namespace margelo::nitro::rnmediacast { class HybridRnMediaCastButtonSpec; }
 // Forward declaration of `HybridRnMediaCastSpec` to properly resolve imports.
 namespace margelo::nitro::rnmediacast { class HybridRnMediaCastSpec; }
 // Forward declaration of `NativeCastDevicesEvent` to properly resolve imports.
@@ -63,6 +65,7 @@ namespace margelo::nitro::rnmediacast { struct NativeDeviceVolumeEvent; }
 #include "CastRepeatMode.hpp"
 #include "CastSeekResumeState.hpp"
 #include "CastSessionEventType.hpp"
+#include "HybridRnMediaCastButtonSpec.hpp"
 #include "HybridRnMediaCastSpec.hpp"
 #include "NativeCastDevicesEvent.hpp"
 #include "NativeCastMediaErrorEvent.hpp"
@@ -89,6 +92,8 @@ namespace margelo::nitro::rnmediacast { struct NativeDeviceVolumeEvent; }
 #include <NitroModules/DateToChronoDate.hpp>
 
 // Forward declarations of Swift defined types
+// Forward declaration of `HybridRnMediaCastButtonSpec_cxx` to properly resolve imports.
+namespace RnMediaCast { class HybridRnMediaCastButtonSpec_cxx; }
 // Forward declaration of `HybridRnMediaCastSpec_cxx` to properly resolve imports.
 namespace RnMediaCast { class HybridRnMediaCastSpec_cxx; }
 

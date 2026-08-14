@@ -9,11 +9,19 @@
  * every command to whichever backend owns playback — so this section
  * deliberately adds no second transport.
  *
+ * Both entry points are demoed on purpose, because both are supported:
+ * the native `<CastButton/>` (the platform's own affordance — the system
+ * output switcher on Android 13+, the GCK dialog on iOS) and the headless
+ * `getCastDevices()` + `requestSession(id)` path behind the "Find devices"
+ * chip, for apps that want their own picker. Either one starts an ordinary
+ * session, and the SAME `wireCastHandoff` machine picks it up.
+ *
  * Degrades honestly: `castState === 'unavailable'` (no Google Play services,
  * or init not finished) renders the fact and no dead controls.
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
+import { CastButton } from '@rn-media/cast'
 import type { CastIntegration } from '../playback/cast'
 import type { CastSelfTestResult } from '../playback/cast-selftest'
 import type { Track } from '../data/tracks'
@@ -83,6 +91,23 @@ export const CastSection = React.memo(function CastSection({
         </View>
       }
     >
+      {/* The platform's own button. Always mounted — it is the affordance
+          Google's design checklist expects, it is live during a session too
+          (tapping it while connected offers "disconnect"), and on this
+          Android 13+ device it opens the SYSTEM output switcher rather than
+          an in-app dialog. The component hides itself when cast is
+          unavailable, so there is no dead control to guard here. */}
+      <View style={styles.nativeRow}>
+        <CastButton tintColor={COLORS.text} />
+        <View style={styles.nativeCopy}>
+          <Detail>
+            The native cast button — the system output switcher on Android 13+,
+            the GCK dialog on iOS. The chips below are the same feature done
+            headlessly, for apps that want their own picker.
+          </Detail>
+        </View>
+      </View>
+
       {/* Discovery + the device sheet. Battery rule: scan only while the
           "sheet" is open; the connect path stops the scan itself, AFTER the
           session is up (the ordering rule). */}
@@ -215,6 +240,12 @@ export const CastSection = React.memo(function CastSection({
 })
 
 const styles = StyleSheet.create({
+  nativeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACE.sm,
+  },
+  nativeCopy: { flex: 1 },
   status: {
     flexDirection: 'row',
     alignItems: 'center',

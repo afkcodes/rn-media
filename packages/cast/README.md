@@ -24,6 +24,27 @@ player.
 > Podfile themselves. Devices on iOS 15 and older will not be able to install
 > your app. This is the pod's own floor, not ours.
 
+> **⚠️ Xcode 26 or newer is required to build.** `google-cast-sdk` 4.8.6 ships
+> a *static* `GoogleCast.xcframework` built against the **iOS 26.2 SDK**
+> (`LC_BUILD_VERSION … sdk 26.2`), and one of its objects references
+> [`UIGlassEffect`](https://developer.apple.com/documentation/uikit/uiglasseffect)
+> — UIKit API introduced in iOS 26. React Native's own `-ObjC` linker flag
+> force-loads every object out of every static archive, so that reference
+> cannot be dead-stripped. Building with Xcode 16.x therefore fails at link
+> time with:
+>
+> ```
+> Undefined symbols for architecture arm64:
+>   "_OBJC_CLASS_$_UIGlassEffect", referenced from:
+>        in GoogleCast[arm64](M3CMaterialGlassEffectView.o)
+> ```
+>
+> Your app's *runtime* floor is unaffected — it stays at iOS 16 (the binary's
+> `minos`); only the toolchain that builds it must be Xcode 26+. Again the
+> SDK's requirement, not ours: pinning back to `google-cast-sdk` 4.8.4 (the
+> last release built with the 18.4 SDK) avoids it at the cost of lagging
+> upstream, which this project's currency rule does not allow.
+
 ## Install
 
 ```sh
@@ -249,22 +270,59 @@ const verdict = canCastMedia({ url, mimeType, headers })
 // { castable: false, reason: 'codec' | 'local-file' | 'headers' }
 ```
 
-### Cast button
+### `<CastButton/>` — the platform's own button
 
-This phase ships the headless API; a native `<CastButton/>` view component
-follows with device verification (Phase 4). The recipe:
+A real native view (a Nitro HybridView, so the same codegen story as the rest
+of the package), not an icon we drew:
 
 ```tsx
-// Opens the GCK dialog on iOS, the route chooser on Android. On Android 13+
-// the SYSTEM output switcher is additionally reachable from the media
-// notification (and from any CastButtonFactory-wired cast icon — the
-// library's CastOptions already opt in).
-<Pressable onPress={() => Cast.requestSession()}>
-  <CastIcon />
-</Pressable>
+import { CastButton } from '@rn-media/cast'
+
+<CastButton style={{ width: 32, height: 32 }} tintColor="#e7e7ea" />
 ```
 
-Hide the button entirely while `Cast.getCastState() === 'unavailable'`.
+- **Android** — an `androidx.mediarouter.app.MediaRouteButton` handed to
+  `CastButtonFactory.setUpMediaRouteButton`. That wiring is the *only* thing
+  that honours `setShowSystemOutputSwitcherOnCastIconClick(true)` (which this
+  package's `CastOptions` already sets), so on **Android 13+** a tap opens the
+  **system output switcher** — the same sheet the volume rocker and the media
+  notification open — instead of an in-app dialog. Device-verified (POCO F4,
+  Android 16, cast framework 22.3.1): tap → system switcher → "Bedroom
+  speaker" → session up, and the `wireCastHandoff` machine ran the handoff
+  without a line of app code. Below Android 13 (or without the manifest's
+  `MediaTransferReceiver`) it falls back to the in-app
+  `MediaRouteChooserDialog`.
+- **iOS** — a `GCKUICastButton` with the SDK's own device dialog left on
+  (`triggersDefaultCastDialog`, default `YES`). Discovery starts on the first
+  tap by SDK design, which is what makes the iOS local-network prompt appear
+  when the user asked for devices rather than at launch.
+
+Contracts worth knowing:
+
+- **It hides itself while cast is unavailable** — before `Cast.initialize()`
+  resolves, and forever on a GMS-less Android device. That is the Cast Design
+  Checklist's own rule, applied for you. Do not do it again in your own code.
+  (`MediaRouteButton` does *not* hide itself when no routes are around:
+  `setAlwaysVisible` is a no-op in mediarouter 1.8.0-beta01 and nothing in the
+  class touches visibility any more. Our state-driven hide is the honest
+  replacement, not a duplicate.)
+- **It has no intrinsic size.** A Nitro view's shadow node has no measure
+  function, so the button is exactly as big as `style` says; it defaults to
+  40×40. The icon is drawn centred at the platform's own size (24 dp/pt) and
+  never scaled — the view's size is the touch target.
+- `tintColor` is honoured on **both** platforms: iOS sets the button's
+  `tintColor`; Android recolours the drawn icon (`MediaRouteButton` reads its
+  tint from the `mediaRouteButtonTint` *theme* attribute once at construction
+  and has no per-instance setter, so the tint is applied where the icon is
+  painted). Both keep Google's own icon, connecting animation included.
+- The session a tap starts is an ordinary cast session: a wired
+  `wireCastHandoff` picks it up exactly as if you had called
+  `handoff.castTo(id)`.
+
+The headless path is still fully supported for apps that want their own
+picker — `Cast.startDiscovery()` + `getCastDevices()` + `requestSession(id)`,
+or `Cast.requestSession()` for the SDK picker without the view. It just does
+not get the system output switcher.
 
 ## Honest ceilings (read before shipping)
 

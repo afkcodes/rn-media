@@ -1,4 +1,5 @@
 export { Cast, createCast } from './cast'
+export { CastButton } from './cast-button'
 export { canCastMedia, castabilityTables } from './can-cast'
 export { CastError, errorFromIdleReason, toCastError } from './errors'
 export {
@@ -10,6 +11,7 @@ export {
 export { wireCastHandoff } from './handoff'
 
 export type { CanCastInput, CanCastVerdict } from './can-cast'
+export type { CastButtonProps } from './cast-button'
 export type { CastErrorCode } from './errors'
 export type {
   CastHandoffEffect,
@@ -65,3 +67,8 @@ export type {
   NativeDeviceVolumeEvent,
   RnMediaCast,
 } from './specs/cast.nitro'
+
+export type {
+  RnMediaCastButton,
+  RnMediaCastButtonProps,
+} from './specs/cast-button.nitro'

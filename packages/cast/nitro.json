@@ -22,6 +22,16 @@
         "language": "kotlin",
         "implementationClassName": "HybridRnMediaCast"
       }
+    },
+    "RnMediaCastButton": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridRnMediaCastButton"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridRnMediaCastButton"
+      }
     }
   },
   "ignorePaths": [
