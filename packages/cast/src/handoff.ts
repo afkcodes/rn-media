@@ -270,7 +270,12 @@ export function wireCastHandoff(
         void (async () => {
           try {
             await local.skipToIndex(effect.itemIndex)
-            await local.seekTo(effect.position)
+            // A live restore never seeks: the receiver's live clock is a
+            // stream-timeline offset (device-observed ~95 000 s on an HLS
+            // master), and mpv rejects seeks on unseekable live streams
+            // ("Cannot seek in this stream"). Reopening at the live edge IS
+            // the resume for live audio.
+            if (!effect.live) await local.seekTo(effect.position)
             if (effect.playWhenReady) await local.play()
             dispatch({ type: 'localRestored' })
           } catch (cause) {

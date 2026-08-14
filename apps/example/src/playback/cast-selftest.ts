@@ -44,6 +44,7 @@ async function waitFor(
  * Full programmatic session test:
  * discovery → requestSession → CONNECTING→CONNECTED → queue handoff →
  * receiver PLAYING with an advancing position (two reads) → pause/play/seek →
+ * a live-entry jump and back (the live queue leg) →
  * endSession({transferBackToLocal:true}) → local resumes at the receiver's
  * position. Audible confirmation stays with the owner — a script cannot hear.
  */
@@ -130,6 +131,26 @@ export async function runCastSelfTest(
       10_000
     )
     log(`seek to ${seekTarget.toFixed(0)}s acknowledged`)
+
+    // 5b. Live leg — the owner-reported bug class (2026-08-14). Jump the
+    //     receiver to the live Icecast entry: a live item must reach PLAYING
+    //     (the projection sends live items with NO start position — a nonzero
+    //     one wedged the Default Media Receiver in BUFFERING forever,
+    //     device-proven), then return to the finite entry.
+    playback.jumpTo(0)
+    await waitFor(
+      'receiver playing the live entry',
+      () => cast.receiverIndex === 0 && cast.receiver?.playing === true,
+      25_000
+    )
+    log('live entry playing on the receiver (index 0)')
+    playback.jumpTo(4)
+    await waitFor(
+      'receiver back on the finite entry',
+      () => cast.receiverIndex === 4 && cast.receiver?.playing === true,
+      25_000
+    )
+    log('back on the finite entry after the live leg')
 
     // 6. Transfer back.
     const receiverAt = cast.receiver?.position ?? 0

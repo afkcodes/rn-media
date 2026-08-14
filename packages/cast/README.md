@@ -212,6 +212,33 @@ Contracts worth knowing:
 - The pure reducer (`reduceCastHandoff`) and projection (`projectCastQueue`)
   are exported for tests and custom orchestration.
 
+### Live streams (device-verified truths, 2026-08-14)
+
+Mark live entries with `live: true` in the snapshot (and `CastMediaSource`) —
+it sets `STREAM_TYPE_LIVE` on the receiver *and* changes what the handoff
+does, because live position semantics are different in kind:
+
+- **A live handoff joins the live edge.** The projection sends live start
+  items with **no start position**. Measured on hardware: `queueLoad` with a
+  nonzero `playPosition` against an unseekable live stream (Icecast) wedged
+  the Default Media Receiver in BUFFERING at that offset *forever* — the
+  "casting a live station loads forever" failure. There is nothing lost:
+  mpv's clock on a live stream is a stream-timeline offset (an HLS master
+  reported ~95 000 s), never a resumable position.
+- **A live transfer-back never seeks the local player.** The receiver's live
+  clock is that same timeline offset; the `restoreLocal` contract carries
+  `live` and the wire skips the seek (mpv would reject it: `Cannot seek in
+  this stream`). Reopening at the live edge IS the resume for live audio.
+- **Resolve playlist redirects before the handoff.** The Default Media
+  Receiver never started playback for an HLS playlist URL answering with a
+  302 (the redirect *target* played immediately; mpv follows redirects fine —
+  the asymmetry is the receiver's). Resolve the final URL at the same seam
+  where you resolve signed URLs, sender-side.
+- **What live casting does *not* need** (the usual suspects, ruled out on the
+  receiver directly): `audio/aacp` plays a Shoutcast stream as-is, and
+  `application/x-mpegurl` plays audio-only HLS with TS/AAC segments without
+  any `hlsSegmentFormat` hint.
+
 ### Which tracks can cast — `canCastMedia`
 
 Receivers decode far less than mpv does. Grey the cast route out per track
