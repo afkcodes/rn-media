@@ -530,8 +530,10 @@ present — `af=` resolved to nothing. Android `v1.1.9-rnmedia.2` and iOS
 byte-identical in both cases); **`aresample` is
 among them and is not optional** — libavfilter auto-inserts it whenever two pads
 disagree on sample format, and every one of these filters pins a different one.
-Every GPL-gated filter in ffmpeg n6.0 is a *video* filter, so the LGPL line
-(§11) is untouched. Composition is free: user `af` entries are mpv's
+Every GPL-gated filter in ffmpeg is a *video* filter, so the LGPL line
+(§11) is untouched — re-checked at n8.1.2 on 2026-08-14 (#51): all 33
+`*_filter_deps="…gpl…"` entries in `configure` are video filters or video
+sources, and none is audio. Composition is free: user `af` entries are mpv's
 `user_filters`, while speed handling (`scaletempo2`) lives in `post_filters`
 downstream, and ReplayGain is volume-domain — filters, speed and RG never
 interact. On top sits a **10-band preset layer** (ISO octave centres, one biquad
@@ -1483,11 +1485,13 @@ reproduced on the same hardware):**
 - **`--enable-protocol=hls` in an ffmpeg build proves nothing** — it's the
   deprecated `hls://` protocol; only the `hls`+`mpegts` *demuxers* matter.
 - **Nor does the string `aresample` in libavfilter** — same family, found while
-  verifying the iOS filter build. `libavfilter/formats.c:339` stores
+  verifying the iOS filter build. `libavfilter/formats.c:387` stores
   `.conversion_filter = "aresample"`, the name the graph *looks up* when two
   pads disagree, so the literal is in the binary whether or not the filter was
   compiled. Proof of registration has to come from something only the filter's
-  own object file emits (here `af_aresample.c:164`'s log format).
+  own object file emits (here `af_aresample.c:205`'s log format,
+  `"ch:%d chl:%s fmt:%s r:%dHz -> …"`). Line numbers re-verified at n8.1.2 on
+  2026-08-14 (#51); they were n6.0's.
 - **~~mpv's manual documents `replaygain-clip` inverted~~ — RETIRED at the 0.41
   engine bump.** It was true of 0.35.1 ("prevent clipping"), and our API was
   mapped to the *behaviour* verified in `player/audio.c` rather than to the
@@ -1693,6 +1697,30 @@ reproduced on the same hardware):**
   cancels `DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID` (1001 —
   ours by the same no-`setNotificationId` invariant the resumption bridge
   notification relies on) synchronously, right after `stopForeground`.
+- **Tests prove the code works, not that it ships. A missing workspace link is
+  not a build error — it is a smaller APK.** Bug #51, 2026-08-14:
+  `@rn-media/cast` passed 121 unit tests, ESLint, `tsc`, `lintRelease` and
+  `assembleRelease`, was installed on a device, and was simply not in the app.
+  Its `node_modules` link was missing, React Native's autolinking therefore
+  enumerated three native modules instead of four, Gradle never configured the
+  fourth, and the build SUCCEEDED — there is no step in the Android toolchain
+  whose job is to notice that a package it was never told about is absent. The
+  released APK carried `libRnMediaPlayer.so`, `libRnMediaAudioSession.so` and
+  `libRnMediaMediaSession.so`, and no `libRnMediaCast.so`. Every gate we owned
+  was green because every gate we owned inspects the *source*.
+  `scripts/check-workspace-links.mjs` is the answer, and it asks both halves of
+  the question: (1) does every `packages/*` resolve from `apps/example` — via
+  Node's own resolver, since npm hoists workspace links to the root and
+  `readdir`-ing `apps/example/node_modules` would be the wrong question — and
+  to the in-repo copy rather than a same-named registry package; (2) given
+  `--apk`, is each package's `lib/<abi>/lib<PACKAGE_NAME>.so` (name parsed from
+  that package's own `android/CMakeLists.txt`) actually inside the built
+  artifact. The second check is the one that bit us and is deliberately a zip
+  central-directory lookup: `lib/` entries are never renamed by R8, so unlike a
+  dex-symbol probe it cannot go flaky under minification, and it needs no SDK
+  tooling. Both run in `android-build.yml` — links before the build, APK
+  contents after it. Verified against the incident artifact itself: the guard
+  fails on the 2026-08-11 debug APK and passes on the post-fix release one.
 
 ## Update policy
 

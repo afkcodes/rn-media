@@ -212,14 +212,36 @@ describe('validation', () => {
     )
   })
 
-  it("rejects dynaudnorm's even Gaussian window (ffmpeg requires odd)", () => {
+  // ffmpeg does NOT reject an even window: af_dynaudnorm.c:165-167 warns
+  // ("filter size %d is invalid. Changing to an odd value.") and ORs the low
+  // bit in, so the graph runs a different filter than the caller asked for and
+  // the only trace is a line in mpv's log. Rejecting is ours, deliberately.
+  it("rejects dynaudnorm's even Gaussian window, which ffmpeg would silently round", () => {
     expectPlayerError(
       () => AudioFilters.dynamicNormalizer({ gaussSize: 30 }),
+      'invalid-state'
+    )
+    expectPlayerError(
+      () => AudioFilters.dynamicNormalizer({ gaussSize: 31.5 }),
       'invalid-state'
     )
     expect(() =>
       AudioFilters.dynamicNormalizer({ gaussSize: 31 })
     ).not.toThrow()
+  })
+
+  // Same class of silent mutation: `f` is AV_OPT_TYPE_INT (af_dynaudnorm.c:
+  // 130-131), so av_opt_set would llrint() a fraction away.
+  it("rejects a fractional dynaudnorm frame length, which ffmpeg's INT option would round", () => {
+    expectPlayerError(
+      () => AudioFilters.dynamicNormalizer({ frameLengthMs: 500.5 }),
+      'invalid-state'
+    )
+    expect(
+      compileAudioFilters([
+        AudioFilters.dynamicNormalizer({ frameLengthMs: 500 }),
+      ])
+    ).toBe('dynaudnorm=f=500')
   })
 
   it('rejects an unknown biquad width type', () => {
@@ -253,6 +275,183 @@ describe('validation', () => {
         assertValidAudioFilters([
           { name: 'crossfeed', options: [['strength'] as any] },
         ]),
+      'invalid-state'
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Bound-for-bound audit against the engine we actually ship
+//
+// Every case below is the exact min/max of the AVOption table in FFmpeg n8.1.2
+// — the tree packages/player/android/libmpv.gradle and ios/libmpv.pin build
+// from. Each pair is "the extreme ffmpeg accepts" plus "one step past it", so
+// a future engine bump that widens or narrows a range fails HERE rather than
+// silently at the device, where mpv answers with one generic property error.
+// ---------------------------------------------------------------------------
+
+describe('n8.1.2 AVOption bounds', () => {
+  const cases: readonly {
+    readonly what: string
+    readonly edge: () => unknown
+    readonly past: () => unknown
+  }[] = [
+    // af_biquads.c:1523 (f), :1477 (w), :1527 (g)
+    {
+      what: 'equalizer.frequency max 999999',
+      edge: () => AudioFilters.equalizer({ frequency: 999999, gain: 0 }),
+      past: () => AudioFilters.equalizer({ frequency: 1000000, gain: 0 }),
+    },
+    {
+      what: 'equalizer.width max 99999',
+      edge: () =>
+        AudioFilters.equalizer({ frequency: 1000, width: 99999, gain: 0 }),
+      past: () =>
+        AudioFilters.equalizer({ frequency: 1000, width: 100000, gain: 0 }),
+    },
+    {
+      what: 'equalizer.gain max 900 dB',
+      edge: () => AudioFilters.equalizer({ frequency: 1000, gain: 900 }),
+      past: () => AudioFilters.equalizer({ frequency: 1000, gain: 901 }),
+    },
+    {
+      what: 'equalizer.gain min -900 dB',
+      edge: () => AudioFilters.equalizer({ frequency: 1000, gain: -900 }),
+      past: () => AudioFilters.equalizer({ frequency: 1000, gain: -901 }),
+    },
+    // af_biquads.c:1546 — the shelves are the only shaping filters with poles
+    {
+      what: 'bass.poles max 2',
+      edge: () => AudioFilters.bass({ frequency: 110, gain: 0, poles: 2 }),
+      past: () =>
+        AudioFilters.bass({
+          frequency: 110,
+          gain: 0,
+
+          poles: 3 as any,
+        }),
+    },
+    // af_crossfeed.c:359 — slope is the one crossfeed option with a non-zero min
+    {
+      what: 'crossfeed.slope min 0.01',
+      edge: () => AudioFilters.crossfeed({ slope: 0.01 }),
+      past: () => AudioFilters.crossfeed({ slope: 0.009 }),
+    },
+    // af_sidechaincompress.c:76,80,81,82,83,84,85
+    {
+      what: 'compressor.levelIn min 0.015625',
+      edge: () => AudioFilters.compressor({ levelIn: 0.015625 }),
+      past: () => AudioFilters.compressor({ levelIn: 0.015624 }),
+    },
+    {
+      what: 'compressor.threshold min 0.000976563',
+      edge: () => AudioFilters.compressor({ threshold: 0.000976563 }),
+      past: () => AudioFilters.compressor({ threshold: 0.000976562 }),
+    },
+    {
+      what: 'compressor.ratio max 20',
+      edge: () => AudioFilters.compressor({ ratio: 20 }),
+      past: () => AudioFilters.compressor({ ratio: 21 }),
+    },
+    {
+      what: 'compressor.release max 9000 ms',
+      edge: () => AudioFilters.compressor({ release: 9000 }),
+      past: () => AudioFilters.compressor({ release: 9001 }),
+    },
+    {
+      what: 'compressor.knee max 8',
+      edge: () => AudioFilters.compressor({ knee: 8 }),
+      past: () => AudioFilters.compressor({ knee: 8.5 }),
+    },
+    // af_alimiter.c:84,85,86
+    {
+      what: 'limiter.limit min 0.0625',
+      edge: () => AudioFilters.limiter({ limit: 0.0625 }),
+      past: () => AudioFilters.limiter({ limit: 0.06 }),
+    },
+    {
+      what: 'limiter.attack max 80 ms',
+      edge: () => AudioFilters.limiter({ attack: 80 }),
+      past: () => AudioFilters.limiter({ attack: 81 }),
+    },
+    {
+      what: 'limiter.release min 1 ms',
+      edge: () => AudioFilters.limiter({ release: 1 }),
+      past: () => AudioFilters.limiter({ release: 0.9 }),
+    },
+    // af_dynaudnorm.c:130,136
+    {
+      what: 'dynamicNormalizer.frameLengthMs min 10',
+      edge: () => AudioFilters.dynamicNormalizer({ frameLengthMs: 10 }),
+      past: () => AudioFilters.dynamicNormalizer({ frameLengthMs: 9 }),
+    },
+    {
+      what: 'dynamicNormalizer.maxGain max 100',
+      edge: () => AudioFilters.dynamicNormalizer({ maxGain: 100 }),
+      past: () => AudioFilters.dynamicNormalizer({ maxGain: 101 }),
+    },
+    // af_loudnorm.c:107,109,111,120
+    {
+      what: 'loudnorm.integrated range -70…-5 LUFS',
+      edge: () => AudioFilters.loudnorm({ integrated: -5 }),
+      past: () => AudioFilters.loudnorm({ integrated: -4.9 }),
+    },
+    {
+      what: 'loudnorm.loudnessRange max 50 LU',
+      edge: () => AudioFilters.loudnorm({ loudnessRange: 50 }),
+      past: () => AudioFilters.loudnorm({ loudnessRange: 51 }),
+    },
+    {
+      what: 'loudnorm.truePeak min -9 dBTP',
+      edge: () => AudioFilters.loudnorm({ truePeak: -9 }),
+      past: () => AudioFilters.loudnorm({ truePeak: -9.1 }),
+    },
+    {
+      what: 'loudnorm.offset max 99 dB',
+      edge: () => AudioFilters.loudnorm({ offset: 99 }),
+      past: () => AudioFilters.loudnorm({ offset: 100 }),
+    },
+  ]
+
+  for (const { what, edge, past } of cases) {
+    it(`accepts the ffmpeg extreme and rejects one step past it: ${what}`, () => {
+      expect(edge).not.toThrow()
+      expectPlayerError(past, 'invalid-state')
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Bounds that are OURS, not ffmpeg's
+// ---------------------------------------------------------------------------
+
+describe('bounds this library imposes on top of ffmpeg', () => {
+  // af_volume.c:67-68 — the `volume` option is AV_OPT_TYPE_STRING (an
+  // expression), so libavfilter has no numeric range here at all. ±100 dB is
+  // our own sanity limit and must be documented as such, not as ffmpeg's.
+  it('caps volume gain at ±100 dB, a limit libavfilter does not have', () => {
+    expect(compileAudioFilters([AudioFilters.volume({ gainDb: 100 })])).toBe(
+      'volume=volume=100dB'
+    )
+    expect(compileAudioFilters([AudioFilters.volume({ gainDb: -100 })])).toBe(
+      'volume=volume=-100dB'
+    )
+    expectPlayerError(
+      () => AudioFilters.volume({ gainDb: 100.5 }),
+      'invalid-state'
+    )
+  })
+
+  // af_superequalizer.c:330-347 caps each band at 20x LINEAR; +26.02 dB is
+  // that number restated in the unit this API speaks.
+  it("puts the graphic EQ's dB ceiling exactly at ffmpeg's 20x linear", () => {
+    const at = (db: number): number[] => new Array<number>(18).fill(db)
+    expect(20 * Math.log10(20)).toBeCloseTo(26.0206, 4)
+    expect(() =>
+      AudioFilters.graphicEqualizer({ gainsDb: at(26.02) })
+    ).not.toThrow()
+    expectPlayerError(
+      () => AudioFilters.graphicEqualizer({ gainsDb: at(26.03) }),
       'invalid-state'
     )
   })
