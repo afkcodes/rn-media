@@ -4,6 +4,7 @@ import androidx.media3.common.Player
 import com.margelo.nitro.rnmediamediasession.NativeRemotePlayback
 import com.margelo.nitro.rnmediamediasession.RemoteVolumeControl
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,7 +30,16 @@ class RemotePlaybackTest {
     steps: Double = 20.0,
     volumeControl: RemoteVolumeControl = RemoteVolumeControl.ABSOLUTE,
     routingControllerId: String? = null,
-  ) = NativeRemotePlayback(volume, muted, steps, volumeControl, routingControllerId)
+    holdLocalAudioSlot: Boolean = false,
+  ) =
+    NativeRemotePlayback(
+      volume,
+      muted,
+      steps,
+      volumeControl,
+      routingControllerId,
+      holdLocalAudioSlot,
+    )
 
   // MARK: - Level → notches
 
@@ -63,6 +73,27 @@ class RemotePlaybackTest {
     assertTrue(device.muted)
     assertEquals("rc-7", device.routingControllerId)
     assertNull(remote().toDevice().routingControllerId)
+  }
+
+  // MARK: - The local audio slot (bug #53)
+
+  @Test
+  fun `holding the local audio slot is opt-in, and off unless asked for`() {
+    // It opens a real audio output for the whole remote session, so an app
+    // that never mentions it must not pay the battery for it.
+    assertFalse(remote().toDevice().holdLocalAudioSlot)
+    assertFalse(shouldHoldLocalAudioSlot(remote().toDevice()))
+
+    assertTrue(remote(holdLocalAudioSlot = true).toDevice().holdLocalAudioSlot)
+    assertTrue(shouldHoldLocalAudioSlot(remote(holdLocalAudioSlot = true).toDevice()))
+  }
+
+  @Test
+  fun `clearing remote playback releases the slot`() {
+    // `setRemotePlayback(null)` means the phone has the audio back, so the
+    // platform's "last played locally" slot is no longer worth holding — and a
+    // track that outlived the session would be a pure battery leak.
+    assertFalse(shouldHoldLocalAudioSlot(null))
   }
 
   @Test

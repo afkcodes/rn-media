@@ -86,7 +86,24 @@ internal data class RemoteDevice(
   val muted: Boolean,
   val volumeControl: RemoteVolumeControl,
   val routingControllerId: String?,
+  /**
+   * Opt-in: hold a silent local output so this app keeps the platform's
+   * "last played locally" slot. See [LocalAudioSlot] for what that buys and
+   * what it costs.
+   */
+  val holdLocalAudioSlot: Boolean,
 )
+
+/**
+ * Whether a published remote output asks us to hold the local audio slot.
+ *
+ * A one-line predicate on purpose: it is the whole lifecycle rule
+ * (`held ⇔ a remote device is published AND it opted in`), it is the thing a
+ * regression would silently break, and keeping it pure is what lets a JVM test
+ * cover "clearing remote playback releases the slot" without an audio device.
+ */
+internal fun shouldHoldLocalAudioSlot(remote: RemoteDevice?): Boolean =
+  remote?.holdLocalAudioSlot == true
 
 /**
  * Bridge struct → [RemoteDevice]. Pure; no Android types; unit-tested on a JVM.
@@ -106,6 +123,7 @@ internal fun NativeRemotePlayback.toDevice(): RemoteDevice {
     muted = muted,
     volumeControl = volumeControl,
     routingControllerId = routingControllerId,
+    holdLocalAudioSlot = holdLocalAudioSlot,
   )
 }
 

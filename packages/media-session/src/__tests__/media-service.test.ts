@@ -551,6 +551,7 @@ describe('remote playback', () => {
         steps: 20,
         volumeControl: 'absolute',
         routingControllerId: undefined,
+        holdLocalAudioSlot: false,
       },
       undefined,
     ])

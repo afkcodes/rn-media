@@ -650,7 +650,30 @@ describe('normalizeRemotePlayback', () => {
       steps: DEFAULT_REMOTE_VOLUME_STEPS,
       volumeControl: DEFAULT_REMOTE_VOLUME_CONTROL,
       routingControllerId: undefined,
+      holdLocalAudioSlot: false,
     })
+  })
+
+  it('leaves holdLocalAudioSlot OFF unless the app asks for it', () => {
+    // Opt-in on purpose: it holds a real audio output open for the whole
+    // remote session, which keeps the audio HAL awake. An app that never
+    // mentions it must not pay that.
+    expect(normalizeRemotePlayback({ volume: 0.5 }).holdLocalAudioSlot).toBe(
+      false
+    )
+    expect(
+      normalizeRemotePlayback({ volume: 0.5, holdLocalAudioSlot: true })
+        .holdLocalAudioSlot
+    ).toBe(true)
+  })
+
+  it('rejects a non-boolean holdLocalAudioSlot', () => {
+    expect(() =>
+      normalizeRemotePlayback({
+        volume: 0.5,
+        holdLocalAudioSlot: 'yes' as never,
+      })
+    ).toThrowError(/holdLocalAudioSlot/)
   })
 
   it('documents the defaults: 20 notches, absolute control', () => {
@@ -667,6 +690,7 @@ describe('normalizeRemotePlayback', () => {
       steps: 10,
       volumeControl: 'relative',
       routingControllerId: 'rc-7',
+      holdLocalAudioSlot: true,
     }
     expect(normalizeRemotePlayback(remote)).toEqual(remote)
   })

@@ -525,6 +525,16 @@ export interface NativeRemotePlayback {
    * requirement.
    */
   routingControllerId?: string
+  /**
+   * Android only: hold a silent local `AudioTrack` while this remote playback
+   * is published, so the app's uid stays the platform's "last played locally"
+   * one and keeps the hardware volume keys with the screen off.
+   *
+   * Opt-in because it holds a real audio output open for the whole remote
+   * session. Normalised from the public API's optional field, so this is
+   * always present. See `RemotePlayback.holdLocalAudioSlot`.
+   */
+  holdLocalAudioSlot: boolean
 }
 
 /** Metadata for the item currently playing. */

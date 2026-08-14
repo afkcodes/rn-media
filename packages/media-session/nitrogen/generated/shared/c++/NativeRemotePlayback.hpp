@@ -47,10 +47,11 @@ namespace margelo::nitro::rnmediamediasession {
     double steps     SWIFT_PRIVATE;
     RemoteVolumeControl volumeControl     SWIFT_PRIVATE;
     std::optional<std::string> routingControllerId     SWIFT_PRIVATE;
+    bool holdLocalAudioSlot     SWIFT_PRIVATE;
 
   public:
     NativeRemotePlayback() = default;
-    explicit NativeRemotePlayback(double volume, bool muted, double steps, RemoteVolumeControl volumeControl, std::optional<std::string> routingControllerId): volume(volume), muted(muted), steps(steps), volumeControl(volumeControl), routingControllerId(routingControllerId) {}
+    explicit NativeRemotePlayback(double volume, bool muted, double steps, RemoteVolumeControl volumeControl, std::optional<std::string> routingControllerId, bool holdLocalAudioSlot): volume(volume), muted(muted), steps(steps), volumeControl(volumeControl), routingControllerId(routingControllerId), holdLocalAudioSlot(holdLocalAudioSlot) {}
 
   public:
     friend bool operator==(const NativeRemotePlayback& lhs, const NativeRemotePlayback& rhs) = default;
@@ -70,7 +71,8 @@ namespace margelo::nitro {
         JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "muted"))),
         JSIConverter<double>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "steps"))),
         JSIConverter<margelo::nitro::rnmediamediasession::RemoteVolumeControl>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "volumeControl"))),
-        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "routingControllerId")))
+        JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "routingControllerId"))),
+        JSIConverter<bool>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "holdLocalAudioSlot")))
       );
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, const margelo::nitro::rnmediamediasession::NativeRemotePlayback& arg) {
@@ -80,6 +82,7 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "steps"), JSIConverter<double>::toJSI(runtime, arg.steps));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "volumeControl"), JSIConverter<margelo::nitro::rnmediamediasession::RemoteVolumeControl>::toJSI(runtime, arg.volumeControl));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "routingControllerId"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.routingControllerId));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "holdLocalAudioSlot"), JSIConverter<bool>::toJSI(runtime, arg.holdLocalAudioSlot));
       return obj;
     }
     static inline bool canConvert(jsi::Runtime& runtime, const jsi::Value& value) {
@@ -95,6 +98,7 @@ namespace margelo::nitro {
       if (!JSIConverter<double>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "steps")))) return false;
       if (!JSIConverter<margelo::nitro::rnmediamediasession::RemoteVolumeControl>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "volumeControl")))) return false;
       if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "routingControllerId")))) return false;
+      if (!JSIConverter<bool>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "holdLocalAudioSlot")))) return false;
       return true;
     }
   };

@@ -44,12 +44,15 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<JRemoteVolumeControl> volumeControl = this->getFieldValue(fieldVolumeControl);
       static const auto fieldRoutingControllerId = clazz->getField<jni::JString>("routingControllerId");
       jni::local_ref<jni::JString> routingControllerId = this->getFieldValue(fieldRoutingControllerId);
+      static const auto fieldHoldLocalAudioSlot = clazz->getField<jboolean>("holdLocalAudioSlot");
+      jboolean holdLocalAudioSlot = this->getFieldValue(fieldHoldLocalAudioSlot);
       return NativeRemotePlayback(
         volume,
         static_cast<bool>(muted),
         steps,
         volumeControl->toCpp(),
-        routingControllerId != nullptr ? std::make_optional(routingControllerId->toStdString()) : std::nullopt
+        routingControllerId != nullptr ? std::make_optional(routingControllerId->toStdString()) : std::nullopt,
+        static_cast<bool>(holdLocalAudioSlot)
       );
     }
 
@@ -59,7 +62,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JNativeRemotePlayback::javaobject> fromCpp(const NativeRemotePlayback& value) {
-      using JSignature = JNativeRemotePlayback(double, jboolean, double, jni::alias_ref<JRemoteVolumeControl>, jni::alias_ref<jni::JString>);
+      using JSignature = JNativeRemotePlayback(double, jboolean, double, jni::alias_ref<JRemoteVolumeControl>, jni::alias_ref<jni::JString>, jboolean);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -68,7 +71,8 @@ namespace margelo::nitro::rnmediamediasession {
         value.muted,
         value.steps,
         JRemoteVolumeControl::fromCpp(value.volumeControl),
-        value.routingControllerId.has_value() ? jni::make_jstring(value.routingControllerId.value()) : nullptr
+        value.routingControllerId.has_value() ? jni::make_jstring(value.routingControllerId.value()) : nullptr,
+        value.holdLocalAudioSlot
       );
     }
   };

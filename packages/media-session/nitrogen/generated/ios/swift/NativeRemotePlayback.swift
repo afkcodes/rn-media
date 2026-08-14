@@ -18,14 +18,14 @@ public extension NativeRemotePlayback {
   /**
    * Create a new instance of `NativeRemotePlayback`.
    */
-  init(volume: Double, muted: Bool, steps: Double, volumeControl: RemoteVolumeControl, routingControllerId: String?) {
+  init(volume: Double, muted: Bool, steps: Double, volumeControl: RemoteVolumeControl, routingControllerId: String?, holdLocalAudioSlot: Bool) {
     self.init(volume, muted, steps, volumeControl, { () -> bridge.std__optional_std__string_ in
       if let __unwrappedValue = routingControllerId {
         return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
       } else {
         return .init()
       }
-    }())
+    }(), holdLocalAudioSlot)
   }
 
   @inline(__always)
@@ -58,5 +58,10 @@ public extension NativeRemotePlayback {
         return nil
       }
     }()
+  }
+  
+  @inline(__always)
+  var holdLocalAudioSlot: Bool {
+    return self.__holdLocalAudioSlot
   }
 }

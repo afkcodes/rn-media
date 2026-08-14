@@ -243,6 +243,18 @@ export class SessionBridge {
             // to throw inside a volume event.
             volume: Math.max(0, Math.min(1, volume.volume)),
             muted: volume.muted,
+            // Opt-in, and this app opts in because it exists to demonstrate the
+            // library at full capability. With the screen off, Android hands
+            // the volume keys to the phone's own stream whenever a *system*
+            // sound (a notification, a ringtone) was the last local audio —
+            // and a cast plays nothing locally to win the slot back, so the
+            // press moves neither device (bug #53). Holding a silent local
+            // output keeps this app in that slot.
+            //
+            // It is off by default in the library because it holds a real
+            // audio output open for the whole cast: a real app should turn it
+            // on only if lock-screen volume matters more than idle battery.
+            holdLocalAudioSlot: true,
           }
     )
   }
