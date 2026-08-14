@@ -1302,11 +1302,15 @@ not read about):**
 - **`REPLACED` (2103) is not a failure.** The notification's seek bar fires
   two seeks milliseconds apart; the older command's `PendingResult` fails
   with REPLACED even though the seek landed. The Kotlin bridge resolves it.
-- **Hardware volume keys drive the receiver — foreground, backgrounded and
-  with the screen locked — through `MediaService.setRemotePlayback`, which is
-  a media-session feature with no idea cast exists** (2026-08-14; this
-  replaces the foreground-only `dispatchKeyEvent` workaround that used to be
-  documented here, and the workaround is deleted).
+- **Hardware volume keys drive the receiver through
+  `MediaService.setRemotePlayback`, which is a media-session feature with no
+  idea cast exists — always in the foreground, and with the screen off only
+  while no system-uid sound has played since our last local audio**
+  (2026-08-14; corrected 2026-08-15 by bug #53, whose entry below states the
+  platform rule precisely. This replaces the foreground-only `dispatchKeyEvent`
+  workaround that used to be documented here, and the workaround is deleted —
+  restoring it would not help, because the foreground path is the one that
+  already works.)
 
   The starting point was real: this library disables the Cast framework's own
   MediaSession (the media-session package owns the app's session — the fan-out
@@ -1350,30 +1354,92 @@ not read about):**
     `setPlaybackToLocal`, and the keys move the phone's stream again. Measured:
     no stuck remote volume.
 
-  **Device evidence** (POCO F4 on its AOSP ROM, Mi Smart Speaker, finite
-  track). Three cases are *instrumented*: the phone's own level read from
-  `dumpsys audio`'s `STREAM_MUSIC streamVolume`, the receiver's level read
-  back from the session's `volumeType=REMOTE … current=` in
-  `dumpsys media_session` — which is fed by the receiver's own `deviceVolume`
-  events, so it is the receiver talking, not us echoing ourselves.
+  **Device evidence** (POCO F4 on its AOSP ROM — Android 16 / API 36 — and a
+  Mi Smart Speaker). Every row states **how it was verified**, because bug #53
+  was shipped on the strength of a row that did not say so. The vocabulary:
 
-  | case | phone stream | receiver | JS handler |
-  | --- | --- | --- | --- |
-  | casting, app backgrounded, 3× VOL_UP | 5/25 → **5/25** | 5/20 → **8/20** | `onSetDeviceVolume(0.30, 0.35, 0.40)` |
-  | casting, **screen off / locked**, 3× VOL_DOWN | 5/25 → **5/25** | 8/20 → **5/20** | `onSetDeviceVolume(0.35, 0.30, 0.25)` |
-  | after transfer back, backgrounded, 3× VOL_UP | 5/25 → **8/25** | session is `volumeType=LOCAL` | none |
+  - *injected* — `adb shell input keyevent`. For the **screen-off** case this
+    is a valid probe of the platform's routing *decision*: measured on this
+    device, an injected key and the owner's physical press produce the same
+    `MediaSessionService: dispatchVolumeKeyEvent … pkg=android, uid=1000,
+    musicOnly=true` line, because with the screen off both are delivered by
+    `PhoneWindowManager`, not by a window. It is **not** valid for the
+    foreground case, where a real press is passed to the focused window and an
+    injected one is not.
+  - *physically measured* — a human pressed the rocker and the effect was read
+    out of `dumpsys`/logcat afterwards.
+  - *owner-observed* — a human pressed the rocker and listened. No instrument.
 
-  logcat corroborates the routing itself:
-  `MediaSessionService: Adjusting com.rnmediaplayerexample/androidx.media3.session.id./702 … by 1`
-  — the platform naming our session as the volume target — against
-  `… session=null` on the same phone before this shipped.
+  The instrumented readouts are: the phone's own level from `dumpsys audio`'s
+  `STREAM_MUSIC streamVolume`; the receiver's level from the session's
+  `volumeType=REMOTE … current=` in `dumpsys media_session`, which is fed by
+  the receiver's own `deviceVolume` events, so it is the receiver talking, not
+  us echoing ourselves.
 
-  The fourth case, **foreground**, is *owner-observed rather than
-  dumpsys-measured*: injected `adb input keyevent` does not travel the window
-  path a physical press takes, so the honest test was a human pressing the
-  rocker with the app on screen and hearing the speaker move. It does, which
-  is why `MainActivity.dispatchKeyEvent` is deleted rather than kept as a
-  foreground supplement — one mechanism, not two.
+  | case | phone stream | receiver | JS handler | how verified |
+  | --- | --- | --- | --- | --- |
+  | casting, **foreground**, physical press | unchanged | moves | — | *owner-observed* (2026-08-14) — and it is the one case that cannot break, see the rule below |
+  | casting, app backgrounded, 3× VOL_UP | 5/25 → **5/25** | 5/20 → **8/20** | `onSetDeviceVolume(0.30, 0.35, 0.40)` | *injected* (2026-08-14) |
+  | casting, screen off, 3× VOL_DOWN | 5/25 → **5/25** | 8/20 → **5/20** | `onSetDeviceVolume(0.35, 0.30, 0.25)` | *injected* (2026-08-14) — **true only when the precondition below holds; this row is what made #53 look fixed** |
+  | casting, screen off, physical press, session REMOTE + PLAYING | 5/25 → **5/25** | 8/20 → **5/20** | — | *physically measured* (2026-08-15, owner's press): `Adjusting com.rnmediaplayerexample/…/767 by -1 … preferSuggestedStream=false` |
+  | casting, screen off, **after a system-uid sound** | unchanged | **unchanged** | **never called** | *injected* (2026-08-15), 3 consecutive: `Ignoring session=…/767 and adjusting suggestedStream=-2147483648 instead` → `Nothing is playing on the music stream. Skipping volume event` |
+  | after transfer back, backgrounded, 3× VOL_UP | 5/25 → **8/25** | session is `volumeType=LOCAL` | none | *injected* (2026-08-14) |
+
+  **The rule the platform actually implements** (`android16-release`,
+  `MediaSessionService.dispatchAdjustVolumeLocked`, the single site that logs
+  `Ignoring session=`; byte-identical in `android15-release` and `main`):
+
+  ```java
+  if (session != null && session.getUid() != uid
+          && mAudioPlayerStateMonitor.hasUidPlayedAudioLast(uid)) {
+      if (Flags.adjustVolumeForForegroundAppPlayingAudioWithoutMediaSession()) {
+          // The app in the foreground has been the last app to play media locally.
+          // Therefore, We ignore the chosen session so that volume events affect the
+          // local music stream instead. See b/275185436 for details.
+          session = null;
+  ```
+
+  With the screen off the caller is `PhoneWindowManager`, so `uid` is **1000
+  (system_server)** — logcat says `pkg=android, uid=1000` for both injected and
+  physical presses. The guard therefore reduces to *"was a **system** sound the
+  last locally-played audio?"*. If yes, our correctly-selected remote session is
+  discarded; the fallback then runs with `musicOnly=true`, and because a cast
+  plays nothing on the local `STREAM_MUSIC`
+  (`AudioSystem.isStreamActive(STREAM_MUSIC, 0) == false` — a Cast session opens
+  no local output), the key is **dropped entirely**: the receiver does not move
+  and neither does the phone. Silent, total, and exactly the owner's report.
+
+  Three source facts make it stick rather than flicker
+  (`AudioPlayerStateMonitor`, byte-identical across 15/16/`main`):
+
+  - `hasUidPlayedAudioLast(uid)` is `uid == mSortedAudioPlaybackClientUids.get(0)`,
+    and `dump()` prints that exact list — so **the first `uid=` line under
+    "Audio playback (lastly played comes first)" in `dumpsys media_session` is
+    the value the guard compares against.** That is the one-command diagnostic.
+  - `cleanUpAudioPlaybackUids()` walks from the tail and `break`s at the media
+    button session's uid, so it can **never** remove index 0.
+  - A casting app registers no local `AudioPlaybackConfiguration`, so it can
+    never displace the head by playing.
+
+  Which is why **the foreground case cannot break**: `PhoneWindow` routes a
+  press through `dispatchVolumeKeyEventToSessionAsSystemService(event, token)`,
+  which targets the session *by token* and never reaches this heuristic. The
+  asymmetry the owner reported — foreground fine, screen off dead — is the
+  shape of this bug, not a coincidence.
+
+  The escape hatch is in the same file and is the basis of any fix: when the
+  head uid goes **inactive**, `onPlaybackConfigChanged` promotes the first
+  still-**active** uid to index 0. An app that keeps a local audio player
+  active for the duration of the handoff therefore reclaims the head on its own
+  as soon as the interfering sound ends. Nothing else in the public API moves
+  that list.
+
+  **What #53 teaches about evidence.** The screen-off row above was true when
+  it was measured and false an hour later, and nothing about the measurement
+  said which. The methodological fix is the "how verified" column, plus this:
+  *a single sample never establishes an intermittent property.* The failing
+  runs here were found only because a probe kept pressing while unrelated state
+  moved underneath it.
 
   **Platform truth found on the way, worth recording because it reads exactly
   like a failure: Android only routes volume keys to a session that is
