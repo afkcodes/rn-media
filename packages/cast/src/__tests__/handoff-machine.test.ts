@@ -109,6 +109,44 @@ function activeState(): CastHandoffState {
   ]).state
 }
 
+/**
+ * 3 items: [0] live radio, [1] finite, [2] live HLS. The position is what mpv
+ * reports on a live stream — a stream-timeline offset, not a resumable clock
+ * (device-observed: ~95 000 s on an HLS live master).
+ */
+function liveSnapshot(
+  overrides: Partial<CastHandoffQueueSnapshot> = {}
+): CastHandoffQueueSnapshot {
+  return {
+    items: [
+      item('radio', {
+        url: 'https://radio.example.com/stream',
+        mimeType: 'audio/aacp',
+        live: true,
+      }),
+      item('song'),
+      item('radio-hls', {
+        url: 'https://radio.example.com/live.m3u8',
+        mimeType: 'application/x-mpegurl',
+        live: true,
+      }),
+    ],
+    index: 0,
+    position: 4_321.5,
+    playWhenReady: true,
+    ...overrides,
+  }
+}
+
+/** LOCAL → CAST_ACTIVE on the live queue: ids [21, 22, 23] ↔ js [0, 1, 2]. */
+function liveActiveState(): CastHandoffState {
+  return drive([
+    started(liveSnapshot()),
+    loaded([21, 22, 23]),
+    status({ currentItemId: 21, position: 95_000 }),
+  ]).state
+}
+
 function effectsOf(t: CastHandoffTransition): string[] {
   return t.effects.map((e) => e.type)
 }
@@ -233,6 +271,38 @@ describe('projectCastQueue', () => {
       metadata: { title: 'Live', artist: 'Station' },
     })
     expect(p.items[1]?.source.duration).toBe(180)
+  })
+})
+
+describe('projectCastQueue — live entries (device-found rules)', () => {
+  it('a live start item joins the live edge: startPosition 0, whatever the local clock said', () => {
+    // Device truth (Icecast → Mi Smart Speaker): any nonzero start position
+    // on an unseekable live stream wedged the Default Media Receiver in
+    // BUFFERING at that offset forever — the "live cast loads forever" bug.
+    const p = projectCastQueue(liveSnapshot())
+    expect(p.startIndex).toBe(0)
+    expect(p.startPosition).toBe(0)
+    expect(p.startShifted).toBe(false)
+  })
+
+  it('a finite start item in the same queue keeps its position', () => {
+    const p = projectCastQueue(liveSnapshot({ index: 1, position: 42 }))
+    expect(p.startIndex).toBe(1)
+    expect(p.startPosition).toBe(42)
+  })
+
+  it('a start SHIFTED onto a live item is also positionless', () => {
+    const p = projectCastQueue({
+      ...liveSnapshot(),
+      items: [
+        item('gone-local', { url: 'file:///a.mp3' }),
+        ...liveSnapshot().items.slice(2),
+      ],
+      index: 0,
+      position: 9,
+    })
+    expect(p.startShifted).toBe(true)
+    expect(p.startPosition).toBe(0)
   })
 })
 
@@ -856,6 +926,170 @@ describe('CAST_ACTIVE', () => {
       expect(t.state.phase).toBe('cast-active')
       expect(t.effects).toEqual([])
     }
+  })
+})
+
+/* ---------------------------------------------------------------------- */
+/*                     CAST_ACTIVE — live-path transitions                */
+/* ---------------------------------------------------------------------- */
+
+describe('CAST_ACTIVE — live entries (device-found rules)', () => {
+  it('end while on a live item marks the restore live — the wire must not seek mpv', () => {
+    // The receiver's live clock is a stream-timeline offset (~95 000 s on
+    // hardware); seeking mpv there is meaningless and mpv rejects it
+    // ("Cannot seek in this stream").
+    const t = reduceCastHandoff(liveActiveState(), {
+      type: 'end',
+      transferBack: true,
+      at: 3_200,
+    })
+    expect(t.state).toMatchObject({ phase: 'handoff-to-local', live: true })
+    const restored = reduceCastHandoff(t.state, {
+      type: 'sessionEnded',
+      at: 3_300,
+    })
+    expect(findEffect(restored, 'restoreLocal')).toMatchObject({
+      itemIndex: 0,
+      live: true,
+      playWhenReady: true,
+    })
+  })
+
+  it('an unsolicited sessionEnded from a live item restores live too', () => {
+    const t = reduceCastHandoff(liveActiveState(), {
+      type: 'sessionEnded',
+      at: 3_200,
+    })
+    expect(findEffect(t, 'restoreLocal')).toMatchObject({ live: true })
+    // The transfer event still reports the projected receiver clock — a
+    // truthful discontinuity, just not a seek target.
+    expect(findEffect(t, 'emitTransfer').transfer.position).toBeCloseTo(
+      95_002,
+      3
+    )
+  })
+
+  it('the receiver advancing onto a finite item clears the live flag for the restore', () => {
+    const advanced = reduceCastHandoff(
+      liveActiveState(),
+      status({ currentItemId: 22, position: 7 }, 2_000)
+    ).state
+    const t = reduceCastHandoff(advanced, {
+      type: 'end',
+      transferBack: true,
+      at: 2_500,
+    })
+    expect(t.state).toMatchObject({
+      phase: 'handoff-to-local',
+      itemIndex: 1,
+      live: false,
+      position: 7.5,
+    })
+  })
+
+  it('a finite restore stays live:false explicitly', () => {
+    const t = reduceCastHandoff(activeState(), {
+      type: 'sessionEnded',
+      at: 10_200,
+    })
+    expect(findEffect(t, 'restoreLocal')).toMatchObject({ live: false })
+  })
+
+  it('a queueLoad failure while the CURRENT entry is live falls back without a seek', () => {
+    const handingOff = reduceCastHandoff(
+      initialCastHandoffState,
+      started(liveSnapshot())
+    ).state
+    const t = reduceCastHandoff(handingOff, {
+      type: 'castQueueLoadFailed',
+      error: new CastError('load-failed', 'x'),
+    })
+    expect(findEffect(t, 'restoreLocal')).toMatchObject({
+      itemIndex: 0,
+      live: true,
+    })
+  })
+
+  it('a resync anchored on a live item reloads at the live edge, not the projected clock', () => {
+    const t = reduceCastHandoff(liveActiveState(), {
+      type: 'resync',
+      snapshot: liveSnapshot({
+        items: [...liveSnapshot().items, item('extra')],
+      }),
+      at: 9_999,
+    })
+    expect(findEffect(t, 'loadCastQueue')).toMatchObject({
+      startIndex: 0,
+      startPosition: 0,
+    })
+  })
+
+  it('a resync refreshes liveness from the new snapshot — queue truth, not mapping truth', () => {
+    // The same JS index flips from live to finite across the resync (the app
+    // swapped the entry); the eventual restore must follow the NEW truth.
+    const items = liveSnapshot().items
+    const resynced = drive(
+      [
+        {
+          type: 'resync',
+          snapshot: liveSnapshot({
+            items: [item('now-finite'), items[1]!, items[2]!],
+          }),
+          at: 2_000,
+        },
+        loaded([31, 32, 33], 2_100),
+      ],
+      liveActiveState()
+    ).state
+    const t = reduceCastHandoff(resynced, {
+      type: 'sessionEnded',
+      at: 2_200,
+    })
+    expect(findEffect(t, 'restoreLocal')).toMatchObject({ live: false })
+  })
+
+  it('a non-finished idle keeps the projected anchor — never adopts the zeroed clock', () => {
+    // Device truth: when the receiver's media session dies, statuses go
+    // idle with position 0. Adopting the 0 would restore local playback at
+    // 0:00 after any receiver-side death. Anchor 42.5 @1200, rate 1.
+    const t = reduceCastHandoff(
+      activeState(),
+      status(
+        {
+          playerState: 'idle',
+          idleReason: 'interrupted',
+          position: 0,
+          currentItemId: undefined,
+        },
+        5_200
+      )
+    )
+    const snapshot = findEffect(t, 'emitReceiverState').snapshot
+    expect(snapshot.position).toBe(46.5)
+    expect(snapshot.playing).toBe(false)
+    const ended = reduceCastHandoff(t.state, {
+      type: 'sessionEnded',
+      at: 6_000,
+    })
+    expect(findEffect(ended, 'restoreLocal')).toMatchObject({ position: 46.5 })
+  })
+
+  it('idle + finished DOES adopt the receiver clock — the queue really ended', () => {
+    const t = reduceCastHandoff(
+      activeState(),
+      status(
+        {
+          playerState: 'idle',
+          idleReason: 'finished',
+          position: 0,
+          currentItemId: undefined,
+        },
+        5_200
+      )
+    )
+    const snapshot = findEffect(t, 'emitReceiverState').snapshot
+    expect(snapshot.position).toBe(0)
+    expect(snapshot.queueEnded).toBe(true)
   })
 })
 

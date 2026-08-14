@@ -127,6 +127,26 @@ export function toCastMediaItem(
  * that entry produces a genuine receiver-side fetch failure — the on-device
  * demo of the `cast-receiver-fetch` error family.
  */
+/**
+ * Receiver-side URL substitutions — the redirect half of the resolver seam.
+ *
+ * Device truth (Mi Smart Speaker, Default Media Receiver, 2026-08-14): the
+ * receiver NEVER started playback for an HLS playlist URL that answers with a
+ * 302. The Vividh Bharati entry's wavespb.com URL redirects every path under
+ * `/live/<id>/` to the playlist on CloudFront; casting it left the receiver
+ * IDLE forever, and a `queueJumpTo` into it wedged the media channel (the
+ * PendingResult settled CANCELED/2002 only when the session ended — the
+ * owner's "every queue tap fails"). Handing the receiver the redirect TARGET
+ * played immediately. mpv follows the redirect fine, so local playback keeps
+ * the original URI — the asymmetry is the receiver's, and the fix is the
+ * sender's job: resolve redirects into receiver-playable URLs before the
+ * handoff, exactly where a real app resolves its signed URLs.
+ */
+const CAST_URL_OVERRIDES: Readonly<Record<string, string>> = {
+  'https://radio.wavespb.com/live/146ed6ec6dea5a24/146ed6ec6dea5a24.m3u8':
+    'https://d1tmej9eu7kw5c.cloudfront.net/146ed6ec6dea5a24/146ed6ec6dea5a24.m3u8',
+}
+
 export function castUrlOf(track: Track): string {
   if (track.uri === DEMO_BROKEN_URI) return DEMO_BROKEN_TARGET
   if (track.uri.startsWith(DEMO_SCHEME)) {
@@ -135,13 +155,20 @@ export function castUrlOf(track: Track): string {
     // loudly (cast-receiver-fetch) rather than this projection guessing.
     return DEMO_SOURCES[id] ?? track.uri
   }
-  return track.uri
+  return CAST_URL_OVERRIDES[track.uri] ?? track.uri
 }
 
 /**
  * Concrete MIME type for the receiver's `contentType`, from the *resolved*
  * URL. This catalogue is small enough to classify honestly; a real app reads
  * this off its own metadata instead of sniffing.
+ *
+ * Both live shapes verified against the Default Media Receiver on hardware
+ * (2026-08-14): `application/x-mpegurl` plays the HLS entries (TS/AAC
+ * segments, no `hlsSegmentFormat` hint needed), and `audio/aacp` plays the
+ * Shoutcast stream as-is. The live failures were never MIME — they were the
+ * start position (live must join the live edge) and a redirecting playlist
+ * URL (see {@link CAST_URL_OVERRIDES}).
  */
 export function castMimeOf(track: Track): string {
   const url = castUrlOf(track)

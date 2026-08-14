@@ -1319,6 +1319,63 @@ not read about):**
   through the playlist — any app joining queue rows by URI must compare with
   the scheme stripped (the example's `matchTrack` does now).
 
+**Live-casting truths (device round 2026-08-14 — the "casting a live station
+loads forever" bug, plus "every queue tap fails", both owner-reported and
+reproduced on the same hardware):**
+
+- **A nonzero start position wedges an unseekable live stream receiver-side.**
+  `queueLoad` with `playPosition = 29 000 ms` against the Icecast entry left
+  the Default Media Receiver BUFFERING at 29.0 s forever (control-tested with
+  a bare CastV2 sender: same URL with no position → PLAYING in under two
+  seconds; with `currentTime=29` → wedged). HLS live self-corrects eventually
+  (the receiver clamped a 29 s request to the live window — after flapping
+  through the wrong queue item first). mpv's clock on a live stream is a
+  stream-timeline offset anyway (FIP reported ~95 000 s), so the number was
+  never a resumable position. The machine's rule: **a live start item always
+  loads with `startPosition 0`** (`projectCastQueue` + the resync anchor),
+  which is "join the live edge" — the only correct live semantics.
+- **A live transfer-back must not seek mpv.** The receiver's live position is
+  that same timeline offset; the old restore seeked FIP to 95 520 s and mpv
+  answered `Cannot seek in this stream` (twice — the retry). The `restoreLocal`
+  effect now carries `live`; the wire skips the seek and reopening at the live
+  edge IS the resume. The `castTransfer` event still reports the projected
+  clock — a truthful discontinuity, just not a seek target.
+- **The Default Media Receiver never starts an HLS playlist URL that answers
+  with a 302.** The Vividh Bharati entry's host redirects every path under its
+  prefix to the playlist's CloudFront URL; casting it left the receiver IDLE
+  forever, while handing it the redirect *target* played immediately. mpv
+  follows the redirect fine — the asymmetry is the receiver's. Resolving
+  redirects into receiver-playable URLs is the sender's job, at the same seam
+  where a real app resolves signed URLs (`castUrlOf`'s override map in the
+  example).
+- **MIME and segment format were NOT the problem** (worth recording because
+  they are the usual suspects): `audio/aacp` plays the Shoutcast stream as-is
+  and `application/x-mpegurl` plays both HLS entries (TS/AAC segments) with no
+  `hlsSegmentFormat` hint — all control-tested on the receiver directly. The
+  22.3.1 AAR does ship `MediaInfo.Builder.setHlsSegmentFormat` +
+  `HlsSegmentFormat` (`aac|ac3|e-ac3|fmp4|mp3|ts|ts_aac`, javap-verified) if a
+  future stream needs it; the binding deliberately doesn't surface what no
+  entry needs.
+- **A command against a dead receiver media session hangs its PendingResult
+  indefinitely.** A `queueJumpTo` into the redirecting live entry killed the
+  receiver's media session; the jump's PendingResult settled — CANCELED
+  (2002) — only when the session ended FOUR MINUTES later, so every queue tap
+  "silently did nothing" until a burst of stale errors at disconnect (the
+  owner's exact screenshot). Every bridged `PendingResult` is now bounded at
+  10 s via `setResultCallback(callback, timeout, unit)`; the timeout delivers
+  `CastStatusCodes.TIMEOUT` (15) → a typed error in seconds, never a silent
+  hang.
+- **The real→null media-status transition used to be dropped.** When the
+  receiver's media session dies, `onStatusUpdated` fires with a null
+  `MediaStatus`; the bridge emitted nothing and the phone showed the last
+  "playing" anchor for minutes. The controller now synthesizes one
+  `idle`/`interrupted` status for exactly that transition (gated on a real
+  status having been seen — a fresh session's null is just "nothing loaded
+  yet"). Machine-side rule that pairs with it: **a non-`finished` idle keeps
+  the projected anchor** rather than adopting the zeroed clock, so the
+  broadcast and a later transfer-back keep the position playback actually
+  died at.
+
 - A session can exist before JS wires anything (framework session resumption
   runs at `CastContext` init). The handoff deliberately does NOT auto-cast
   over it — destructive at app launch — and reuses it on the next `castTo`.
@@ -1329,6 +1386,21 @@ not read about):**
   projected receiver position, and the framework's `resumed` event re-runs
   the handoff from the restored snapshot, so a flap costs a beat of silence,
   not the listening position.
+- **Both providers publish the SAME device with the SAME deviceId — and
+  selecting the foreign twin makes every connect fail at the socket**
+  (2026-08-14, the day casting "just stopped working"). `requestSession`'s
+  route lookup matched by deviceId with `firstOrNull`, so which provider's
+  route won was an enumeration race: when the microG twin won, stock
+  CastService failed with "Cast socket status code 2251/2283" on every
+  attempt (the fork logs `CastMediaRouteController: unimplemented Method:
+  onSelect`) while ReVanced YouTube — which rides the microG stack — cast
+  happily to the same speaker, a perfectly misleading symptom. Fixed in
+  `CastController.requestSession`: among deviceId matches, prefer the route
+  whose provider package is `com.google.android.gms` (the package the
+  framework itself lives in); fall back to any match. Environmental red
+  herrings eliminated on the way, recorded so nobody chases them again: a
+  full speaker reboot, a GMS force-stop and the `NEARBY_WIFI_DEVICES` appop
+  all changed nothing; the route preference fixed it on the first try.
 - The connect-ordering rule (connect after the picker closes, *before*
   `stopDiscovery`, or MediaRouter drops the route mid-handshake) is encoded
   natively (deferred discovery teardown while a start is in flight) AND kept

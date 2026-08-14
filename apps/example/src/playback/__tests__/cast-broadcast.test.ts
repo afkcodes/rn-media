@@ -135,4 +135,18 @@ describe('castUrlOf / castMimeOf — the resolver seam', () => {
     expect(castUrlOf(local).startsWith('file://')).toBe(true)
     expect(castMimeOf(local)).toBe('audio/ogg')
   })
+
+  it('resolves the redirecting HLS playlist to its receiver-playable target (device-found)', () => {
+    // The Default Media Receiver never starts playback for an HLS playlist
+    // URL that answers with a 302 (Mi Smart Speaker, 2026-08-14) — the
+    // redirect TARGET plays immediately. mpv follows redirects fine, so the
+    // queue keeps the original URI; only the cast projection substitutes.
+    const vividh = TRACKS[2] as Track
+    expect(vividh.uri).toContain('radio.wavespb.com')
+    expect(castUrlOf(vividh)).toBe(
+      'https://d1tmej9eu7kw5c.cloudfront.net/146ed6ec6dea5a24/146ed6ec6dea5a24.m3u8'
+    )
+    // The MIME classification follows the resolved URL — still an HLS playlist.
+    expect(castMimeOf(vividh)).toBe('application/x-mpegurl')
+  })
 })

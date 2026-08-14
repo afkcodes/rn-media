@@ -29,8 +29,10 @@ import com.google.android.gms.common.images.WebImage
 import com.margelo.nitro.core.Promise
 import com.margelo.nitro.rnmediacast.CastConnectionState
 import com.margelo.nitro.rnmediacast.CastDeviceInfo
+import com.margelo.nitro.rnmediacast.CastIdleReason
 import com.margelo.nitro.rnmediacast.CastLoadOptions
 import com.margelo.nitro.rnmediacast.CastMediaSource
+import com.margelo.nitro.rnmediacast.CastPlayerState
 import com.margelo.nitro.rnmediacast.CastQueueItemInput
 import com.margelo.nitro.rnmediacast.CastQueueItemSnapshot
 import com.margelo.nitro.rnmediacast.CastQueueLoadOptions
@@ -44,6 +46,7 @@ import com.margelo.nitro.rnmediacast.NativeCastSessionEvent
 import com.margelo.nitro.rnmediacast.NativeCastStateEvent
 import com.margelo.nitro.rnmediacast.NativeDeviceVolumeEvent
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /** Fan-out seam between the controller and the hybrid's listener registries. */
 internal interface CastEmitter {
@@ -97,6 +100,14 @@ internal class CastController(
   private var attachedSession: CastSession? = null
   private var attachedRmc: RemoteMediaClient? = null
 
+  /**
+   * A real media status has been emitted for the attached session. Gates the
+   * synthesized idle in [rmcCallback]: only a real→null transition means "the
+   * receiver's media session died"; a null before any status is just a fresh
+   * session with nothing loaded yet.
+   */
+  private var hadMediaStatus = false
+
   // ---------------------------------------------------------------------
   // Framework callbacks
   // ---------------------------------------------------------------------
@@ -130,7 +141,8 @@ internal class CastController(
       override fun onSessionStartFailed(session: CastSession, error: Int) {
         pendingStart?.reject(
           IllegalStateException(
-            "[session-start-failed] The platform reported a session start failure, status=$error"
+            "[session-start-failed] Could not connect to the receiver: " +
+              "${CastStatusCodes.getStatusCodeString(error)} (status=$error)"
           )
         )
         pendingStart = null
@@ -172,7 +184,8 @@ internal class CastController(
       override fun onSessionResumeFailed(session: CastSession, error: Int) {
         pendingStart?.reject(
           IllegalStateException(
-            "[session-start-failed] The platform reported a session resume failure, status=$error"
+            "[session-start-failed] Could not resume the receiver session: " +
+              "${CastStatusCodes.getStatusCodeString(error)} (status=$error)"
           )
         )
         pendingStart = null
@@ -227,7 +240,38 @@ internal class CastController(
     object : RemoteMediaClient.Callback() {
       override fun onStatusUpdated() {
         val rmc = attachedRmc ?: return
-        statusEvent(rmc)?.let(emitter::onMediaStatus)
+        val event = statusEvent(rmc)
+        if (event != null) {
+          hadMediaStatus = true
+          emitter.onMediaStatus(event)
+          return
+        }
+        if (hadMediaStatus) {
+          // Real → null: the receiver's MEDIA SESSION died with the cast
+          // session still up (device-found: a live-stream load the receiver
+          // could not start killed it; the phone then showed the last
+          // "playing" state for minutes because this update was dropped).
+          // Synthesize one idle status so every surface learns playback
+          // stopped. `interrupted` is the honest reason — the media went
+          // away without finishing; the receiver reported no error. The
+          // position is 0 by necessity; the TS machine keeps its projected
+          // anchor for idle statuses, so nothing downstream adopts the 0.
+          hadMediaStatus = false
+          emitter.onMediaStatus(
+            NativeCastMediaStatusEvent(
+              playerState = CastPlayerState.IDLE,
+              idleReason = CastIdleReason.INTERRUPTED,
+              position = 0.0,
+              duration = null,
+              playbackRate = 0.0,
+              streamVolume = 0.0,
+              streamMuted = false,
+              repeatMode = CastRepeatMode.OFF,
+              currentItemId = null,
+              queueItemCount = 0.0,
+            )
+          )
+        }
       }
 
       override fun onQueueStatusUpdated() {
@@ -374,10 +418,25 @@ internal class CastController(
       )
       return
     }
-    val route =
-      mediaRouter.routes.firstOrNull { route ->
+    // The same physical device can be published by SEVERAL route providers
+    // with the same deviceId — device truth (POCO F4, 2026-08-14): this
+    // phone runs stock GMS and a microG fork (`app.revanced.android.gms`),
+    // and both list the speaker. Only the stock framework's own provider can
+    // carry a session for OUR CastContext; selecting the foreign twin made
+    // CastService fail at the socket every time ("Cast socket status code
+    // 2251/2283", the fork logging `CastMediaRouteController: unimplemented
+    // Method: onSelect`) — which twin won `firstOrNull` was a race, so
+    // connects were randomly impossible. Prefer the provider that belongs to
+    // the same package the cast framework itself lives in; fall back to any
+    // match (a microG-only device would never get here — initialize()
+    // resolves 'unavailable' without Play services).
+    val candidates =
+      mediaRouter.routes.filter { route ->
         route.extras?.let(CastDevice::getFromBundle)?.deviceId == deviceId
       }
+    val route =
+      candidates.firstOrNull { it.provider?.packageName == GMS_PACKAGE }
+        ?: candidates.firstOrNull()
     if (route == null) {
       promise.reject(
         IllegalArgumentException(
@@ -713,6 +772,7 @@ internal class CastController(
   private fun attach(session: CastSession) {
     if (attachedSession === session) return
     detach()
+    hadMediaStatus = false
     attachedSession = session
     session.addCastListener(castDeviceListener)
     val rmc = session.remoteMediaClient ?: return
@@ -737,6 +797,7 @@ internal class CastController(
     attachedRmc = null
     attachedSession?.removeCastListener(castDeviceListener)
     attachedSession = null
+    hadMediaStatus = false
   }
 
   private fun requireRmc(promise: Promise<*>): RemoteMediaClient? {
@@ -860,32 +921,68 @@ internal class CastController(
    * Settle a promise from a framework [PendingResult]. Success/failure comes
    * from the result status; `family` names the error-taxonomy code used on
    * failure (default `native`, the catch-all for transport commands).
+   *
+   * Bounded on purpose (device-found, POCO F4 → Mi Smart Speaker,
+   * 2026-08-14): a command issued while the receiver's media session is
+   * dead/dying can leave its PendingResult unsettled indefinitely — a
+   * `queueJumpTo` sat pending for FOUR MINUTES and only settled (CANCELED,
+   * 2002) when the session itself ended, so every queue tap "silently did
+   * nothing". The timeout overload delivers `CastStatusCodes.TIMEOUT` (15)
+   * instead: a typed error in seconds, never a silent hang.
    */
   private fun PendingResult<RemoteMediaClient.MediaChannelResult>.bridge(
     promise: Promise<Unit>,
     family: String = "native",
     operation: String,
   ) {
-    setResultCallback { result ->
-      val status = result.status
-      if (status.isSuccess || status.statusCode == CastStatusCodes.REPLACED) {
-        // REPLACED (2103) is not a failure: a newer request of the same type
-        // superseded this one — the notification's seek bar routinely fires
-        // two seeks milliseconds apart (device-observed), and rejecting the
-        // first would put a scary error on screen for a seek that landed.
-        promise.resolve(Unit)
-      } else {
-        promise.reject(
-          IllegalStateException(
-            "[$family] $operation failed, status=${status.statusCode}" +
-              (status.statusMessage?.let { " ($it)" } ?: "")
+    setResultCallback(
+      { result ->
+        val status = result.status
+        if (status.isSuccess || status.statusCode == CastStatusCodes.REPLACED) {
+          // REPLACED (2103) is not a failure: a newer request of the same type
+          // superseded this one — the notification's seek bar routinely fires
+          // two seeks milliseconds apart (device-observed), and rejecting the
+          // first would put a scary error on screen for a seek that landed.
+          promise.resolve(Unit)
+        } else {
+          val hint =
+            if (status.statusCode == CastStatusCodes.TIMEOUT) {
+              " — no result within ${RESULT_TIMEOUT_MS} ms; the receiver's" +
+                " media session may be gone"
+            } else {
+              ""
+            }
+          // getStatusCodeString gives the SDK's own name for the code
+          // ("CANCELED", "TIMEOUT", …) — a message a human can read without
+          // the CastStatusCodes table open.
+          promise.reject(
+            IllegalStateException(
+              "[$family] $operation failed: " +
+                "${CastStatusCodes.getStatusCodeString(status.statusCode)} " +
+                "(status=${status.statusCode})" +
+                (status.statusMessage?.let { " ($it)" } ?: "") + hint
+            )
           )
-        )
-      }
-    }
+        }
+      },
+      RESULT_TIMEOUT_MS,
+      TimeUnit.MILLISECONDS,
+    )
   }
 
   private companion object {
     const val DEVICES_DEBOUNCE_MS = 250L
+
+    /** The package the cast framework (and its route provider) lives in. */
+    const val GMS_PACKAGE = "com.google.android.gms"
+
+    /**
+     * Upper bound on any [PendingResult] this controller bridges. A healthy
+     * LAN command acks well under a second; ten seconds of silence means the
+     * media channel is not answering (see [bridge]'s doc for the measured
+     * failure). Comfortably under `wireCastHandoff`'s 15 s handoff bound so
+     * a hung queueLoad surfaces natively first, with the sharper message.
+     */
+    const val RESULT_TIMEOUT_MS = 10_000L
   }
 }

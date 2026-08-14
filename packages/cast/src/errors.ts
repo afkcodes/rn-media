@@ -108,15 +108,28 @@ export function toCastError(error: unknown): CastError {
   if (match !== null) {
     const code = NATIVE_CODES.find((c) => c === match[1])
     if (code !== undefined) {
-      const statusMatch = /\bstatus[ =:]+(-?\d+)/.exec(match[2] ?? '')
-      return new CastError(code, match[2] ?? raw, {
+      const remainder = match[2] ?? raw
+      const statusMatch = /\bstatus[ =:]+(-?\d+)/.exec(remainder)
+      return new CastError(code, firstLine(remainder), {
         raw,
         statusCode:
           statusMatch?.[1] !== undefined ? Number(statusMatch[1]) : undefined,
       })
     }
   }
-  return new CastError('native', raw, { raw })
+  return new CastError('native', firstLine(raw), { raw })
+}
+
+/**
+ * `message` is for humans; `raw` is for logs. Kotlin `Promise.reject`
+ * messages arrive with the full JVM stack trace appended after the first
+ * newline (device-observed: an error banner rendering `message` spewed
+ * twenty lines of `at com.google.android.gms...`), so the human message is
+ * the first line only — everything survives verbatim in `raw`.
+ */
+function firstLine(text: string): string {
+  const line = text.split('\n', 1)[0] ?? text
+  return line.trim() === '' ? text : line.trimEnd()
 }
 
 /**

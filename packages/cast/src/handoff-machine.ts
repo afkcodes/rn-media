@@ -117,7 +117,18 @@ export interface CastQueueProjection {
   readonly skipped: readonly SkippedCastItem[]
   /** Projection-space start index (what `queueLoad` receives). */
   readonly startIndex: number
-  /** Seconds into the start item. `0` whenever {@link startShifted}. */
+  /**
+   * Seconds into the start item. `0` whenever {@link startShifted} — and `0`
+   * whenever the start item is live: a live handoff joins the live edge.
+   * Device truth behind the live rule (POCO F4 → Mi Smart Speaker,
+   * 2026-08-14): the Default Media Receiver honours a nonzero start position
+   * by *seeking*, and on an unseekable live stream (Icecast) that wedges it
+   * in BUFFERING at the requested offset forever — the "casting a live
+   * station loads forever" bug. HLS live fares no better: the receiver
+   * flapped through the wrong queue item before recovering. mpv's clock on a
+   * live stream is a stream-timeline offset anyway (FIP reported ~95 000 s),
+   * so the number was never a resumable position to begin with.
+   */
   readonly startPosition: number
   /**
    * `true` when the current JS entry was not castable and the start moved to
@@ -247,6 +258,15 @@ export type CastHandoffEffect =
       readonly itemIndex: number
       readonly position: number
       readonly playWhenReady: boolean
+      /**
+       * The restore target is a live stream: the orchestrator must NOT seek
+       * the local player to {@link position}. A receiver's live clock is a
+       * stream-timeline offset (device-observed: ~95 000 s on an HLS live
+       * master), meaningless to any other player — and mpv rejects seeks on
+       * unseekable live streams outright (`Cannot seek in this stream`). A
+       * live restore reopens the stream at the live edge; that IS the resume.
+       */
+      readonly live: boolean
     }
   | { readonly type: 'emitTransfer'; readonly transfer: CastTransferEvent }
   | {
@@ -285,6 +305,12 @@ export type CastHandoffState =
       readonly jsIndices: readonly number[]
       /** Current JS index, reconciled from the last `currentItemId`. */
       readonly itemIndex: number
+      /**
+       * JS indices whose items are live streams — queue truth carried so a
+       * transfer-back can mark its restore `live` (no seek). Independent of
+       * the receiver mapping, so a `resync` refreshes it immediately.
+       */
+      readonly liveJsIndices: readonly number[]
       readonly anchor: ReceiverAnchor
       /** The receiver's advance intent — what a transfer-back resumes per. */
       readonly playWhenReady: boolean
@@ -298,6 +324,8 @@ export type CastHandoffState =
       readonly position: number
       readonly playWhenReady: boolean
       readonly transferBack: boolean
+      /** The restore target is live — see the `restoreLocal` effect's doc. */
+      readonly live: boolean
       readonly awaiting: 'session-end' | 'local-restore'
     }
 
@@ -368,14 +396,32 @@ export function projectCastQueue(
     items[startIndex] = { ...startItem, autoplay: false }
   }
 
+  // A live start item always joins the live edge — see the field's TSDoc for
+  // the device evidence (an Icecast handoff with any nonzero position wedged
+  // the Default Media Receiver in BUFFERING at that offset forever).
+  const startLive =
+    startJsIndex !== undefined &&
+    snapshot.items[startJsIndex]?.live === true
+
   return {
     items,
     jsIndices,
     skipped,
     startIndex,
-    startPosition: startShifted ? 0 : snapshot.position,
+    startPosition: startShifted || startLive ? 0 : snapshot.position,
     startShifted,
   }
+}
+
+/** JS indices of the snapshot's live entries — queue truth for live restores. */
+function liveIndicesOf(
+  items: readonly CastHandoffQueueItem[]
+): readonly number[] {
+  const indices: number[] = []
+  items.forEach((item, index) => {
+    if (item.live === true) indices.push(index)
+  })
+  return indices
 }
 
 /** `itemId` → JS index through the projection mapping, or `undefined`. */
@@ -509,6 +555,10 @@ function fallBackToLocal(
   snapshot: CastHandoffQueueSnapshot,
   error?: CastError
 ): CastHandoffTransition {
+  // The local player never moved (the handoff only paused it), so for a live
+  // entry there is nothing meaningful to seek back to — and mpv rejects
+  // seeks on unseekable live streams. `live` tells the orchestrator so.
+  const live = snapshot.items[snapshot.index]?.live === true
   const effects: CastHandoffEffect[] = []
   if (error !== undefined) effects.push({ type: 'emitError', error })
   effects.push({
@@ -516,6 +566,7 @@ function fallBackToLocal(
     itemIndex: snapshot.index,
     position: snapshot.position,
     playWhenReady: snapshot.playWhenReady,
+    live,
   })
   return {
     state: {
@@ -524,6 +575,7 @@ function fallBackToLocal(
       position: snapshot.position,
       playWhenReady: snapshot.playWhenReady,
       transferBack: true,
+      live,
       awaiting: 'local-restore',
     },
     effects,
@@ -646,6 +698,7 @@ function reduceHandoffToCast(
           itemIds: state.itemIds,
           jsIndices: projection.jsIndices,
           itemIndex,
+          liveJsIndices: liveIndicesOf(state.snapshot.items),
           anchor: {
             position,
             at: event.at,
@@ -685,13 +738,26 @@ function reduceCastActive(
           state.jsIndices,
           status.currentItemId
         ) ?? state.itemIndex
-      const snapshot = receiverSnapshot(status, event.at, itemIndex)
+      // An idle status carries a zeroed clock (the receiver's media session
+      // is gone with the media). Unless the queue genuinely FINISHED, the
+      // projected anchor at the moment of the idle is the honest position —
+      // for the broadcast and for a later transfer-back. Adopting the 0 here
+      // would restore local playback at 0:00 after any receiver-side death.
+      const interrupted =
+        status.playerState === 'idle' && status.idleReason !== 'finished'
+      const position = interrupted
+        ? projectReceiverPosition(state.anchor, event.at)
+        : status.position
+      const snapshot = {
+        ...receiverSnapshot(status, event.at, itemIndex),
+        position,
+      }
       return {
         state: {
           ...state,
           itemIndex,
           anchor: {
-            position: status.position,
+            position,
             at: event.at,
             rate: snapshot.rate,
           },
@@ -716,6 +782,7 @@ function reduceCastActive(
           position,
           playWhenReady: state.playWhenReady,
           transferBack: event.transferBack,
+          live: state.liveJsIndices.includes(state.itemIndex),
           awaiting: 'session-end',
         },
         effects: [{ type: 'endCastSession', stopReceiver: event.transferBack }],
@@ -726,6 +793,7 @@ function reduceCastActive(
       // stream back to "this phone". The session is already gone, so the
       // restore starts immediately.
       const position = projectReceiverPosition(state.anchor, event.at)
+      const live = state.liveJsIndices.includes(state.itemIndex)
       return {
         state: {
           phase: 'handoff-to-local',
@@ -733,6 +801,7 @@ function reduceCastActive(
           position,
           playWhenReady: state.playWhenReady,
           transferBack: true,
+          live,
           awaiting: 'local-restore',
         },
         effects: [
@@ -749,6 +818,7 @@ function reduceCastActive(
             itemIndex: state.itemIndex,
             position,
             playWhenReady: state.playWhenReady,
+            live,
           },
         ],
       }
@@ -790,14 +860,21 @@ function reduceCastActive(
       // Anchor the reload at the item the receiver is on *now* (the reducer's
       // reconciled index — the JS queue is truth, but the receiver owns the
       // cursor), at the projected current position. If that item left the
-      // queue, the projection's own at-or-after rule takes over.
+      // queue, the projection's own at-or-after rule takes over. A live
+      // current item re-anchors at the live edge instead: its projected clock
+      // is a stream-timeline offset, and feeding it back into `queueLoad`
+      // would wedge the receiver exactly like a live handoff with a position.
       const currentP = projection.jsIndices.indexOf(state.itemIndex)
+      const currentLive =
+        event.snapshot.items[state.itemIndex]?.live === true
       const anchored =
         currentP !== -1
           ? {
               ...projection,
               startIndex: currentP,
-              startPosition: projectReceiverPosition(state.anchor, event.at),
+              startPosition: currentLive
+                ? 0
+                : projectReceiverPosition(state.anchor, event.at),
               startShifted: false,
             }
           : projectCastQueue({ ...event.snapshot, index: state.itemIndex })
@@ -811,7 +888,16 @@ function reduceCastActive(
         startIndex: anchored.startIndex,
         startPosition: anchored.startPosition,
       })
-      return { state: { ...state, pendingProjection: anchored }, effects }
+      return {
+        state: {
+          ...state,
+          // Liveness is queue truth, independent of the receiver mapping —
+          // refresh it now, not at the resync's ack.
+          liveJsIndices: liveIndicesOf(event.snapshot.items),
+          pendingProjection: anchored,
+        },
+        effects,
+      }
     }
     case 'castQueueLoaded': {
       // A resync's ack: adopt the new mapping. (The initial load's ack lands
@@ -876,6 +962,7 @@ function reduceHandoffToLocal(
               itemIndex: state.itemIndex,
               position: state.position,
               playWhenReady: state.playWhenReady,
+              live: state.live,
             },
           ],
         }

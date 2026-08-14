@@ -234,7 +234,14 @@ export class CastIntegration {
         snapshot: () => this.#snapshot(),
         onPhaseChange: (phase) => {
           this.#phase = phase
-          if (phase === 'cast-active') this.#flushPending()
+          if (phase === 'cast-active') {
+            // A successful handoff supersedes any earlier failure — leaving
+            // a stale "session-start-failed" strip on screen while the
+            // speaker is audibly playing reads as a live problem (owner-
+            // reported). Errors during the session still surface normally.
+            this.#error = undefined
+            this.#flushPending()
+          }
           if (phase === 'local') {
             // Casting is over: hand the broadcast channels back to the local
             // player and forget the session-scoped notes.
@@ -537,14 +544,28 @@ export class CastIntegration {
   async #jumpLocalTo(index: number): Promise<void> {
     const player = this.#hooks.player()
     if (player === undefined) return
-    if (player.state.playlist.index === index) return
+    const live = this.#hooks.queue()[index]?.isLive === true
+    if (!live && player.state.playlist.index === index) return
+    // LIVE exception to the never-reload rule (owner-reported, 2026-08-14):
+    // the entry sat paused for the whole cast session, so mpv's demuxer
+    // cache holds minutes-old audio and its clock the pre-cast elapsed time
+    // — unpausing resumes the past while the receiver was at the live edge.
+    // A fresh open IS the live-edge resume (and resets the elapsed clock the
+    // UI shows). The warm-resume optimisation stays for the finite case and
+    // for plain queue taps (Transport.jumpTo), where the pause was seconds,
+    // not a session.
+    const sameEntry = player.state.playlist.index === index
     await player.playlist.jumpTo(index, { autoPlay: false })
     await this.#untilLocal(
       (state) =>
         state.playlist.index === index &&
         (state.status === 'ready' ||
           state.status === 'error' ||
-          state.status === 'ended')
+          state.status === 'ended'),
+      // A same-entry reload keeps the target index the whole time, so the
+      // stale pre-reload 'ready' snapshot would satisfy the predicate
+      // immediately — trust only fresh changes there.
+      { fresh: sameEntry }
     )
   }
 

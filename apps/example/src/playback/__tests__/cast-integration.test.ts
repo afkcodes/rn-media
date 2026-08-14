@@ -233,6 +233,40 @@ describe('local-player adapter (the restore sequence)', () => {
     await captured.local?.play()
     expect(resume).toHaveBeenCalledTimes(1)
   })
+
+  it('skipToIndex RELOADS a live entry even when already current — live-edge resume (owner-found)', async () => {
+    // A live entry paused for the whole cast session resumes minutes behind
+    // the live edge from mpv's demuxer cache (and keeps its pre-cast elapsed
+    // clock). The restore must reopen it; the never-reload rule stays for
+    // finite entries only.
+    const player = fakePlayer()
+    const liveTracks = TRACKS_FIXTURE.map((track, n) =>
+      n === 1 ? ({ ...track, isLive: true } as Track) : track
+    )
+    const cast = new CastIntegration({
+      player: () => player.player,
+      queue: () => liveTracks,
+      resume: vi.fn(() => Promise.resolve()),
+      onReceiverState: () => undefined,
+      onChange: () => undefined,
+    })
+    await cast.start()
+    let settled = false
+    const pending = Promise.resolve(captured.local?.skipToIndex(1)).then(
+      () => {
+        settled = true
+      }
+    )
+    await Promise.resolve()
+    // The player IS on index 1 — a finite entry would return without a jump.
+    expect(player.jumpTo).toHaveBeenCalledWith(1, { autoPlay: false })
+    // The stale pre-reload 'ready' snapshot must not satisfy the wait: only
+    // a fresh state change confirms the reopened entry.
+    expect(settled).toBe(false)
+    player.set({ status: 'ready', index: 1 } as never)
+    await pending
+    expect(settled).toBe(true)
+  })
 })
 
 /* ---------------------------------------------------------------------- */

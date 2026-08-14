@@ -73,6 +73,29 @@ describe('toCastError', () => {
     const original = new CastError('no-session', 'nope')
     expect(toCastError(original)).toBe(original)
   })
+
+  it('keeps the human message to the first line — JVM stack traces stay in raw (device-found)', () => {
+    // Kotlin rejections arrive with the full stack trace appended after the
+    // first newline; an error banner rendering `message` spewed twenty lines
+    // of `at com.google.android.gms...` at the user.
+    const error = toCastError(
+      new Error(
+        'java.lang.IllegalStateException: [native] queueJumpTo failed: CANCELED (status=2002)\n' +
+          '\tat com.rnmediacast.CastController$bridge$1.onResult(CastController.kt:879)\n' +
+          '\tat android.os.Handler.dispatchMessage(Handler.java:132)'
+      )
+    )
+    expect(error.code).toBe('native')
+    expect(error.statusCode).toBe(2002)
+    expect(error.message).toBe('[cast] queueJumpTo failed: CANCELED (status=2002)')
+    expect(error.raw).toContain('at com.rnmediacast.CastController')
+  })
+
+  it('trims an unprefixed multi-line error to its first line too', () => {
+    const error = toCastError(new Error('kaboom\n\tat somewhere.deep(Native)'))
+    expect(error.message).toBe('[cast] kaboom')
+    expect(error.raw).toContain('at somewhere.deep')
+  })
 })
 
 describe('errorFromIdleReason', () => {

@@ -212,6 +212,67 @@ describe('wireCastHandoff — the happy path', () => {
     expect(h.transfers.filter((t) => t.direction === 'toLocal')).toEqual([])
   })
 
+  it('a live handoff loads the receiver queue at the live edge — no start position (device-found)', async () => {
+    const h = harness({
+      items: [
+        {
+          id: 'radio',
+          url: 'https://radio.example.com/stream',
+          mimeType: 'audio/aacp',
+          live: true,
+        },
+        {
+          id: 'song',
+          url: 'https://cdn.example.com/c.mp3',
+          mimeType: 'audio/mpeg',
+        },
+      ],
+      index: 0,
+      position: 4_321.5, // mpv's live clock — a stream-timeline offset
+    })
+    const connect = h.handoff.castTo('dev-1')
+    h.native.emitSession({ type: 'started' })
+    await connect
+    await flush()
+    const load = h.native.calls.find(([name]) => name === 'queueLoad')
+    expect(load?.[2]).toMatchObject({ startIndex: 0, startPosition: 0 })
+  })
+
+  it('a live transfer-back never seeks mpv — the receiver live clock is not a position', async () => {
+    const h = harness({
+      items: [
+        {
+          id: 'radio',
+          url: 'https://radio.example.com/stream',
+          mimeType: 'audio/aacp',
+          live: true,
+        },
+        {
+          id: 'song',
+          url: 'https://cdn.example.com/c.mp3',
+          mimeType: 'audio/mpeg',
+        },
+      ],
+      index: 0,
+      position: 4_321.5,
+    })
+    await h.toCastActive()
+    h.tick(9_000)
+
+    const done = h.handoff.stopCasting()
+    h.native.emitSession({ type: 'ended' })
+    await flush()
+    await done
+
+    expect(h.handoff.phase).toBe('local')
+    expect(h.local.calls).toContainEqual(['skipToIndex', 0])
+    // The one behavioural difference from a finite restore: no seek. mpv
+    // rejects seeks on unseekable live streams ("Cannot seek in this
+    // stream"), and reopening at the live edge IS the resume.
+    expect(h.local.calls.filter(([name]) => name === 'seekTo')).toEqual([])
+    expect(h.local.calls.at(-1)).toEqual(['play'])
+  })
+
   it('a paused handoff restores paused: no play() on transfer back', async () => {
     const h = harness({ playWhenReady: false })
     h.local.playing = false
