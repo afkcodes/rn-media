@@ -23,4 +23,16 @@ public final class RnMediaCastAutolinking {
   public static func isRnMediaCastRecyclable() -> Bool {
     return HybridRnMediaCast.self is any RecyclableView.Type
   }
+  
+  public static func createRnMediaCastButton() -> bridge.std__shared_ptr_HybridRnMediaCastButtonSpec_ {
+    let hybridObject = HybridRnMediaCastButton()
+    return { () -> bridge.std__shared_ptr_HybridRnMediaCastButtonSpec_ in
+      let __cxxWrapped = hybridObject.getCxxWrapper()
+      return __cxxWrapped.getCxxPart()
+    }()
+  }
+  
+  public static func isRnMediaCastButtonRecyclable() -> Bool {
+    return HybridRnMediaCastButton.self is any RecyclableView.Type
+  }
 }

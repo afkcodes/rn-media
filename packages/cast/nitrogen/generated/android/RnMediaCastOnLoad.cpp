@@ -15,6 +15,8 @@
 #include <fbjni/fbjni.h>
 #include <NitroModules/HybridObjectRegistry.hpp>
 
+#include "JHybridRnMediaCastButtonSpec.hpp"
+#include "views/JHybridRnMediaCastButtonStateUpdater.hpp"
 #include "JHybridRnMediaCastSpec.hpp"
 #include "JFunc_void_NativeCastStateEvent.hpp"
 #include "JFunc_void_NativeCastSessionEvent.hpp"
@@ -41,12 +43,22 @@ struct JHybridRnMediaCastSpecImpl: public jni::JavaClass<JHybridRnMediaCastSpecI
     return javaPart->getJHybridRnMediaCastSpec();
   }
 };
+struct JHybridRnMediaCastButtonSpecImpl: public jni::JavaClass<JHybridRnMediaCastButtonSpecImpl, JHybridRnMediaCastButtonSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/rnmediacast/HybridRnMediaCastButton;";
+  static std::shared_ptr<JHybridRnMediaCastButtonSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridRnMediaCastButtonSpecImpl::javaobject()>();
+    jni::local_ref<JHybridRnMediaCastButtonSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridRnMediaCastButtonSpec();
+  }
+};
 
 void registerAllNatives() {
   using namespace margelo::nitro;
   using namespace margelo::nitro::rnmediacast;
 
   // Register native JNI methods
+  margelo::nitro::rnmediacast::JHybridRnMediaCastButtonSpec::CxxPart::registerNatives();
+  margelo::nitro::rnmediacast::views::JHybridRnMediaCastButtonStateUpdater::registerNatives();
   margelo::nitro::rnmediacast::JHybridRnMediaCastSpec::CxxPart::registerNatives();
   margelo::nitro::rnmediacast::JFunc_void_NativeCastStateEvent_cxx::registerNatives();
   margelo::nitro::rnmediacast::JFunc_void_NativeCastSessionEvent_cxx::registerNatives();
@@ -61,6 +73,12 @@ void registerAllNatives() {
     "RnMediaCast",
     []() -> std::shared_ptr<HybridObject> {
       return JHybridRnMediaCastSpecImpl::create();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "RnMediaCastButton",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridRnMediaCastButtonSpecImpl::create();
     }
   );
 }

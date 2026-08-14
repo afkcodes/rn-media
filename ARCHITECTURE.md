@@ -1417,6 +1417,54 @@ reproduced on the same hardware):**
   the phone's (`cast-receiver-fetch` is its own error family for exactly
   this).
 
+#### `<CastButton/>` is a real native view, because the switcher is unreachable otherwise
+
+The headless `requestSession()` path is complete and stays supported (apps
+with their own picker are a first-class story). The **view** exists for one
+thing the headless path cannot do: on Android,
+`CastOptions.setShowSystemOutputSwitcherOnCastIconClick(true)` is only
+consulted from a `MediaRouteButton` that `CastButtonFactory` set up. Verified
+in the shipped artifacts rather than the docs —
+`MediaRouteButton.showDialog()` branches on
+`MediaRouterParams.isOutputSwitcherEnabled() && MediaRouter.isMediaTransferEnabled()`
+into `SystemOutputSwitcherDialogController.showDialog(context)`, else into
+the in-app `MediaRouteChooserDialogFragment`. So the button is what turns
+"cast" from an in-app dialog into the sheet users already know. On iOS the
+equivalent is `GCKUICastButton` with its default
+`triggersDefaultCastDialog`, which is also the SDK's local-network permission
+choreography (discovery starts on first tap, never earlier).
+
+- **Nitro Views, not classic Fabric codegen.** `react-native-nitro-modules`
+  0.36.5 ships `HybridView`/`getHostComponent` and nitrogen generates the
+  ShadowNode, ViewManager and `.mm` component; the floor is RN 0.78 + new
+  arch (we are on 0.86.2, new-arch-only) and the cast module's CMakeLists
+  already carried the required `-DRN_SERIALIZABLE_STATE=1`. Choosing Fabric
+  codegen instead would have meant a second, parallel codegen story inside
+  one package for no capability gained.
+- **The button hides itself while `castState === 'unavailable'`**, because
+  `MediaRouteButton` no longer hides itself: `setAlwaysVisible` is a no-op in
+  mediarouter 1.8.0-beta01 and no code path in the class touches visibility.
+  The Design Checklist rule therefore has to be ours, and it is automatic
+  rather than a prop every app would forget.
+- **`tintColor` reaches parity by painting, not by theme.** iOS sets the
+  button's `tintColor`. Android's `MediaRouteButton` reads `mediaRouteButtonTint`
+  from the theme once in its constructor and exposes no per-instance setter,
+  and `setRemoteIndicatorDrawable` would mean shipping our own copy of
+  Google's icon (losing the connecting animation, and breaking the checklist's
+  "use the standard icon"). So the subclass draws `super.onDraw` into an
+  offscreen layer and paints the tint through it with `SRC_IN` — the
+  framework's own icon, in the app's colour, on both platforms.
+- **Not a `RecyclableView`**: a recycled button would keep its
+  `MediaRouteButton` bound to the Activity of its first surface, and that
+  Activity is what the pre-Android-13 chooser is shown from.
+- Device-verified end to end (POCO F4, Android 16, framework 22.3.1): the
+  button renders and tints, a tap opens the system output switcher (logcat:
+  `MediaRouterProxy: media transfer = true, session transfer = true, transfer
+  to local = true, in-app output switcher = true`), and picking the Bedroom
+  speaker starts a session the `wireCastHandoff` machine runs on its own —
+  the example's transfer note reported the round trip with no app code
+  involved in starting it.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager

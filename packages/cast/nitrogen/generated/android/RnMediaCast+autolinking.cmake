@@ -33,8 +33,12 @@ target_sources(
   # Autolinking Setup
   ../nitrogen/generated/android/RnMediaCastOnLoad.cpp
   # Shared Nitrogen C++ sources
+  ../nitrogen/generated/shared/c++/HybridRnMediaCastButtonSpec.cpp
+  ../nitrogen/generated/shared/c++/views/HybridRnMediaCastButtonComponent.cpp
   ../nitrogen/generated/shared/c++/HybridRnMediaCastSpec.cpp
   # Android-specific Nitrogen C++ sources
+  ../nitrogen/generated/android/c++/JHybridRnMediaCastButtonSpec.cpp
+  ../nitrogen/generated/android/c++/views/JHybridRnMediaCastButtonStateUpdater.cpp
   ../nitrogen/generated/android/c++/JHybridRnMediaCastSpec.cpp
 )
 

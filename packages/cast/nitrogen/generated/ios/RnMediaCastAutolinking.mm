@@ -11,6 +11,7 @@
 #import <type_traits>
 
 #include "HybridRnMediaCastSpecSwift.hpp"
+#include "HybridRnMediaCastButtonSpecSwift.hpp"
 
 @interface RnMediaCastAutolinking : NSObject
 @end
@@ -25,6 +26,13 @@
     "RnMediaCast",
     []() -> std::shared_ptr<HybridObject> {
       std::shared_ptr<HybridRnMediaCastSpec> hybridObject = RnMediaCast::RnMediaCastAutolinking::createRnMediaCast();
+      return hybridObject;
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "RnMediaCastButton",
+    []() -> std::shared_ptr<HybridObject> {
+      std::shared_ptr<HybridRnMediaCastButtonSpec> hybridObject = RnMediaCast::RnMediaCastAutolinking::createRnMediaCastButton();
       return hybridObject;
     }
   );

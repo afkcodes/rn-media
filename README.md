@@ -534,10 +534,18 @@ const handoff = wireCastHandoff(
   }
 );
 
-await handoff.castTo(devices[0].id);  // or a platform picker starts the session —
-                                       // the Cast dialog, Android 13+'s system
-                                       // output switcher — same machine either way
+await handoff.castTo(devices[0].id);  // …or the user taps the native button and
+                                       // the same machine handles it
 await handoff.stopCasting();          // transfer back to local at the receiver's position
+```
+
+```tsx
+import { CastButton } from '@rn-media/cast';
+
+// The platform's own button, as a real native view. On Android 13+ a tap opens
+// the SYSTEM output switcher (device-verified); on iOS, the GCK device dialog.
+// It hides itself when there is nothing to cast to.
+<CastButton style={{ width: 32, height: 32 }} tintColor="#e7e7ea" />
 ```
 
 `wireCastHandoff` lives in `@rn-media/cast`, not `media-session` —

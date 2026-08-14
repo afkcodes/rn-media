@@ -8,12 +8,29 @@
 #include "RnMediaCast-Swift-Cxx-Bridge.hpp"
 
 // Include C++ implementation defined types
+#include "HybridRnMediaCastButtonSpecSwift.hpp"
 #include "HybridRnMediaCastSpecSwift.hpp"
 #include "RnMediaCast-Swift-Cxx-Umbrella.hpp"
 #include <NitroModules/NitroDefines.hpp>
 
 namespace margelo::nitro::rnmediacast::bridge::swift {
 
+  // pragma MARK: std::shared_ptr<HybridRnMediaCastButtonSpec>
+  std::shared_ptr<HybridRnMediaCastButtonSpec> create_std__shared_ptr_HybridRnMediaCastButtonSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
+    RnMediaCast::HybridRnMediaCastButtonSpec_cxx swiftPart = RnMediaCast::HybridRnMediaCastButtonSpec_cxx::fromUnsafe(swiftUnsafePointer);
+    return std::make_shared<margelo::nitro::rnmediacast::HybridRnMediaCastButtonSpecSwift>(swiftPart);
+  }
+  void* NON_NULL get_std__shared_ptr_HybridRnMediaCastButtonSpec_(std__shared_ptr_HybridRnMediaCastButtonSpec_ cppType) {
+    std::shared_ptr<margelo::nitro::rnmediacast::HybridRnMediaCastButtonSpecSwift> swiftWrapper = std::dynamic_pointer_cast<margelo::nitro::rnmediacast::HybridRnMediaCastButtonSpecSwift>(cppType);
+    #ifdef NITRO_DEBUG
+    if (swiftWrapper == nullptr) [[unlikely]] {
+      throw std::runtime_error("Class \"HybridRnMediaCastButtonSpec\" is not implemented in Swift!");
+    }
+    #endif
+    RnMediaCast::HybridRnMediaCastButtonSpec_cxx& swiftPart = swiftWrapper->getSwiftPart();
+    return swiftPart.toUnsafe();
+  }
+  
   // pragma MARK: std::function<void(CastConnectionState /* result */)>
   Func_void_CastConnectionState create_Func_void_CastConnectionState(void* NON_NULL swiftClosureWrapper) noexcept {
     auto swiftClosure = RnMediaCast::Func_void_CastConnectionState::fromUnsafe(swiftClosureWrapper);

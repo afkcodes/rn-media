@@ -28,6 +28,8 @@ namespace margelo::nitro::rnmediacast { struct CastQueueItemSnapshot; }
 namespace margelo::nitro::rnmediacast { enum class CastRepeatMode; }
 // Forward declaration of `CastSessionEventType` to properly resolve imports.
 namespace margelo::nitro::rnmediacast { enum class CastSessionEventType; }
+// Forward declaration of `HybridRnMediaCastButtonSpec` to properly resolve imports.
+namespace margelo::nitro::rnmediacast { class HybridRnMediaCastButtonSpec; }
 // Forward declaration of `HybridRnMediaCastSpec` to properly resolve imports.
 namespace margelo::nitro::rnmediacast { class HybridRnMediaCastSpec; }
 // Forward declaration of `NativeCastDevicesEvent` to properly resolve imports.
@@ -44,6 +46,8 @@ namespace margelo::nitro::rnmediacast { struct NativeCastStateEvent; }
 namespace margelo::nitro::rnmediacast { struct NativeDeviceVolumeEvent; }
 
 // Forward declarations of Swift defined types
+// Forward declaration of `HybridRnMediaCastButtonSpec_cxx` to properly resolve imports.
+namespace RnMediaCast { class HybridRnMediaCastButtonSpec_cxx; }
 // Forward declaration of `HybridRnMediaCastSpec_cxx` to properly resolve imports.
 namespace RnMediaCast { class HybridRnMediaCastSpec_cxx; }
 
@@ -58,6 +62,7 @@ namespace RnMediaCast { class HybridRnMediaCastSpec_cxx; }
 #include "CastQueueItemSnapshot.hpp"
 #include "CastRepeatMode.hpp"
 #include "CastSessionEventType.hpp"
+#include "HybridRnMediaCastButtonSpec.hpp"
 #include "HybridRnMediaCastSpec.hpp"
 #include "NativeCastDevicesEvent.hpp"
 #include "NativeCastMediaErrorEvent.hpp"
@@ -81,6 +86,33 @@ namespace RnMediaCast { class HybridRnMediaCastSpec_cxx; }
  */
 namespace margelo::nitro::rnmediacast::bridge::swift {
 
+  // pragma MARK: std::optional<double>
+  /**
+   * Specialized version of `std::optional<double>`.
+   */
+  using std__optional_double_ = std::optional<double>;
+  inline std::optional<double> create_std__optional_double_(const double& value) noexcept {
+    return std::optional<double>(value);
+  }
+  inline bool has_value_std__optional_double_(const std::optional<double>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline double get_std__optional_double_(const std::optional<double>& optional) noexcept {
+    return optional.value();
+  }
+  
+  // pragma MARK: std::shared_ptr<HybridRnMediaCastButtonSpec>
+  /**
+   * Specialized version of `std::shared_ptr<HybridRnMediaCastButtonSpec>`.
+   */
+  using std__shared_ptr_HybridRnMediaCastButtonSpec_ = std::shared_ptr<HybridRnMediaCastButtonSpec>;
+  std::shared_ptr<HybridRnMediaCastButtonSpec> create_std__shared_ptr_HybridRnMediaCastButtonSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
+  void* NON_NULL get_std__shared_ptr_HybridRnMediaCastButtonSpec_(std__shared_ptr_HybridRnMediaCastButtonSpec_ cppType);
+  
+  // pragma MARK: std::weak_ptr<HybridRnMediaCastButtonSpec>
+  using std__weak_ptr_HybridRnMediaCastButtonSpec_ = std::weak_ptr<HybridRnMediaCastButtonSpec>;
+  inline std__weak_ptr_HybridRnMediaCastButtonSpec_ weakify_std__shared_ptr_HybridRnMediaCastButtonSpec_(const std::shared_ptr<HybridRnMediaCastButtonSpec>& strong) noexcept { return strong; }
+  
   // pragma MARK: std::shared_ptr<Promise<CastConnectionState>>
   /**
    * Specialized version of `std::shared_ptr<Promise<CastConnectionState>>`.
@@ -243,21 +275,6 @@ namespace margelo::nitro::rnmediacast::bridge::swift {
     return optional.has_value();
   }
   inline CastMediaMetadata get_std__optional_CastMediaMetadata_(const std::optional<CastMediaMetadata>& optional) noexcept {
-    return optional.value();
-  }
-  
-  // pragma MARK: std::optional<double>
-  /**
-   * Specialized version of `std::optional<double>`.
-   */
-  using std__optional_double_ = std::optional<double>;
-  inline std::optional<double> create_std__optional_double_(const double& value) noexcept {
-    return std::optional<double>(value);
-  }
-  inline bool has_value_std__optional_double_(const std::optional<double>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline double get_std__optional_double_(const std::optional<double>& optional) noexcept {
     return optional.value();
   }
   
