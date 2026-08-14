@@ -8,7 +8,9 @@ import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
 import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import com.margelo.nitro.rnmediamediasession.NativePlaybackState
+import com.margelo.nitro.rnmediamediasession.NativeRemotePlayback
 import com.margelo.nitro.rnmediamediasession.PositionAnchor
+import com.margelo.nitro.rnmediamediasession.RemoteVolumeControl
 
 /**
  * The position anchor, translated out of JavaScript's clock into one that cannot
@@ -68,6 +70,57 @@ internal data class Anchor(
 }
 
 /**
+ * The remote output the app has published, in the *platform's* vocabulary.
+ *
+ * The bridge carries a normalised `0..1` level plus a step count, because that
+ * is what an app (and every remote backend) speaks. Android needs integers: a
+ * `DeviceInfo` with a min/max range and an int `deviceVolume`, which is what the
+ * platform's `VolumeProvider` reports and what one hardware key press moves by
+ * exactly 1. Converting once, here, keeps the arithmetic in one testable place
+ * instead of inside `getState()` — which media3 calls many times per broadcast.
+ */
+internal data class RemoteDevice(
+  /** `0..maxVolume`. */
+  val volume: Int,
+  val maxVolume: Int,
+  val muted: Boolean,
+  val volumeControl: RemoteVolumeControl,
+  val routingControllerId: String?,
+)
+
+/**
+ * Bridge struct → [RemoteDevice]. Pure; no Android types; unit-tested on a JVM.
+ *
+ * `steps` is floored at 1 and the level is clamped into the resulting range.
+ * The TS layer already rejects anything else, so this is not validation — it is
+ * the guarantee that a value arriving some other way (a future bridge, a bug)
+ * cannot produce a `DeviceInfo` with `maxVolume = 0`, which would render as a
+ * dead volume slider rather than as an error anybody would notice.
+ */
+internal fun NativeRemotePlayback.toDevice(): RemoteDevice {
+  val maxVolume = if (steps.isFinite()) steps.toInt().coerceAtLeast(1) else 1
+  val level = if (volume.isFinite()) volume else 0.0
+  return RemoteDevice(
+    volume = Math.round(level * maxVolume).toInt().coerceIn(0, maxVolume),
+    maxVolume = maxVolume,
+    muted = muted,
+    volumeControl = volumeControl,
+    routingControllerId = routingControllerId,
+  )
+}
+
+/**
+ * An integer device volume media3 handed us, back as the normalised `0..1`
+ * level the JS handler speaks.
+ *
+ * The inverse of [toDevice]'s quantisation, so a drag on the system's remote
+ * volume slider round-trips to exactly the notch it was dropped on.
+ */
+internal fun RemoteDevice.levelOf(deviceVolume: Int): Double =
+  if (maxVolume <= 0) 0.0
+  else deviceVolume.coerceIn(0, maxVolume).toDouble() / maxVolume
+
+/**
  * Everything the three broadcast channels have said so far, as one immutable
  * value.
  *
@@ -100,6 +153,18 @@ internal data class Snapshot(
   val shuffleEnabled: Boolean,
   val item: NativeMediaItem?,
   val queue: List<NativeMediaItem>,
+  /**
+   * The device the audio is coming out of, or `null` for "the phone" — which is
+   * the default, and where every session that never calls `setRemotePlayback`
+   * stays forever.
+   *
+   * Not fed by any of the three broadcast channels and deliberately **sticky**:
+   * it is a statement about the output, not about playback, so a
+   * `setPlaybackState` neither carries it nor clears it. It is what turns the
+   * facade into a `PLAYBACK_TYPE_REMOTE` player, which is what routes hardware
+   * volume keys to the app instead of to the phone's music stream.
+   */
+  val remote: RemoteDevice? = null,
 ) {
   /**
    * The timeline before the `setMediaItem` channel is overlaid onto it.

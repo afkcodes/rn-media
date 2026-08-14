@@ -59,6 +59,7 @@ namespace margelo::nitro::rnmediamediasession {
     void setMediaItem(const std::optional<NativeMediaItem>& item) override;
     void setQueue(const std::vector<NativeMediaItem>& items) override;
     void setResumptionSnapshot(const std::optional<std::string>& snapshot) override;
+    void setRemotePlayback(const std::optional<NativeRemotePlayback>& remote) override;
     std::shared_ptr<Promise<void>> stopService() override;
     void setSleepTimer(double seconds) override;
     void setSleepTimerToTrackEnd() override;

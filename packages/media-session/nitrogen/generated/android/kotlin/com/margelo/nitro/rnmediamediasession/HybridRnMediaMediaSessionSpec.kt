@@ -52,6 +52,10 @@ abstract class HybridRnMediaMediaSessionSpec: HybridObject() {
   
   @DoNotStrip
   @Keep
+  abstract fun setRemotePlayback(remote: NativeRemotePlayback?): Unit
+  
+  @DoNotStrip
+  @Keep
   abstract fun stopService(): Promise<Unit>
   
   @DoNotStrip

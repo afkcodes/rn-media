@@ -196,6 +196,113 @@ On iOS both map to `MPRemoteCommandCenter.changeRepeatModeCommand` /
 `MPShuffleType.collections` (shuffle albums, keep tracks in order) has no
 cross-platform twin and is read as "shuffle on" rather than dropped.
 
+## Remote playback: hardware volume keys with the screen locked
+
+When the audio is coming out of **another device** — a Cast receiver, a UPnP
+renderer, a multi-room protocol, anything the phone is not producing itself —
+say so, and hand over that device's volume:
+
+```ts
+// while the remote backend owns playback
+service.setRemotePlayback({ volume: 0.4, muted: false })
+// …and when the phone takes it back
+service.setRemotePlayback()
+```
+
+That is the whole API. In return, **the phone's hardware volume keys drive the
+remote device instead of the phone's own music stream — with your app
+backgrounded, from the lock screen, from a Bluetooth remote.** Presses arrive on
+your handler:
+
+```ts
+class MyHandler extends BaseMediaHandler {
+  override onSetDeviceVolume(volume: number) {   // 0..1
+    void backend.setVolume(volume)
+  }
+  override onSetDeviceMuted(muted: boolean) {
+    void backend.setMuted(muted)
+  }
+}
+```
+
+Nothing here knows what a receiver is. This package works with any player and
+any output, and it has no dependency on `@rn-media/cast`.
+
+### Why an Activity cannot do this
+
+An app can intercept volume keys in `Activity.dispatchKeyEvent` — and that is
+foreground-only *by construction*, because with the app backgrounded or the
+screen locked there is no Activity to receive a key event. The routing has to
+live on the **media session**, and Android's own contract for it is the feature:
+
+> Configure this session to use remote volume handling. **This must be called to
+> receive volume button events**, otherwise the system will adjust the
+> appropriate stream volume for this session.
+> — `android.media.session.MediaSession.setPlaybackToRemote`
+
+`setRemotePlayback` is what gets you there: the session starts advertising
+`DeviceInfo.PLAYBACK_TYPE_REMOTE`, media3 puts the platform session into remote
+volume handling, and clearing it puts the keys back on the phone's stream with
+nothing left behind.
+
+One platform condition worth knowing, because it looks like a bug: **Android
+routes volume keys to a session only while that session is actually playing.**
+Paused, the keys go back to the phone's stream. That is the platform's rule, not
+this package's.
+
+### Options, and their defaults
+
+| field | default | what it is for |
+| --- | --- | --- |
+| `volume` | — | required, `0..1` |
+| `muted` | `false` | |
+| `steps` | `20` | how many notches one key press moves through. 20 is media3's own `RemoteCastPlayer.MAX_VOLUME`, so a press feels like every other cast-enabled Android app |
+| `volumeControl` | `'absolute'` | what your backend can drive — see below |
+| `routingControllerId` | — | Android: ties the system output switcher's slider to the route that is playing |
+
+`volumeControl` decides which handler method a key press becomes, and it is
+decided by **what you declared**, never by which methods you happen to have
+defined (every `BaseMediaHandler` subclass inherits both, so sniffing would
+silently kill the keys for the common case):
+
+- `'absolute'` — the backend takes a level. A key press is converted here (one
+  `1 / steps` notch from the last published volume, quantised and clamped) and
+  delivered as `onSetDeviceVolume`. Cast, UPnP, essentially everything. **Write
+  one method, not two.**
+- `'relative'` — the backend can only be nudged: `onAdjustDeviceVolume('up' |
+  'down')`, no level.
+- `'fixed'` — readable, not writable. The volume shows on the remote surfaces
+  and the keys do nothing, which is the honest rendering of a device whose
+  volume you may not touch.
+
+Publish again on every volume change the backend reports — including the remote
+device's own physical knob — because a key press steps from the **last published
+level**. A stale one makes the next press jump.
+
+`setRemotePlayback` is deliberately **not** a fourth broadcast channel: it
+describes the output, not what is playing, and it is sticky — an ordinary
+`setPlaybackState` neither carries nor clears it. It is not persisted either
+(`withPersistence` passes it straight through): which device the audio came out
+of is a fact about a live session, and a restored one must not route volume keys
+at a backend this process has no connection to.
+
+### iOS: a documented no-op
+
+Calling this on iOS is free and changes nothing, and that is a platform ceiling
+rather than an omission. iOS gives an app no way to take over the hardware
+volume buttons: `MPRemoteCommandCenter` has no volume command,
+`AVAudioSession.outputVolume` is read-only, `MPVolumeView` renders the *system*
+slider, and `AVRoutePickerView` is AirPlay — which the OS handles because an
+AirPlay target is a *route*, and a network receiver is not. Google's Cast SDK
+documents the same limit for its own
+`GCKCastOptions.physicalVolumeButtonsWillControlDeviceVolume`: *"Due to changes
+in iOS, controlling the volume of a Cast session using the physical volume
+buttons is currently not supported for iOS 15+."*
+([Cast iOS sender guide](https://developers.google.com/cast/docs/ios_sender/integrate))
+The iOS answer is an in-app volume slider — which is what Google's own iOS cast
+apps ship. Write the `setRemotePlayback` call unconditionally: load-bearing on
+Android, harmless on iOS.
+
 ## Jump intervals
 
 ```ts

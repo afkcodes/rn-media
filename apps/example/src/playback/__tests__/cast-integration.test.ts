@@ -15,7 +15,9 @@
  *   phone audio under the speaker's; the receiver cannot take it yet either.
  *   Intent is buffered last-wins and flushed on `cast-active`.
  * - **Volume ownership.** While the cast side owns playback, the in-app
- *   volume drives the SPEAKER (device volume), not mpv.
+ *   volume drives the SPEAKER (device volume), not mpv — and the media
+ *   session is told the output is remote, which is what puts the phone's
+ *   hardware volume keys on the speaker with the screen locked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Player, PlayerState } from '@rn-media/player'
@@ -25,6 +27,7 @@ import type {
   CastHandoffPhase,
   WireCastHandoffOptions,
 } from '@rn-media/cast'
+import type { CastDeviceVolume } from '@rn-media/cast'
 import type { Track } from '../../data/tracks'
 
 /* ---------------------------------------------------------------------- */
@@ -39,10 +42,14 @@ const h = vi.hoisted(() => {
       calls.push([name, ...args])
       return Promise.resolve()
     }
+  const emit: Record<string, (payload: never) => void> = {}
   const fakeCast = {
     initialize: () => Promise.resolve('idle'),
     getCastState: () => 'idle',
-    addListener: () => () => undefined,
+    addListener: (name: string, listener: (payload: never) => void) => {
+      emit[name] = listener
+      return () => undefined
+    },
     getDeviceVolume: () => Promise.resolve({ volume: 0.5, muted: false }),
     play: record('Cast.play'),
     pause: record('Cast.pause'),
@@ -64,7 +71,7 @@ const h = vi.hoisted(() => {
   // Untyped here (vi.hoisted runs before imports); the typed view is
   // `captured` below, applied once the real types are in scope.
   const captured: { local?: unknown; options?: unknown } = {}
-  return { calls, fakeCast, handle, captured }
+  return { calls, emit, fakeCast, handle, captured }
 })
 
 vi.mock('@rn-media/cast', async () => {
@@ -162,21 +169,25 @@ async function harness(): Promise<{
   player: ReturnType<typeof fakePlayer>
   resume: ReturnType<typeof vi.fn>
   toPhase: (phase: CastHandoffPhase) => void
+  /** Every `onRemoteVolume` publish, in order. `undefined` = back to local. */
+  remote: (CastDeviceVolume | undefined)[]
 }> {
   const player = fakePlayer()
   const resume = vi.fn(() => Promise.resolve())
+  const remote: (CastDeviceVolume | undefined)[] = []
   const cast = new CastIntegration({
     player: () => player.player,
     queue: () => TRACKS_FIXTURE,
     resume,
     onReceiverState: () => undefined,
+    onRemoteVolume: (volume) => remote.push(volume),
     onChange: () => undefined,
   })
   await cast.start()
   const toPhase = (phase: CastHandoffPhase): void => {
     captured.options?.onPhaseChange?.(phase)
   }
-  return { cast, player, resume, toPhase }
+  return { cast, player, resume, toPhase, remote }
 }
 
 beforeEach(() => {
@@ -248,6 +259,7 @@ describe('local-player adapter (the restore sequence)', () => {
       queue: () => liveTracks,
       resume: vi.fn(() => Promise.resolve()),
       onReceiverState: () => undefined,
+      onRemoteVolume: () => undefined,
       onChange: () => undefined,
     })
     await cast.start()
@@ -354,5 +366,112 @@ describe('volume while casting', () => {
     cast.toggleMuted()
     await Promise.resolve()
     expect(h.calls).toEqual([['Cast.setDeviceMuted', true]])
+  })
+})
+
+/* ---------------------------------------------------------------------- */
+/*              remote volume: what the media session is told             */
+/* ---------------------------------------------------------------------- */
+
+describe('remote playback publishing', () => {
+  it('says nothing while the phone owns playback', async () => {
+    const { remote } = await harness()
+    h.emit.deviceVolume?.({ volume: 0.4, muted: false } as never)
+
+    // Knowing the speaker's volume is not the same as the speaker playing.
+    // Publishing here would route the phone's volume keys at a device that is
+    // not making the sound.
+    expect(remote).toEqual([])
+  })
+
+  it('publishes the receiver volume once the cast side owns playback', async () => {
+    const { toPhase, remote } = await harness()
+    h.emit.deviceVolume?.({ volume: 0.4, muted: false } as never)
+    toPhase('handoff-to-cast')
+
+    expect(remote).toEqual([{ volume: 0.4, muted: false }])
+  })
+
+  it('republishes every receiver volume change — the speaker\'s own knob included', async () => {
+    const { toPhase, remote } = await harness()
+    h.emit.deviceVolume?.({ volume: 0.4, muted: false } as never)
+    toPhase('cast-active')
+    remote.length = 0
+
+    h.emit.deviceVolume?.({ volume: 0.45, muted: false } as never)
+    h.emit.deviceVolume?.({ volume: 0.45, muted: true } as never)
+
+    // A hardware key press steps ONE notch from the last published level, so a
+    // stale one makes the first press after somebody touched the speaker jump
+    // to the wrong place.
+    expect(remote).toEqual([
+      { volume: 0.45, muted: false },
+      { volume: 0.45, muted: true },
+    ])
+  })
+
+  it('hands the keys back to the phone exactly once when casting ends', async () => {
+    const { toPhase, remote } = await harness()
+    h.emit.deviceVolume?.({ volume: 0.4, muted: false } as never)
+    toPhase('cast-active')
+    remote.length = 0
+
+    toPhase('handoff-to-local')
+    toPhase('local')
+
+    expect(remote).toEqual([undefined])
+  })
+
+  it('reads the level from the receiver when ownership moves before any event', async () => {
+    // Device-found: the Cast framework RESUMES an existing session at
+    // `CastContext` init, so the `castState → connected` transition where the
+    // priming read lives never fires — and the event stream only reports
+    // *changes*. Without asking, the session stayed `volumeType=LOCAL` for the
+    // whole cast and the volume keys kept moving the phone's stream.
+    const { toPhase, remote } = await harness()
+    toPhase('handoff-to-cast')
+
+    await vi.waitFor(() => {
+      expect(remote).toEqual([{ volume: 0.5, muted: false }])
+    })
+  })
+
+  it('asks the receiver once, however many ticks arrive while it answers', async () => {
+    // `#publishRemote` runs on every phase tick and every receiver status; a
+    // burst of round trips to answer one question would be a bug of its own.
+    const original = h.fakeCast.getDeviceVolume
+    const reads: number[] = []
+    h.fakeCast.getDeviceVolume = () => {
+      reads.push(1)
+      return Promise.resolve({ volume: 0.5, muted: false })
+    }
+    try {
+      const { toPhase } = await harness()
+      toPhase('handoff-to-cast')
+      toPhase('cast-active')
+
+      await vi.waitFor(() => {
+        expect(reads).toHaveLength(1)
+      })
+    } finally {
+      h.fakeCast.getDeviceVolume = original
+    }
+  })
+})
+
+/* ---------------------------------------------------------------------- */
+/*                        mute, as its own command                        */
+/* ---------------------------------------------------------------------- */
+
+describe('setMuted', () => {
+  it('drives the receiver directly rather than toggling a local guess', async () => {
+    const { cast } = await harness()
+    cast.setMuted(true)
+    cast.setMuted(false)
+
+    expect(h.calls).toEqual([
+      ['Cast.setDeviceMuted', true],
+      ['Cast.setDeviceMuted', false],
+    ])
   })
 })

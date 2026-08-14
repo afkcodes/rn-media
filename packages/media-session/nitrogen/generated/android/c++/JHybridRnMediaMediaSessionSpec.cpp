@@ -35,6 +35,10 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaCapability; }
 namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
+// Forward declaration of `NativeRemotePlayback` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
+// Forward declaration of `RemoteVolumeControl` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; }
 
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/JPromise.hpp>
@@ -78,6 +82,10 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 #include "NativeMediaItem.hpp"
 #include "JNativeMediaItem.hpp"
 #include <unordered_map>
+#include "NativeRemotePlayback.hpp"
+#include "JNativeRemotePlayback.hpp"
+#include "RemoteVolumeControl.hpp"
+#include "JRemoteVolumeControl.hpp"
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -151,6 +159,10 @@ namespace margelo::nitro::rnmediamediasession {
   void JHybridRnMediaMediaSessionSpec::setResumptionSnapshot(const std::optional<std::string>& snapshot) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<jni::JString> /* snapshot */)>("setResumptionSnapshot");
     method(_javaPart, snapshot.has_value() ? jni::make_jstring(snapshot.value()) : nullptr);
+  }
+  void JHybridRnMediaMediaSessionSpec::setRemotePlayback(const std::optional<NativeRemotePlayback>& remote) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<JNativeRemotePlayback> /* remote */)>("setRemotePlayback");
+    method(_javaPart, remote.has_value() ? JNativeRemotePlayback::fromCpp(remote.value()) : nullptr);
   }
   std::shared_ptr<Promise<void>> JHybridRnMediaMediaSessionSpec::stopService() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<JPromise::javaobject>()>("stopService");

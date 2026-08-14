@@ -7,6 +7,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -210,6 +211,19 @@ internal class BroadcastPlayer(
    */
   private val pending = mutableListOf<SettableFuture<Any?>>()
 
+  /**
+   * The same thing for device-volume commands, kept in its own list because
+   * they are acknowledged by a different broadcast.
+   *
+   * A `setPlaybackState` says what playback is doing and completes a transport
+   * command; a `setRemotePlayback` says what the remote device's volume is and
+   * completes a volume command. Sharing one list would let a status update
+   * arriving mid-press collapse the optimistic "+1" back to the old number for
+   * the ~200 ms until the backend reports the new one — visible as a volume
+   * panel that jumps backwards under the user's thumb.
+   */
+  private val pendingVolume = mutableListOf<SettableFuture<Any?>>()
+
   /** Last value passed to [warnOnce]; see it for why only one is remembered. */
   private var warnedMismatch: String? = null
 
@@ -231,6 +245,8 @@ internal class BroadcastPlayer(
     val snapshot: Snapshot,
     val commands: Player.Commands,
     val playlist: List<MediaItemData>,
+    /** `null` while playback is local — `State.Builder` already defaults to it. */
+    val deviceInfo: DeviceInfo?,
   )
 
   private var rendered: Rendered? = null
@@ -247,12 +263,29 @@ internal class BroadcastPlayer(
   fun update(next: Snapshot, acknowledgesCommands: Boolean) {
     snapshot = next
     if (acknowledgesCommands && pending.isNotEmpty()) {
-      val acknowledged = pending.toList()
-      pending.clear()
       // Completing the futures is what triggers media3's automatic re-read of
       // getState(); calling invalidateState() here as well would be a no-op at
       // best (it early-returns while operations are pending) and confusing.
-      for (future in acknowledged) future.set(null)
+      complete(pending)
+      return
+    }
+    invalidateState()
+  }
+
+  /**
+   * Publish a new remote-output state. Main thread only.
+   *
+   * The `setRemotePlayback` twin of [update]: it acknowledges device-volume
+   * commands and nothing else. Note that media3 only re-reads `getState()` once
+   * *every* pending operation has completed
+   * (`SimpleBasePlayer.updateStateForPendingOperation`), so a volume publish
+   * landing while a transport command is still in flight is shown at the
+   * transport command's acknowledgement — which is a beat later, never lost.
+   */
+  fun updateRemotePlayback(next: Snapshot) {
+    snapshot = next
+    if (pendingVolume.isNotEmpty()) {
+      complete(pendingVolume)
       return
     }
     invalidateState()
@@ -260,9 +293,15 @@ internal class BroadcastPlayer(
 
   /** Drop pending acks without publishing state. Used when the session ends. */
   fun releasePending() {
-    val abandoned = pending.toList()
-    pending.clear()
-    for (future in abandoned) future.set(null)
+    complete(pending)
+    complete(pendingVolume)
+  }
+
+  private fun complete(futures: MutableList<SettableFuture<Any?>>) {
+    if (futures.isEmpty()) return
+    val acknowledged = futures.toList()
+    futures.clear()
+    for (future in acknowledged) future.set(null)
   }
 
   // MARK: - State
@@ -278,6 +317,18 @@ internal class BroadcastPlayer(
       .setSeekBackIncrementMs(seekBackIncrementMs)
       .setRepeatMode(current.repeatMode.toMedia3())
       .setShuffleModeEnabled(current.shuffleEnabled)
+
+    // Applied before the empty-timeline branch for the same reason the seek
+    // increments are: which device the audio comes out of is true whether or
+    // not anything is queued, and media3 diffs `DeviceInfo` out of whatever
+    // state it last read.
+    derived.deviceInfo?.let { info ->
+      val remote = current.remote ?: return@let
+      builder
+        .setDeviceInfo(info)
+        .setDeviceVolume(remote.volume)
+        .setIsDeviceMuted(remote.muted)
+    }
 
     warnOnce(current.itemQueueMismatch)
 
@@ -354,10 +405,39 @@ internal class BroadcastPlayer(
         snapshot = current,
         commands = MediaButtons.commands(current),
         playlist = current.timeline.mapIndexed { index, item -> mediaItemData(item, index, current) },
+        deviceInfo = current.remote?.toDeviceInfo(),
       )
     rendered = next
     return next
   }
+
+  /**
+   * The published output as media3's `DeviceInfo`.
+   *
+   * `PLAYBACK_TYPE_REMOTE` is the whole point: `MediaSessionLegacyStub`
+   * rebuilds its `VolumeProviderCompat` on every `onDeviceInfoChanged` and, for
+   * a remote type, calls `MediaSessionCompat.setPlaybackToRemote(provider)`.
+   * The platform documents that call as the thing that routes volume keys —
+   * "This must be called to receive volume button events, otherwise the system
+   * will adjust the appropriate stream volume for this session"
+   * (`android.media.session.MediaSession.setPlaybackToRemote`) — and it is on
+   * the *session*, so it works with no Activity and with the screen locked.
+   *
+   * Going back to local needs no undo: publishing no remote device leaves
+   * `State.Builder`'s own `DeviceInfo.UNKNOWN` (`PLAYBACK_TYPE_LOCAL`) in
+   * place, media3 sees the change and calls `setPlaybackToLocal`, and the keys
+   * move the phone's stream again.
+   *
+   * `setRoutingControllerId` only when the app knows one: it is what lets the
+   * system output switcher tie its slider to the route that is playing, and a
+   * wrong id would tie it to the wrong one.
+   */
+  private fun RemoteDevice.toDeviceInfo(): DeviceInfo =
+    DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE)
+      .setMinVolume(0)
+      .setMaxVolume(maxVolume)
+      .apply { routingControllerId?.let(::setRoutingControllerId) }
+      .build()
 
   /**
    * Report a `setMediaItem`/queue disagreement once per distinct combination.
@@ -448,6 +528,55 @@ internal class BroadcastPlayer(
   override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> =
     dispatch { it.setShuffle(shuffleModeEnabled) }
 
+  /* ------------------------------ Remote volume ----------------------------- */
+
+  /*
+   * Reachable only while the app has published a remote device — the four
+   * commands behind these live in `MediaButtons.addRemoteVolume` and are absent
+   * otherwise, and `SimpleBasePlayer` returns from the corresponding public
+   * setter before dispatching when a command is missing.
+   *
+   * The `flags` argument (`C.VolumeFlags`, e.g. `FLAG_SHOW_UI`) is deliberately
+   * dropped rather than forwarded: it asks the *phone* to draw its volume
+   * panel, which media3 has already handled by the time we are called, and it
+   * has no meaning to a backend on the other side of the network.
+   */
+
+  /** The system's remote volume slider, or a `MediaController`. Absolute level. */
+  override fun handleSetDeviceVolume(deviceVolume: Int, flags: Int): ListenableFuture<*> {
+    val remote = snapshot.remote ?: return Futures.immediateVoidFuture()
+    val level = remote.levelOf(deviceVolume)
+    return dispatchVolume { it.setDeviceVolume(level) }
+  }
+
+  /**
+   * **A hardware volume key press, with the app backgrounded or the screen
+   * locked.** The whole reason the remote `DeviceInfo` exists.
+   *
+   * The platform delivers `VolumeProvider.onAdjustVolume(+1)`, media3 turns it
+   * into `Player.increaseDeviceVolume(flags)`, and it lands here. Which JS
+   * handler it becomes is decided in the TS layer from the app's declared
+   * `volumeControl` — a level for an absolute backend, a bare nudge for a
+   * relative one — because that declaration is unambiguous where sniffing which
+   * methods an app happens to have defined is not.
+   */
+  override fun handleIncreaseDeviceVolume(flags: Int): ListenableFuture<*> =
+    dispatchVolume { it.increaseDeviceVolume() }
+
+  /** One notch quieter. See [handleIncreaseDeviceVolume]. */
+  override fun handleDecreaseDeviceVolume(flags: Int): ListenableFuture<*> =
+    dispatchVolume { it.decreaseDeviceVolume() }
+
+  /**
+   * Mute/unmute the remote device.
+   *
+   * media3 gates this on `COMMAND_ADJUST_DEVICE_VOLUME`, not on a mute command
+   * of its own, so it rides along with the keys — including the platform's
+   * `ADJUST_TOGGLE_MUTE`, which a headset or a car head unit can send.
+   */
+  override fun handleSetDeviceMuted(muted: Boolean, flags: Int): ListenableFuture<*> =
+    dispatchVolume { it.setDeviceMuted(muted) }
+
   /**
    * Every seek-shaped command funnels here; `seekCommand` says which one.
    *
@@ -507,15 +636,29 @@ internal class BroadcastPlayer(
   private fun dispatch(
     startsPlayback: Boolean = false,
     invoke: (MediaSessionHandlers) -> Unit,
+  ): ListenableFuture<*> = dispatch(pending, startsPlayback, invoke)
+
+  /**
+   * A device-volume command: same mechanism, acknowledged by the app's next
+   * `setRemotePlayback` instead of by its next `setPlaybackState`. See
+   * [pendingVolume].
+   */
+  private fun dispatchVolume(invoke: (MediaSessionHandlers) -> Unit): ListenableFuture<*> =
+    dispatch(pendingVolume, startsPlayback = false, invoke)
+
+  private fun dispatch(
+    awaiting: MutableList<SettableFuture<Any?>>,
+    startsPlayback: Boolean,
+    invoke: (MediaSessionHandlers) -> Unit,
   ): ListenableFuture<*> {
     commands.dispatch(startsPlayback, invoke)
     val future = SettableFuture.create<Any?>()
-    pending.add(future)
+    awaiting.add(future)
     // Without a deadline a JS handler that never broadcasts would wedge the
     // player forever: `invalidateState()` early-returns while any operation is
     // pending, so every later broadcast would be ignored too.
     mainHandler.postDelayed(
-      { if (pending.remove(future)) future.set(null) },
+      { if (awaiting.remove(future)) future.set(null) },
       ACK_TIMEOUT_MS,
     )
     return future

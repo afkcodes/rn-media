@@ -62,6 +62,10 @@ class HybridRnMediaMediaSession : HybridRnMediaMediaSessionSpec() {
     MediaSessionController.setResumptionSnapshot(snapshot)
   }
 
+  override fun setRemotePlayback(remote: NativeRemotePlayback?) {
+    MediaSessionController.setRemotePlayback(remote)
+  }
+
   override fun stopService(): Promise<Unit> {
     val promise = Promise<Unit>()
     MediaSessionController.stop { promise.resolve(Unit) }

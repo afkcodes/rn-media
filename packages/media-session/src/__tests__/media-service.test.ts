@@ -527,3 +527,152 @@ describe('android.onRevivalRequested', () => {
     expect(native.configs[0]?.android).not.toHaveProperty('onRevivalRequested')
   })
 })
+
+describe('remote playback', () => {
+  it('is off until the app says otherwise — nothing crosses the bridge', async () => {
+    const { native } = await ready()
+
+    // The whole compatibility claim in one assertion: an app that never heard
+    // of this feature publishes no device, so the facade keeps reporting local
+    // playback and the volume keys keep moving the phone's own stream.
+    expect(native.remotePlaybacks).toEqual([])
+  })
+
+  it('normalises what it forwards, and clears with undefined', async () => {
+    const { native, service } = await ready()
+
+    service.setRemotePlayback({ volume: 0.6 })
+    service.setRemotePlayback()
+
+    expect(native.remotePlaybacks).toEqual([
+      {
+        volume: 0.6,
+        muted: false,
+        steps: 20,
+        volumeControl: 'absolute',
+        routingControllerId: undefined,
+      },
+      undefined,
+    ])
+  })
+
+  it('rejects a bad device before it reaches native', async () => {
+    const { native, service } = await ready()
+
+    expect(() => service.setRemotePlayback({ volume: 45 })).toThrow(
+      MediaSessionError
+    )
+    expect(native.remotePlaybacks).toEqual([])
+  })
+
+  it('refuses to publish before init resolves', () => {
+    const service = createMediaService(new FakeNativeMediaSession())
+
+    expect(() => service.setRemotePlayback({ volume: 0.5 })).toThrowError(
+      /setRemotePlayback/
+    )
+  })
+
+  it('routes an absolute slider straight through', async () => {
+    const { native, handler, service } = await ready()
+    service.setRemotePlayback({ volume: 0.5 })
+
+    native.emit().setDeviceVolume(0.75)
+    native.emit().setDeviceMuted(true)
+
+    expect(handler.calls).toEqual([
+      'onSetDeviceVolume(0.75)',
+      'onSetDeviceMuted(true)',
+    ])
+  })
+
+  it('turns a hardware key press into a level for an absolute device', async () => {
+    // The default and the case that matters: a Cast/UPnP backend has a setter
+    // and no "nudge", so the notch arithmetic is the library's job.
+    const { native, handler, service } = await ready()
+    service.setRemotePlayback({ volume: 0.5, steps: 20 })
+
+    native.emit().increaseDeviceVolume()
+    native.emit().decreaseDeviceVolume()
+
+    expect(handler.calls).toEqual([
+      'onSetDeviceVolume(0.55)',
+      'onSetDeviceVolume(0.45)',
+    ])
+  })
+
+  it('steps from the LAST published volume, so the speaker\'s own knob is respected', async () => {
+    const { native, handler, service } = await ready()
+    service.setRemotePlayback({ volume: 0.5 })
+    // Somebody turned the speaker's physical dial; the app republished.
+    service.setRemotePlayback({ volume: 0.9 })
+
+    native.emit().increaseDeviceVolume()
+
+    expect(handler.calls).toEqual(['onSetDeviceVolume(0.95)'])
+  })
+
+  it('hands a relative device the bare direction instead', async () => {
+    const { native, handler, service } = await ready()
+    service.setRemotePlayback({ volume: 0.5, volumeControl: 'relative' })
+
+    native.emit().increaseDeviceVolume()
+    native.emit().decreaseDeviceVolume()
+
+    expect(handler.calls).toEqual([
+      'onAdjustDeviceVolume(up)',
+      'onAdjustDeviceVolume(down)',
+    ])
+  })
+
+  it('moves nothing for a fixed device', async () => {
+    const { native, handler, service } = await ready()
+    service.setRemotePlayback({ volume: 0.5, volumeControl: 'fixed' })
+
+    native.emit().increaseDeviceVolume()
+
+    expect(handler.calls).toEqual([])
+  })
+
+  it('routes on what the app declared, not on which methods it defined', async () => {
+    // The trap this rule exists to avoid: every app that extends
+    // `BaseMediaHandler` inherits BOTH volume methods, so presence-sniffing
+    // would answer "it has onAdjustDeviceVolume" for a handler that only meant
+    // to implement the absolute one — and the volume keys would silently do
+    // nothing.
+    const calls: string[] = []
+    class Absolute extends BaseMediaHandler {
+      override onSetDeviceVolume(volume: number): void {
+        calls.push(`set(${volume})`)
+      }
+    }
+    const native = new FakeNativeMediaSession()
+    const service = await createMediaService(native).init(() => new Absolute())
+    service.setRemotePlayback({ volume: 0.5 })
+
+    native.emit().increaseDeviceVolume()
+
+    expect(calls).toEqual(['set(0.55)'])
+  })
+
+  it('drops a key press once playback is local again', async () => {
+    const { native, handler, service } = await ready()
+    service.setRemotePlayback({ volume: 0.5 })
+    service.setRemotePlayback()
+
+    native.emit().increaseDeviceVolume()
+
+    expect(handler.calls).toEqual([])
+  })
+
+  it('forgets the device on stopService, so a new session starts local', async () => {
+    const { native, handler, service } = await ready()
+    service.setRemotePlayback({ volume: 0.5 })
+    await service.stopService()
+    await createMediaService(native).init(() => handler)
+
+    native.emit().increaseDeviceVolume()
+
+    expect(handler.calls).toEqual([])
+  })
+})

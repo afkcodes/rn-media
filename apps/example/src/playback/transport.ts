@@ -172,9 +172,13 @@ export class Transport {
    * ducking does read-modify-restore on volume, so a zero written there would
    * be the value it restores to.
    */
+  setMuted(muted: boolean): void {
+    this.#hooks.player()?.setMuted(muted)
+  }
+
   toggleMuted(): void {
     const player = this.#hooks.player()
     if (player === undefined) return
-    player.setMuted(!player.state.muted)
+    this.setMuted(!player.state.muted)
   }
 }

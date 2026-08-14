@@ -32,6 +32,8 @@ export type {
 export {
   DEFAULT_JUMP_SECONDS,
   DEFAULT_PLAYBACK_RESUMPTION,
+  DEFAULT_REMOTE_VOLUME_CONTROL,
+  DEFAULT_REMOTE_VOLUME_STEPS,
   DEFAULT_REPEAT_MODE,
   DEFAULT_SHUFFLE_ENABLED,
   DEFAULT_STOP_FOREGROUND_ON_PAUSE,
@@ -40,6 +42,8 @@ export {
   MAX_STOP_FOREGROUND_TIMEOUT_MS,
   normalizeConfig,
   normalizePlaybackState,
+  normalizeRemotePlayback,
+  stepRemoteVolume,
   validateAnchor,
   validateMediaItem,
   validateQueue,
@@ -58,6 +62,9 @@ export type {
   MediaServiceConfig,
   PlaybackState,
   PositionAnchor,
+  RemotePlayback,
+  RemoteVolumeControl,
+  RemoteVolumeDirection,
   SleepTimerMode,
   SleepTimerState,
 } from './types'
@@ -69,6 +76,7 @@ export type {
   MediaSessionHandlers,
   NativeMediaItem,
   NativePlaybackState,
+  NativeRemotePlayback,
   NativeSleepTimerState,
   RnMediaMediaSession,
 } from './specs/media-session.nitro'

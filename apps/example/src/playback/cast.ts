@@ -56,6 +56,17 @@ export interface CastHooks {
    * the local player owns the channels again.
    */
   readonly onReceiverState: (snapshot: CastReceiverSnapshot | undefined) => void
+  /**
+   * The receiver's device volume while the cast side owns playback, or
+   * `undefined` when the phone owns it again.
+   *
+   * Separate from {@link onReceiverState} because it moves on a different
+   * clock — the speaker's own knob and the Google Home app land here too — and
+   * because it feeds a different thing: `MediaService.setRemotePlayback`, which
+   * is what routes the phone's hardware volume keys to the speaker with the app
+   * backgrounded or the screen locked.
+   */
+  readonly onRemoteVolume: (volume: CastDeviceVolume | undefined) => void
   /** Re-render notification for the UI. */
   readonly onChange: () => void
 }
@@ -86,6 +97,17 @@ export class CastIntegration {
   #queuePrint = ''
   /** Last known receiver *device* volume — the layer the in-app slider drives while casting. */
   #deviceVolume: CastDeviceVolume | undefined
+  /**
+   * Whether the media session currently believes playback is remote.
+   *
+   * Tracked so the "back to local" publish happens exactly once, at the moment
+   * ownership actually moves — republishing `undefined` on every phase tick
+   * would be harmless but noisy, and never publishing it would leave the
+   * session routing volume keys at a speaker that is no longer playing.
+   */
+  #remotePublished = false
+  /** A `getDeviceVolume()` read in flight — see {@link #primeVolume}. */
+  #primingVolume = false
   /**
    * Transport intent arriving DURING the handoff (phase `handoff-to-cast`),
    * kept to replay against the receiver the moment `cast-active` lands.
@@ -199,14 +221,10 @@ export class CastIntegration {
       this.#device = event.device
       if (event.state === 'connected') {
         // Prime the volume readout — the event stream only reports *changes*.
-        Cast.getDeviceVolume()
-          .then((volume) => {
-            this.#deviceVolume = volume
-            this.#hooks.onChange()
-          })
-          .catch(() => undefined) // the session may already be gone; the listener will catch up
+        this.#primeVolume()
       } else {
         this.#deviceVolume = undefined
+        this.#publishRemote()
       }
       this.#hooks.onChange()
     })
@@ -218,6 +236,9 @@ export class CastIntegration {
       // The speaker's own knob, the Google Home app and our slider all land
       // here — one fact, whoever moved it.
       this.#deviceVolume = volume
+      // …and one fact the media session needs too, because the lock screen's
+      // volume rocker steps from whatever level was last published.
+      this.#publishRemote()
       this.#hooks.onChange()
     })
 
@@ -234,6 +255,9 @@ export class CastIntegration {
         snapshot: () => this.#snapshot(),
         onPhaseChange: (phase) => {
           this.#phase = phase
+          // Volume ownership moves with playback ownership, so it is decided
+          // here rather than duplicated into each arm below.
+          this.#publishRemote()
           if (phase === 'cast-active') {
             // A successful handoff supersedes any earlier failure — leaving
             // a stale "session-start-failed" strip on screen while the
@@ -446,13 +470,75 @@ export class CastIntegration {
       (cause: unknown) => this.#fail(cause)
     )
   }
+  setMuted(muted: boolean): void {
+    void Cast.setDeviceMuted(muted).catch((cause: unknown) => this.#fail(cause))
+  }
   toggleMuted(): void {
-    void Cast.setDeviceMuted(this.#deviceVolume?.muted !== true).catch(
-      (cause: unknown) => this.#fail(cause)
-    )
+    this.setMuted(this.#deviceVolume?.muted !== true)
   }
 
   /* --- internals ---------------------------------------------------------- */
+
+  /**
+   * Tell the media session whether playback is remote, and at what volume.
+   *
+   * The predicate is {@link owns} — the same one the controller routes
+   * transport on. Volume follows the output, so the two must not disagree:
+   * publishing "remote" while mpv still owns the sound would send the volume
+   * keys to a speaker that is not playing.
+   *
+   * `undefined` (back to local) is published exactly once, when ownership
+   * actually moves. The volume itself is republished on every receiver volume
+   * event, because a hardware key press is a *relative* gesture: the library
+   * steps one notch from whatever level was last published, so a stale level
+   * would make the first press after somebody touched the speaker's own knob
+   * jump to the wrong place.
+   */
+  #publishRemote(): void {
+    // Ownership can move before any volume is known — device-found: the Cast
+    // framework RESUMES an existing session at `CastContext` init, so the
+    // `castState` transition into `connected` (where the priming read lives)
+    // never fires, and the event stream only reports *changes*. Without this
+    // the session stayed `volumeType=LOCAL` for the whole cast and the volume
+    // keys kept moving the phone's stream — the exact bug being fixed.
+    if (this.owns && this.#deviceVolume === undefined) this.#primeVolume()
+    const volume = this.owns ? this.#deviceVolume : undefined
+    if (volume === undefined) {
+      if (!this.#remotePublished) return
+      this.#remotePublished = false
+      this.#hooks.onRemoteVolume(undefined)
+      return
+    }
+    this.#remotePublished = true
+    this.#hooks.onRemoteVolume(volume)
+  }
+
+  /**
+   * Read the receiver's current volume once, because the event stream only
+   * reports *changes* and there may not be one for minutes.
+   *
+   * Guarded against re-entry: `#publishRemote` runs on every phase tick and
+   * every receiver status, and a burst of `getDeviceVolume()` calls would be a
+   * burst of round trips to answer one question. A failure is not retried
+   * here — the session may be going away, and the next `deviceVolume` event or
+   * the next ownership change asks again.
+   */
+  #primeVolume(): void {
+    if (this.#primingVolume) return
+    this.#primingVolume = true
+    void Cast.getDeviceVolume()
+      .then((volume) => {
+        this.#primingVolume = false
+        // A real event that landed while the read was in flight is fresher.
+        if (this.#deviceVolume !== undefined) return
+        this.#deviceVolume = volume
+        this.#publishRemote()
+        this.#hooks.onChange()
+      })
+      .catch(() => {
+        this.#primingVolume = false
+      })
+  }
 
   /** `true` while transport intent must be buffered rather than sent. */
   #buffering(): boolean {

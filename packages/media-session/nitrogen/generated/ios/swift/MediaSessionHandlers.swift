@@ -18,7 +18,7 @@ public extension MediaSessionHandlers {
   /**
    * Create a new instance of `MediaSessionHandlers`.
    */
-  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void, onRevivalRequested: @escaping () -> Void) {
+  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, setDeviceVolume: @escaping (_ volume: Double) -> Void, increaseDeviceVolume: @escaping () -> Void, decreaseDeviceVolume: @escaping () -> Void, setDeviceMuted: @escaping (_ muted: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void, onRevivalRequested: @escaping () -> Void) {
     self.init({ () -> bridge.Func_void in
       let __closureWrapper = Func_void(play)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
@@ -48,6 +48,18 @@ public extension MediaSessionHandlers {
       return bridge.create_Func_void_MediaRepeatMode(__closureWrapper.toUnsafe())
     }(), { () -> bridge.Func_void_bool in
       let __closureWrapper = Func_void_bool(setShuffle)
+      return bridge.create_Func_void_bool(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_double in
+      let __closureWrapper = Func_void_double(setDeviceVolume)
+      return bridge.create_Func_void_double(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void in
+      let __closureWrapper = Func_void(increaseDeviceVolume)
+      return bridge.create_Func_void(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void in
+      let __closureWrapper = Func_void(decreaseDeviceVolume)
+      return bridge.create_Func_void(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_bool in
+      let __closureWrapper = Func_void_bool(setDeviceMuted)
       return bridge.create_Func_void_bool(__closureWrapper.toUnsafe())
     }(), { () -> bridge.Func_void in
       let __closureWrapper = Func_void(onTaskRemoved)
@@ -163,6 +175,46 @@ public extension MediaSessionHandlers {
       let __wrappedFunction = bridge.wrap_Func_void_bool(self.__setShuffle)
       return { (__enabled: Bool) -> Void in
         __wrappedFunction.call(__enabled)
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var setDeviceVolume: (_ volume: Double) -> Void {
+    return { () -> (Double) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_double(self.__setDeviceVolume)
+      return { (__volume: Double) -> Void in
+        __wrappedFunction.call(__volume)
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var increaseDeviceVolume: () -> Void {
+    return { () -> () -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void(self.__increaseDeviceVolume)
+      return { () -> Void in
+        __wrappedFunction.call()
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var decreaseDeviceVolume: () -> Void {
+    return { () -> () -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void(self.__decreaseDeviceVolume)
+      return { () -> Void in
+        __wrappedFunction.call()
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var setDeviceMuted: (_ muted: Bool) -> Void {
+    return { () -> (Bool) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_bool(self.__setDeviceMuted)
+      return { (__muted: Bool) -> Void in
+        __wrappedFunction.call(__muted)
       }
     }()
   }

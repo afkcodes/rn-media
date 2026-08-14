@@ -21,7 +21,7 @@ import {
   type SleepTimerState,
 } from '@rn-media/media-session'
 import type { PlayerState } from '@rn-media/player'
-import type { CastReceiverSnapshot } from '@rn-media/cast'
+import type { CastDeviceVolume, CastReceiverSnapshot } from '@rn-media/cast'
 import { ACCENT_ARGB } from '../theme'
 import type { Track } from '../data/tracks'
 import { durationMs, nowPlaying, toMediaItem, toPlaybackState } from './broadcast'
@@ -211,6 +211,40 @@ export class SessionBridge {
       service.setMediaItem(track && toCastMediaItem(track, snapshot))
     }
     service.setPlaybackState(toCastPlaybackState(snapshot))
+  }
+
+  /**
+   * Tell the session that the audio is coming out of the speaker — and how loud
+   * it is — or that the phone has it back.
+   *
+   * This is what makes the **hardware volume keys drive the speaker with the
+   * app backgrounded or the screen locked**, which no Activity-level key
+   * handler can do. The session starts advertising remote playback, Android
+   * routes volume presses to it instead of to the phone's music stream, and
+   * they arrive at `DemoMediaHandler.onSetDeviceVolume` → `Playback.setVolume`
+   * → `Cast.setDeviceVolume`. Clearing it hands the keys back to the phone.
+   *
+   * Not one of the three channels: it describes the *output*, says nothing
+   * about what is playing, and is sticky — the receiver's own status updates
+   * flow through `publishCast` and neither carry nor clear it.
+   *
+   * Nothing here is Cast-specific on the library side; `@rn-media/media-session`
+   * has no idea a receiver exists (and no dependency on `@rn-media/cast`). Any
+   * remote backend publishes the same shape.
+   */
+  publishRemotePlayback(volume: CastDeviceVolume | undefined): void {
+    this.#service?.setRemotePlayback(
+      volume === undefined
+        ? undefined
+        : {
+            // Clamped rather than forwarded raw: the library rejects anything
+            // outside 0..1 (correctly — it is the one payload whose garbage is
+            // invisible), and a receiver reporting 1.0000001 is not a reason
+            // to throw inside a volume event.
+            volume: Math.max(0, Math.min(1, volume.volume)),
+            muted: volume.muted,
+          }
+    )
   }
 
   /* --- channels ---------------------------------------------------------- */

@@ -1302,17 +1302,115 @@ not read about):**
 - **`REPLACED` (2103) is not a failure.** The notification's seek bar fires
   two seeks milliseconds apart; the older command's `PendingResult` fails
   with REPLACED even though the seek landed. The Kotlin bridge resolves it.
-- **Hardware volume keys do not reach the receiver by default.** This
-  library disables the Cast framework's own MediaSession (the media-session
-  package owns the app's session — the fan-out contract), and that framework
-  session is exactly what would have carried volume keys to the receiver.
-  The app's media3 session advertises LOCAL playback, so the keys move the
-  phone's silent music stream. The example forwards VOLUME_UP/DOWN to the
-  cast session from `MainActivity.dispatchKeyEvent` (device-verified: exact
-  5 % steps land on the speaker) — foreground only, by construction.
-  Background/lock-screen volume keys need a remote-playback media session
-  (`setPlaybackToRemote`), which is a future media-session-package feature,
-  not an example-app patch.
+- **Hardware volume keys drive the receiver — foreground, backgrounded and
+  with the screen locked — through `MediaService.setRemotePlayback`, which is
+  a media-session feature with no idea cast exists** (2026-08-14; this
+  replaces the foreground-only `dispatchKeyEvent` workaround that used to be
+  documented here, and the workaround is deleted).
+
+  The starting point was real: this library disables the Cast framework's own
+  MediaSession (the media-session package owns the app's session — the fan-out
+  contract), and that framework session is exactly what would otherwise have
+  carried volume keys to the receiver. The fix is not to re-enable it but to
+  make **our** session the one the platform routes to.
+
+  The mechanism, verified against the shipped media3 1.11.0 AARs and the
+  platform source rather than remembered:
+  - The app publishes `setRemotePlayback({ volume, muted })` — normalised
+    `0..1`, plus an optional `steps` (default 20, media3's own
+    `RemoteCastPlayer.MAX_VOLUME`) and `volumeControl`
+    (`absolute`/`relative`/`fixed`).
+  - `BroadcastPlayer` turns that into `SimpleBasePlayer.State`'s
+    `setDeviceInfo(PLAYBACK_TYPE_REMOTE, max = steps)` + `setDeviceVolume` +
+    `setIsDeviceMuted`, and advertises `COMMAND_GET_DEVICE_VOLUME` plus the
+    set/adjust commands the control type implies.
+  - media3's `MediaSessionLegacyStub.ControllerLegacyCbForBroadcast
+    .onDeviceInfoChanged` rebuilds a `VolumeProviderCompat` from those
+    commands and calls `MediaSessionCompat.setPlaybackToRemote(provider)`
+    (`createVolumeProviderCompat` returns `null` — and the stub calls
+    `setPlaybackToLocal` — for a `PLAYBACK_TYPE_LOCAL` `DeviceInfo`, which is
+    why an app that never publishes a remote device is untouched).
+  - The platform's own contract is the whole feature:
+    `android.media.session.MediaSession.setPlaybackToRemote` — *"Configure
+    this session to use remote volume handling. This must be called to receive
+    volume button events, otherwise the system will adjust the appropriate
+    stream volume for this session."* Because it is on the **session**, it
+    works with no Activity alive.
+  - A key press arrives as `VolumeProvider.onAdjustVolume(±1)` →
+    `Player.increase/decreaseDeviceVolume(flags)` →
+    `handleIncrease/DecreaseDeviceVolume` → the TS layer, which converts the
+    notch to a level for an `absolute` backend (`onSetDeviceVolume`) or passes
+    the direction through for a `relative` one (`onAdjustDeviceVolume`). The
+    routing is decided by the app's declared `volumeControl`, **never** by
+    which handler methods happen to be defined — every app that extends
+    `BaseMediaHandler` inherits both, so presence-sniffing would have made the
+    keys silently dead for the common case.
+  - Going back to local needs no undo: publishing nothing restores
+    `State.Builder`'s own `DeviceInfo.UNKNOWN`, media3 calls
+    `setPlaybackToLocal`, and the keys move the phone's stream again. Measured:
+    no stuck remote volume.
+
+  **Device evidence** (POCO F4 on its AOSP ROM, Mi Smart Speaker, finite
+  track). Three cases are *instrumented*: the phone's own level read from
+  `dumpsys audio`'s `STREAM_MUSIC streamVolume`, the receiver's level read
+  back from the session's `volumeType=REMOTE … current=` in
+  `dumpsys media_session` — which is fed by the receiver's own `deviceVolume`
+  events, so it is the receiver talking, not us echoing ourselves.
+
+  | case | phone stream | receiver | JS handler |
+  | --- | --- | --- | --- |
+  | casting, app backgrounded, 3× VOL_UP | 5/25 → **5/25** | 5/20 → **8/20** | `onSetDeviceVolume(0.30, 0.35, 0.40)` |
+  | casting, **screen off / locked**, 3× VOL_DOWN | 5/25 → **5/25** | 8/20 → **5/20** | `onSetDeviceVolume(0.35, 0.30, 0.25)` |
+  | after transfer back, backgrounded, 3× VOL_UP | 5/25 → **8/25** | session is `volumeType=LOCAL` | none |
+
+  logcat corroborates the routing itself:
+  `MediaSessionService: Adjusting com.rnmediaplayerexample/androidx.media3.session.id./702 … by 1`
+  — the platform naming our session as the volume target — against
+  `… session=null` on the same phone before this shipped.
+
+  The fourth case, **foreground**, is *owner-observed rather than
+  dumpsys-measured*: injected `adb input keyevent` does not travel the window
+  path a physical press takes, so the honest test was a human pressing the
+  rocker with the app on screen and hearing the speaker move. It does, which
+  is why `MainActivity.dispatchKeyEvent` is deleted rather than kept as a
+  foreground supplement — one mechanism, not two.
+
+  **Platform truth found on the way, worth recording because it reads exactly
+  like a failure: Android only routes volume keys to a session that is
+  actually PLAYING.** A first attempt looked like the feature was broken —
+  `MediaSessionService: Adjusting … session=null` in logcat and the phone's
+  stream moving — while `dumpsys media_session` showed our session correctly
+  as `volumeType=REMOTE, controlType=ABSOLUTE, max=20`. The receiver had gone
+  to PAUSED. With playback live the same dispatch logs
+  `Adjusting com.rnmediaplayerexample/androidx.media3.session.id./702 by 1`.
+  So the remote routing is conditional on playback being active, not on the
+  session merely existing.
+
+  **Second truth, an app-layer one the example now encodes:** the Cast
+  framework **resumes** an existing session at `CastContext` init, so the
+  `castState → connected` transition — where the example primed its volume
+  readout — never fires, and the `deviceVolume` stream only reports *changes*.
+  The session then sat at `volumeType=LOCAL` for the whole cast. The example's
+  `#publishRemote` now reads the level on demand (once, guarded) whenever
+  ownership moves and the volume is unknown.
+
+  **iOS is a genuine ceiling, and stays one.** `setRemotePlayback` is accepted
+  and does nothing there. iOS gives an app no way to take over the hardware
+  volume buttons: `MPRemoteCommandCenter` has no volume command,
+  `AVAudioSession.outputVolume` is read-only (and observing it can neither
+  suppress the system HUD nor stop the phone's own volume moving),
+  `MPVolumeView` renders the *system* slider, and `AVRoutePickerView` is
+  AirPlay — a mechanism the OS owns precisely because an AirPlay target is a
+  *route*, which a Cast receiver is not. Google's own SDK says the same about
+  its own hook: *"Due to changes in iOS, controlling the volume of a Cast
+  session using the physical volume buttons is currently not supported for
+  iOS 15+. We are exploring alternatives to restore this functionality in a
+  future release."*
+  (https://developers.google.com/cast/docs/ios_sender/integrate, read
+  2026-08-14; the 4.7.0 release note that says the feature was "restored" is
+  older than that sentence). The honest iOS answer is the in-app slider, which
+  is what Google's own iOS cast apps do — so this is a platform asymmetry we
+  state rather than a fake symmetry we ship.
 - **The receiver pushes a media status roughly every 3 s while playing.**
   Each is a genuine position-anchor discontinuity and flows through
   `setPlaybackState`; the `mediaItem` channel is signature-gated in

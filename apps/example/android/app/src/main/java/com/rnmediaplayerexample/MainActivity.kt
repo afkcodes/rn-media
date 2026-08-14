@@ -1,12 +1,31 @@
 package com.rnmediaplayerexample
 
-import android.view.KeyEvent
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
-import com.google.android.gms.cast.framework.CastContext
 
+/**
+ * Note what is **no longer** here: a `dispatchKeyEvent` override forwarding the
+ * hardware volume keys to the cast session.
+ *
+ * That override was this app's foreground-only workaround for volume keys not
+ * reaching the receiver, and it is gone because the library now does the whole
+ * job properly. While the cast side owns playback the app publishes
+ * `MediaService.setRemotePlayback({ volume, muted })`; the media session then
+ * advertises `DeviceInfo.PLAYBACK_TYPE_REMOTE`, media3 puts the platform
+ * session into remote volume handling (`MediaSession.setPlaybackToRemote` —
+ * "This must be called to receive volume button events"), and Android routes
+ * every volume press to the session's volume provider instead of to the phone's
+ * music stream.
+ *
+ * Because the routing lives on the *session* rather than on an Activity, it
+ * works in exactly the states an Activity cannot help with — app backgrounded,
+ * screen locked — and it keeps working in the foreground, where the key event
+ * simply falls through to the platform's session routing instead of being
+ * intercepted here. One path for both, verified on device (POCO F4 + Mi Smart
+ * Speaker, 2026-08-14).
+ */
 class MainActivity : ReactActivity() {
 
   /**
@@ -21,51 +40,4 @@ class MainActivity : ReactActivity() {
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
       DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
-
-  /**
-   * Hardware volume keys drive the SPEAKER while a cast session is up — what
-   * Spotify does on Android, scoped to the foreground Activity because that is
-   * where key events exist.
-   *
-   * Why the app has to do this at all (device-verified on this project's
-   * POCO F4 round): `@rn-media/cast` deliberately disables the Cast
-   * framework's own MediaSession (`setMediaSessionEnabled(false)` — the
-   * media-session package is the single session owner, per the fan-out
-   * contract), and that framework session is exactly the piece that would
-   * have routed volume keys to the receiver (`setPlaybackToRemote`). The
-   * app's media3 session advertises local playback, so without this override
-   * the keys move the phone's silent music stream while the speaker plays on.
-   * Background/lock-screen volume keys still cannot reach the receiver — that
-   * needs a remote-playback media session, a documented follow-up in
-   * ARCHITECTURE §25.
-   */
-  override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    val keyCode = event.keyCode
-    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-      val session =
-          try {
-            CastContext.getSharedInstance()?.sessionManager?.currentCastSession
-          } catch (_: Exception) {
-            null // framework not initialized (GMS-less, or cast never touched)
-          }
-      if (session != null && session.isConnected) {
-        if (event.action == KeyEvent.ACTION_DOWN) {
-          try {
-            val delta = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) VOLUME_STEP else -VOLUME_STEP
-            session.volume = (session.volume + delta).coerceIn(0.0, 1.0)
-          } catch (_: Exception) {
-            // The session raced away between the check and the write; the
-            // deviceVolume event stream keeps the UI honest either way.
-          }
-        }
-        return true // consumed: the speaker owns loudness during the session
-      }
-    }
-    return super.dispatchKeyEvent(event)
-  }
-
-  private companion object {
-    /** One key press ≈ one notch on a 20-step volume rocker. */
-    const val VOLUME_STEP = 0.05
-  }
 }

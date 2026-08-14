@@ -195,6 +195,17 @@ open class HybridRnMediaMediaSessionSpec_cxx {
   }
   
   @inline(__always)
+  public final func setRemotePlayback(remote: bridge.std__optional_NativeRemotePlayback_) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setRemotePlayback(remote: remote.value)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
   public final func stopService() -> bridge.Result_std__shared_ptr_Promise_void___ {
     do {
       let __result = try self.__implementation.stopService()

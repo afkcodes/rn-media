@@ -8,9 +8,16 @@ import type {
   MediaSessionConfig,
   NativeMediaItem,
   NativePlaybackState,
+  NativeRemotePlayback,
   PositionAnchor,
+  RemoteVolumeControl,
 } from './specs/media-session.nitro'
-import type { MediaItem, MediaServiceConfig, PlaybackState } from './types'
+import type {
+  MediaItem,
+  MediaServiceConfig,
+  PlaybackState,
+  RemotePlayback,
+} from './types'
 
 /**
  * Android's collapsed media notification has three action slots. media3 will
@@ -54,6 +61,12 @@ const CAPABILITIES: readonly MediaCapability[] = [
 ]
 
 const REPEAT_MODES: readonly MediaRepeatMode[] = ['off', 'one', 'all']
+
+const VOLUME_CONTROLS: readonly RemoteVolumeControl[] = [
+  'absolute',
+  'relative',
+  'fixed',
+]
 
 /* -------------------------------------------------------------------------- */
 /*                                  Helpers                                   */
@@ -363,6 +376,122 @@ export function normalizePlaybackState(
 export const DEFAULT_REPEAT_MODE: MediaRepeatMode = 'off'
 /** What every surface showed before `shuffleEnabled` existed. */
 export const DEFAULT_SHUFFLE_ENABLED = false
+
+/* -------------------------------------------------------------------------- */
+/*                              Remote playback                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Notches a hardware volume key press moves through when the app says nothing.
+ *
+ * 20 is not invented here: it is `RemoteCastPlayer.MAX_VOLUME` in media3 1.11.0
+ * — the step count media3's own Cast player reports through
+ * `DeviceInfo.Builder.setMaxVolume` — so an app that does not choose gets the
+ * granularity Android users already feel from every other cast-enabled app.
+ *
+ * Exported so an app can say "half the usual granularity" without hard-coding
+ * the number, and so a test can assert the parity.
+ */
+export const DEFAULT_REMOTE_VOLUME_STEPS = 20
+
+/**
+ * What a remote backend is assumed able to do with its volume.
+ *
+ * `absolute` because every network audio target worth naming (Cast, UPnP/DLNA,
+ * Sonos) takes a level, and because it is the only value that lights up *both*
+ * the hardware keys and the system volume dialog's slider. A backend that can
+ * only be nudged says `relative`; one that cannot be driven at all says
+ * `fixed`, which deliberately leaves the keys dead rather than pretending.
+ */
+export const DEFAULT_REMOTE_VOLUME_CONTROL: RemoteVolumeControl = 'absolute'
+
+/**
+ * Validate and fill in a {@link RemotePlayback}.
+ *
+ * Volume is `0..1` and out-of-range is **rejected, not clamped**: a `47` here is
+ * an app that mixed up its scales (a percentage, or the platform's integer
+ * notches), and silently clamping it to "full" would be a wrong answer that
+ * looks deliberate on a lock screen. The same reasoning as
+ * `validateAnchor` — the payload's garbage is otherwise invisible.
+ */
+export function normalizeRemotePlayback(
+  remote: RemotePlayback
+): NativeRemotePlayback {
+  if (remote == null || typeof remote !== 'object') {
+    throw invalidArgument(
+      'remotePlayback must be a { volume, ... } object, or undefined to say ' +
+        'playback is local again.'
+    )
+  }
+  assertFinite(remote.volume, 'remotePlayback.volume')
+  if (remote.volume < 0 || remote.volume > 1) {
+    throw invalidArgument(
+      `remotePlayback.volume must be between 0 and 1, got ${remote.volume}. ` +
+        `It is a normalised level, not a percentage and not the platform's ` +
+        `integer notches — those come from remotePlayback.steps.`
+    )
+  }
+  if (remote.muted !== undefined && typeof remote.muted !== 'boolean') {
+    throw invalidArgument(
+      `remotePlayback.muted must be a boolean, got ${JSON.stringify(remote.muted)}.`
+    )
+  }
+  if (remote.steps !== undefined) {
+    assertFinite(remote.steps, 'remotePlayback.steps')
+    if (!Number.isInteger(remote.steps) || remote.steps <= 0) {
+      throw invalidArgument(
+        `remotePlayback.steps must be a positive integer (how many notches one ` +
+          `volume key press moves through), got ${remote.steps}.`
+      )
+    }
+  }
+  if (remote.volumeControl !== undefined) {
+    assertMember(
+      remote.volumeControl,
+      VOLUME_CONTROLS,
+      'remotePlayback.volumeControl'
+    )
+  }
+  if (remote.routingControllerId !== undefined) {
+    assertNonEmptyString(
+      remote.routingControllerId,
+      'remotePlayback.routingControllerId'
+    )
+  }
+
+  return {
+    volume: remote.volume,
+    muted: remote.muted ?? false,
+    steps: remote.steps ?? DEFAULT_REMOTE_VOLUME_STEPS,
+    volumeControl: remote.volumeControl ?? DEFAULT_REMOTE_VOLUME_CONTROL,
+    routingControllerId: remote.routingControllerId,
+  }
+}
+
+/**
+ * The volume one hardware key press lands on, as a normalised `0..1` level.
+ *
+ * The library's own fallback for an app that implements
+ * `MediaHandler.onSetDeviceVolume` but not `onAdjustDeviceVolume` — which is
+ * the common case, because an absolute backend has no "nudge" call to wrap. A
+ * notch is `1 / steps`, applied to the last published volume and clamped, so
+ * the arithmetic lives in one tested place rather than in every app.
+ *
+ * Pure on purpose: the whole of the fallback's behaviour is this function.
+ */
+export function stepRemoteVolume(
+  volume: number,
+  steps: number,
+  direction: 1 | -1
+): number {
+  // Onto the notch grid first, then exactly one notch — which is what the
+  // platform itself does with its integer device volume, and what keeps a
+  // rocker press feeling identical whether the level came from our own slider
+  // or from the speaker's physical knob (which lands anywhere).
+  const notches = Math.round(volume * steps)
+  const next = Math.min(steps, Math.max(0, notches + direction))
+  return next / steps
+}
 
 /* -------------------------------------------------------------------------- */
 /*                                 Sleep timer                                */

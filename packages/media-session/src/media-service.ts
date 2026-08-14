@@ -3,12 +3,15 @@ import { getNativeMediaSession } from './native'
 import {
   normalizeConfig,
   normalizePlaybackState,
+  normalizeRemotePlayback,
+  stepRemoteVolume,
   validateMediaItem,
   validateQueue,
   validateSleepTimerSeconds,
 } from './validate'
 import type {
   MediaSessionHandlers,
+  NativeRemotePlayback,
   RnMediaMediaSession,
 } from './specs/media-session.nitro'
 import type {
@@ -17,6 +20,8 @@ import type {
   MediaServiceApi,
   MediaServiceConfig,
   PlaybackState,
+  RemotePlayback,
+  RemoteVolumeDirection,
   SleepTimerState,
 } from './types'
 
@@ -72,6 +77,18 @@ export function createMediaService(
   let revivalCallback: (() => void) | undefined
 
   /**
+   * The remote device last published through `setRemotePlayback`, normalised —
+   * or `undefined` while playback is local (the default, and what every app
+   * that never calls it stays at forever).
+   *
+   * Kept here rather than only natively for one reason: it is the base the
+   * "adjust" fallback steps from (see {@link adjust}). Holding it in JS keeps
+   * that arithmetic pure and unit-testable, and it is a single small value the
+   * app just handed us — not state we invented.
+   */
+  let remotePlayback: NativeRemotePlayback | undefined
+
+  /**
    * Invoke a handler method and return *now*.
    *
    * The whole point: a remote command must never wait on JS. On Android the
@@ -125,6 +142,46 @@ export function createMediaService(
     return parsed as Record<string, unknown>
   }
 
+  /**
+   * One hardware-key notch, routed by **what the app said its backend is** —
+   * `remotePlayback.volumeControl` — and never by which methods happen to be
+   * defined on the handler.
+   *
+   * Presence-sniffing was the obvious implementation and is a trap: every app
+   * that extends `BaseMediaHandler` inherits *both* methods, so "does it have
+   * `onAdjustDeviceVolume`?" answers yes for a handler that only meant to
+   * implement `onSetDeviceVolume`, and the volume keys silently do nothing.
+   * The declaration the app already made is unambiguous and total instead:
+   *
+   * - `absolute` — the backend takes a level, so the notch is turned into one
+   *   here (`stepRemoteVolume`, against the last published volume) and
+   *   delivered as `onSetDeviceVolume`. Cast, UPnP, essentially everything.
+   * - `relative` — the backend only nudges, so the direction goes through
+   *   untouched as `onAdjustDeviceVolume`. There is no level to send.
+   * - `fixed` — nothing is dispatched. The command is not advertised to media3
+   *   either, so this arm should be unreachable; it is written out so that a
+   *   surface finding some other way in cannot move a volume the app said it
+   *   does not control.
+   */
+  function adjust(direction: RemoteVolumeDirection): void {
+    // Undefined means playback is local, in which case Android is not routing
+    // volume keys here at all. Defensive, not expected.
+    const remote = remotePlayback
+    if (remote === undefined || remote.volumeControl === 'fixed') return
+    if (remote.volumeControl === 'relative') {
+      dispatch('onAdjustDeviceVolume', (h) =>
+        h.onAdjustDeviceVolume?.(direction)
+      )
+      return
+    }
+    const next = stepRemoteVolume(
+      remote.volume,
+      remote.steps,
+      direction === 'up' ? 1 : -1
+    )
+    dispatch('onSetDeviceVolume', (h) => h.onSetDeviceVolume?.(next))
+  }
+
   const handlers: MediaSessionHandlers = {
     play: () => dispatch('play', (h) => h.play()),
     pause: () => dispatch('pause', (h) => h.pause()),
@@ -139,6 +196,12 @@ export function createMediaService(
       dispatch('onSetRepeatMode', (h) => h.onSetRepeatMode?.(mode)),
     setShuffle: (enabled) =>
       dispatch('onSetShuffle', (h) => h.onSetShuffle?.(enabled)),
+    setDeviceVolume: (volume) =>
+      dispatch('onSetDeviceVolume', (h) => h.onSetDeviceVolume?.(volume)),
+    increaseDeviceVolume: () => adjust('up'),
+    decreaseDeviceVolume: () => adjust('down'),
+    setDeviceMuted: (muted) =>
+      dispatch('onSetDeviceMuted', (h) => h.onSetDeviceMuted?.(muted)),
     onTaskRemoved: () => dispatch('onTaskRemoved', (h) => h.onTaskRemoved()),
     customAction: (name, extras) => {
       const parsed = parseExtras(extras)
@@ -209,6 +272,16 @@ export function createMediaService(
       native.setResumptionSnapshot(snapshot)
     },
 
+    setRemotePlayback(remote?: RemotePlayback): void {
+      assertReady('setRemotePlayback()')
+      const normalized =
+        remote === undefined ? undefined : normalizeRemotePlayback(remote)
+      // Only after validation: a rejected call must leave the base the adjust
+      // fallback steps from exactly as it was.
+      remotePlayback = normalized
+      native.setRemotePlayback(normalized)
+    },
+
     setSleepTimer(seconds: number): void {
       assertReady('setSleepTimer()')
       native.setSleepTimer(validateSleepTimerSeconds(seconds))
@@ -250,6 +323,9 @@ export function createMediaService(
       state = 'idle'
       handler = undefined
       onHandlerError = defaultOnHandlerError
+      // The session that was routed to a remote device is gone; a later init
+      // starts local, exactly like a fresh process.
+      remotePlayback = undefined
     },
   }
 
@@ -276,6 +352,7 @@ export function createMediaService(
         // by `stopService()` — see its declaration for why it must outlive
         // the session it was registered with.
         revivalCallback = config.android?.onRevivalRequested
+        remotePlayback = undefined
         handler = handlerFactory()
         await native.initialize(nativeConfig, handlers)
         state = 'ready'
@@ -311,6 +388,7 @@ export const MediaService: MediaServiceController = {
   setQueue: (items) => resolveSingleton().setQueue(items),
   setResumptionSnapshot: (snapshot) =>
     resolveSingleton().setResumptionSnapshot(snapshot),
+  setRemotePlayback: (remote) => resolveSingleton().setRemotePlayback(remote),
   setSleepTimer: (seconds) => resolveSingleton().setSleepTimer(seconds),
   setSleepTimerToTrackEnd: () => resolveSingleton().setSleepTimerToTrackEnd(),
   cancelSleepTimer: () => resolveSingleton().cancelSleepTimer(),

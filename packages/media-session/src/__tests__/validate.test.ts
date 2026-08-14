@@ -4,6 +4,8 @@ import { MediaSessionError } from '../errors'
 import {
   DEFAULT_JUMP_SECONDS,
   DEFAULT_PLAYBACK_RESUMPTION,
+  DEFAULT_REMOTE_VOLUME_CONTROL,
+  DEFAULT_REMOTE_VOLUME_STEPS,
   DEFAULT_REPEAT_MODE,
   DEFAULT_SHUFFLE_ENABLED,
   DEFAULT_SUPPORTED_PLAYBACK_RATES,
@@ -11,12 +13,14 @@ import {
   MAX_STOP_FOREGROUND_TIMEOUT_MS,
   normalizeConfig,
   normalizePlaybackState,
+  normalizeRemotePlayback,
+  stepRemoteVolume,
   validateAnchor,
   validateMediaItem,
   validateQueue,
   validateSleepTimerSeconds,
 } from '../validate'
-import type { PlaybackState } from '../types'
+import type { PlaybackState, RemotePlayback } from '../types'
 import { playbackState } from './fakes'
 
 /** `unknown` in, so the tests can pass the garbage a plain-JS caller would. */
@@ -635,5 +639,94 @@ describe('iOS supported playback rates (B12)', () => {
     expect(DEFAULT_SUPPORTED_PLAYBACK_RATES).toEqual([
       0.5, 0.75, 1, 1.25, 1.5, 2,
     ])
+  })
+})
+
+describe('normalizeRemotePlayback', () => {
+  it('fills in the defaults an app that only knows its volume can omit', () => {
+    expect(normalizeRemotePlayback({ volume: 0.45 })).toEqual({
+      volume: 0.45,
+      muted: false,
+      steps: DEFAULT_REMOTE_VOLUME_STEPS,
+      volumeControl: DEFAULT_REMOTE_VOLUME_CONTROL,
+      routingControllerId: undefined,
+    })
+  })
+
+  it('documents the defaults: 20 notches, absolute control', () => {
+    // 20 is media3's own `RemoteCastPlayer.MAX_VOLUME`, so a hardware key press
+    // moves by the same amount as in every other cast-enabled Android app.
+    expect(DEFAULT_REMOTE_VOLUME_STEPS).toBe(20)
+    expect(DEFAULT_REMOTE_VOLUME_CONTROL).toBe('absolute')
+  })
+
+  it('passes an explicit device through untouched', () => {
+    const remote: RemotePlayback = {
+      volume: 1,
+      muted: true,
+      steps: 10,
+      volumeControl: 'relative',
+      routingControllerId: 'rc-7',
+    }
+    expect(normalizeRemotePlayback(remote)).toEqual(remote)
+  })
+
+  it.each([
+    ['a percentage', 45],
+    ['the platform notches', 9],
+    ['a negative', -0.1],
+  ])('rejects %s rather than clamping it into 0..1', (_label, volume) => {
+    // Clamping would turn "I mixed up my scales" into a plausible wrong answer
+    // on a lock screen — the same reasoning as the position anchor.
+    expect(() => normalizeRemotePlayback({ volume })).toThrow(MediaSessionError)
+  })
+
+  it.each([
+    ['zero', 0],
+    ['a negative', -4],
+    ['a fraction', 12.5],
+  ])('rejects %s steps', (_label, steps) => {
+    expect(() => normalizeRemotePlayback({ volume: 0.5, steps })).toThrowError(
+      /steps/
+    )
+  })
+
+  it('rejects an unknown volumeControl', () => {
+    expect(() =>
+      normalizeRemotePlayback({
+        volume: 0.5,
+        volumeControl: 'loud' as never,
+      })
+    ).toThrowError(/volumeControl/)
+  })
+
+  it('rejects an empty routingControllerId — omit it instead', () => {
+    expect(() =>
+      normalizeRemotePlayback({ volume: 0.5, routingControllerId: '' })
+    ).toThrowError(/routingControllerId/)
+  })
+})
+
+describe('stepRemoteVolume', () => {
+  it('moves exactly one notch', () => {
+    expect(stepRemoteVolume(0.5, 20, 1)).toBeCloseTo(0.55, 10)
+    expect(stepRemoteVolume(0.5, 20, -1)).toBeCloseTo(0.45, 10)
+  })
+
+  it('quantises an off-grid level onto the notch grid first', () => {
+    // A speaker's own knob lands anywhere; a rocker press must still feel like
+    // one notch and must converge onto the levels the surfaces draw.
+    expect(stepRemoteVolume(0.37, 20, 1)).toBeCloseTo(0.4, 10)
+    expect(stepRemoteVolume(0.37, 20, -1)).toBeCloseTo(0.3, 10)
+  })
+
+  it('clamps at both ends instead of wrapping or overshooting', () => {
+    expect(stepRemoteVolume(1, 20, 1)).toBe(1)
+    expect(stepRemoteVolume(0, 20, -1)).toBe(0)
+  })
+
+  it('honours a coarser or finer step count', () => {
+    expect(stepRemoteVolume(0, 4, 1)).toBeCloseTo(0.25, 10)
+    expect(stepRemoteVolume(0, 100, 1)).toBeCloseTo(0.01, 10)
   })
 })

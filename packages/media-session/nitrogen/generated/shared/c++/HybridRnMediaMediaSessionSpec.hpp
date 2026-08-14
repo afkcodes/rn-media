@@ -21,6 +21,8 @@ namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
+// Forward declaration of `NativeRemotePlayback` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
 // Forward declaration of `NativeSleepTimerState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 
@@ -32,6 +34,7 @@ namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 #include <optional>
 #include <vector>
 #include <string>
+#include "NativeRemotePlayback.hpp"
 #include "NativeSleepTimerState.hpp"
 
 namespace margelo::nitro::rnmediamediasession {
@@ -70,6 +73,7 @@ namespace margelo::nitro::rnmediamediasession {
       virtual void setMediaItem(const std::optional<NativeMediaItem>& item) = 0;
       virtual void setQueue(const std::vector<NativeMediaItem>& items) = 0;
       virtual void setResumptionSnapshot(const std::optional<std::string>& snapshot) = 0;
+      virtual void setRemotePlayback(const std::optional<NativeRemotePlayback>& remote) = 0;
       virtual std::shared_ptr<Promise<void>> stopService() = 0;
       virtual void setSleepTimer(double seconds) = 0;
       virtual void setSleepTimerToTrackEnd() = 0;

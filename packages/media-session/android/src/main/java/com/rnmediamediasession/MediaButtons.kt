@@ -13,6 +13,7 @@ import com.google.common.collect.ImmutableList
 import com.margelo.nitro.rnmediamediasession.MediaCapability
 import com.margelo.nitro.rnmediamediasession.MediaControl
 import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
+import com.margelo.nitro.rnmediamediasession.RemoteVolumeControl
 
 /**
  * Translation of the broadcast `capabilities` / `controls` / `customActions`
@@ -139,7 +140,13 @@ internal object MediaButtons {
       }
     }
 
+    addRemoteVolume(builder, snapshot.remote)
+
     return builder.build()
+  }
+
+  private fun addRemoteVolume(builder: Player.Commands.Builder, remote: RemoteDevice?) {
+    for (command in deviceVolumeCommands(remote)) builder.add(command.toMedia3())
   }
 
   /** Every custom action currently advertised, as session commands. */
@@ -342,4 +349,115 @@ internal object MediaButtons {
   }
 
   private const val OVERFLOW = CommandButton.SLOT_OVERFLOW
+}
+
+/* -------------------------------------------------------------------------- */
+/*                       Device volume: the decision, pure                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A media3 device-volume command, named so the *decision* about which ones to
+ * advertise can be made — and unit-tested — without touching `Player.Commands`.
+ *
+ * `Player.Commands` is backed by media3's `FlagSet`, which is backed by
+ * `android.util.SparseBooleanArray`. Under the stub `android.jar` a plain JVM
+ * test gets a set that silently swallows every `add` and answers `false` to
+ * every `contains`, so asserting on a built `Commands` would pass whatever the
+ * code did. Splitting the policy out (this enum plus [deviceVolumeCommands])
+ * from the constant mapping ([toMedia3]) makes both halves testable on a JVM
+ * with nothing stubbed — the same split, for the same reason, as
+ * `MediaRepeatMode.toMedia3()`.
+ */
+internal enum class DeviceVolumeCommand {
+  /**
+   * Not optional, despite reading like a nicety: media3 fetches the value it
+   * reports to the platform through
+   * `PlayerWrapper.getDeviceVolumeWithCommandCheck()`, which returns a hard `0`
+   * when this command is missing. Without it the system would show the remote
+   * device as silent no matter how loud it actually is.
+   */
+  GET,
+
+  /**
+   * What a **hardware volume key press** becomes. The platform delivers
+   * `VolumeProvider.onAdjustVolume(±1)`, which media3 turns into
+   * `Player.increase/decreaseDeviceVolume`. Its presence is also what makes the
+   * provider controllable at all — `VOLUME_CONTROL_RELATIVE` in
+   * `MediaSessionLegacyStub.createVolumeProviderCompat`; without it the
+   * provider is `VOLUME_CONTROL_FIXED` and the keys are dead.
+   */
+  ADJUST,
+
+  /**
+   * The `_WITH_FLAGS` twin, advertised alongside [ADJUST] because media3 checks
+   * for it *first* and it is the one that carries `FLAG_SHOW_UI` — which is
+   * what makes the system's volume panel appear as the user holds the rocker.
+   */
+  ADJUST_WITH_FLAGS,
+
+  /**
+   * Upgrades the provider to `VOLUME_CONTROL_ABSOLUTE`, which is what draws the
+   * system's remote volume *slider* and delivers `onSetVolumeTo`.
+   */
+  SET,
+
+  /** The `_WITH_FLAGS` twin of [SET]. See [ADJUST_WITH_FLAGS]. */
+  SET_WITH_FLAGS,
+}
+
+/**
+ * Which device-volume commands a published remote output implies.
+ *
+ * `null` — local playback — implies **none**, and that is the whole
+ * compatibility story: `createVolumeProviderCompat` returns `null` for a
+ * `PLAYBACK_TYPE_LOCAL` `DeviceInfo` before it looks at a single command, so an
+ * app that never publishes a remote device is untouched by any of this.
+ */
+internal fun deviceVolumeCommands(remote: RemoteDevice?): List<DeviceVolumeCommand> =
+  when (remote?.volumeControl) {
+    null -> emptyList()
+    // Readable, not writable. Nothing beyond the getter, so the keys stay dead
+    // — the honest rendering of "the app says it cannot drive this volume".
+    RemoteVolumeControl.FIXED -> listOf(DeviceVolumeCommand.GET)
+
+    RemoteVolumeControl.RELATIVE -> listOf(
+      DeviceVolumeCommand.GET,
+      DeviceVolumeCommand.ADJUST,
+      DeviceVolumeCommand.ADJUST_WITH_FLAGS,
+    )
+
+    RemoteVolumeControl.ABSOLUTE -> listOf(
+      DeviceVolumeCommand.GET,
+      DeviceVolumeCommand.ADJUST,
+      DeviceVolumeCommand.ADJUST_WITH_FLAGS,
+      DeviceVolumeCommand.SET,
+      DeviceVolumeCommand.SET_WITH_FLAGS,
+    )
+  }
+
+/**
+ * The media3 constant, written out rather than derived. Same rule as
+ * `MediaRepeatMode.toMedia3()`: a coincidence is not a contract.
+ *
+ * The `@Player.Command` return annotation is load-bearing for lint, not
+ * decoration — it is what lets `Player.Commands.Builder.add(@Command int)`
+ * accept a value that is not a literal constant at the call site.
+ *
+ * `COMMAND_ADJUST_DEVICE_VOLUME` and `COMMAND_SET_DEVICE_VOLUME` are deprecated
+ * upstream in favour of their `_WITH_FLAGS` twins, and are advertised anyway
+ * for the same reason media3's own `RemoteCastPlayer` does — its
+ * `PERMANENT_AVAILABLE_COMMANDS` lists all four behind a
+ * `@SuppressWarnings("deprecation")` and the comment "Deprecated commands are
+ * still available, e.g. COMMAND_ADJUST_DEVICE_VOLUME" (media3 1.11.0). A
+ * `MediaController` built against an older media3 asks with the old constant,
+ * and dropping it would make that controller's volume silently dead while
+ * saving nothing.
+ */
+@Suppress("DEPRECATION")
+internal fun DeviceVolumeCommand.toMedia3(): @Player.Command Int = when (this) {
+  DeviceVolumeCommand.GET -> Player.COMMAND_GET_DEVICE_VOLUME
+  DeviceVolumeCommand.ADJUST -> Player.COMMAND_ADJUST_DEVICE_VOLUME
+  DeviceVolumeCommand.ADJUST_WITH_FLAGS -> Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS
+  DeviceVolumeCommand.SET -> Player.COMMAND_SET_DEVICE_VOLUME
+  DeviceVolumeCommand.SET_WITH_FLAGS -> Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS
 }

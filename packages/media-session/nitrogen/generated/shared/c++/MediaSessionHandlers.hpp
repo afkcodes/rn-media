@@ -52,6 +52,10 @@ namespace margelo::nitro::rnmediamediasession {
     std::function<void(double /* rate */)> setRate     SWIFT_PRIVATE;
     std::function<void(MediaRepeatMode /* mode */)> setRepeatMode     SWIFT_PRIVATE;
     std::function<void(bool /* enabled */)> setShuffle     SWIFT_PRIVATE;
+    std::function<void(double /* volume */)> setDeviceVolume     SWIFT_PRIVATE;
+    std::function<void()> increaseDeviceVolume     SWIFT_PRIVATE;
+    std::function<void()> decreaseDeviceVolume     SWIFT_PRIVATE;
+    std::function<void(bool /* muted */)> setDeviceMuted     SWIFT_PRIVATE;
     std::function<void()> onTaskRemoved     SWIFT_PRIVATE;
     std::function<void(const std::string& /* name */, const std::string& /* extras */)> customAction     SWIFT_PRIVATE;
     std::function<void()> onSleepTimer     SWIFT_PRIVATE;
@@ -60,10 +64,10 @@ namespace margelo::nitro::rnmediamediasession {
 
   public:
     MediaSessionHandlers() = default;
-    explicit MediaSessionHandlers(std::function<void()> play, std::function<void()> pause, std::function<void()> stop, std::function<void(double /* position */)> seekTo, std::function<void()> skipToNext, std::function<void()> skipToPrevious, std::function<void(double /* index */)> skipToQueueItem, std::function<void(double /* rate */)> setRate, std::function<void(MediaRepeatMode /* mode */)> setRepeatMode, std::function<void(bool /* enabled */)> setShuffle, std::function<void()> onTaskRemoved, std::function<void(const std::string& /* name */, const std::string& /* extras */)> customAction, std::function<void()> onSleepTimer, std::function<void()> onPlaybackResumption, std::function<void()> onRevivalRequested): play(play), pause(pause), stop(stop), seekTo(seekTo), skipToNext(skipToNext), skipToPrevious(skipToPrevious), skipToQueueItem(skipToQueueItem), setRate(setRate), setRepeatMode(setRepeatMode), setShuffle(setShuffle), onTaskRemoved(onTaskRemoved), customAction(customAction), onSleepTimer(onSleepTimer), onPlaybackResumption(onPlaybackResumption), onRevivalRequested(onRevivalRequested) {}
+    explicit MediaSessionHandlers(std::function<void()> play, std::function<void()> pause, std::function<void()> stop, std::function<void(double /* position */)> seekTo, std::function<void()> skipToNext, std::function<void()> skipToPrevious, std::function<void(double /* index */)> skipToQueueItem, std::function<void(double /* rate */)> setRate, std::function<void(MediaRepeatMode /* mode */)> setRepeatMode, std::function<void(bool /* enabled */)> setShuffle, std::function<void(double /* volume */)> setDeviceVolume, std::function<void()> increaseDeviceVolume, std::function<void()> decreaseDeviceVolume, std::function<void(bool /* muted */)> setDeviceMuted, std::function<void()> onTaskRemoved, std::function<void(const std::string& /* name */, const std::string& /* extras */)> customAction, std::function<void()> onSleepTimer, std::function<void()> onPlaybackResumption, std::function<void()> onRevivalRequested): play(play), pause(pause), stop(stop), seekTo(seekTo), skipToNext(skipToNext), skipToPrevious(skipToPrevious), skipToQueueItem(skipToQueueItem), setRate(setRate), setRepeatMode(setRepeatMode), setShuffle(setShuffle), setDeviceVolume(setDeviceVolume), increaseDeviceVolume(increaseDeviceVolume), decreaseDeviceVolume(decreaseDeviceVolume), setDeviceMuted(setDeviceMuted), onTaskRemoved(onTaskRemoved), customAction(customAction), onSleepTimer(onSleepTimer), onPlaybackResumption(onPlaybackResumption), onRevivalRequested(onRevivalRequested) {}
 
   public:
-    // MediaSessionHandlers is not equatable because these properties are not equatable: play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, setRepeatMode, setShuffle, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption, onRevivalRequested
+    // MediaSessionHandlers is not equatable because these properties are not equatable: play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, setRepeatMode, setShuffle, setDeviceVolume, increaseDeviceVolume, decreaseDeviceVolume, setDeviceMuted, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption, onRevivalRequested
   };
 
 } // namespace margelo::nitro::rnmediamediasession
@@ -86,6 +90,10 @@ namespace margelo::nitro {
         JSIConverter<std::function<void(double)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRate"))),
         JSIConverter<std::function<void(margelo::nitro::rnmediamediasession::MediaRepeatMode)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRepeatMode"))),
         JSIConverter<std::function<void(bool)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setShuffle"))),
+        JSIConverter<std::function<void(double)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setDeviceVolume"))),
+        JSIConverter<std::function<void()>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "increaseDeviceVolume"))),
+        JSIConverter<std::function<void()>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "decreaseDeviceVolume"))),
+        JSIConverter<std::function<void(bool)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setDeviceMuted"))),
         JSIConverter<std::function<void()>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onTaskRemoved"))),
         JSIConverter<std::function<void(const std::string&, const std::string&)>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "customAction"))),
         JSIConverter<std::function<void()>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onSleepTimer"))),
@@ -105,6 +113,10 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "setRate"), JSIConverter<std::function<void(double)>>::toJSI(runtime, arg.setRate));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "setRepeatMode"), JSIConverter<std::function<void(margelo::nitro::rnmediamediasession::MediaRepeatMode)>>::toJSI(runtime, arg.setRepeatMode));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "setShuffle"), JSIConverter<std::function<void(bool)>>::toJSI(runtime, arg.setShuffle));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "setDeviceVolume"), JSIConverter<std::function<void(double)>>::toJSI(runtime, arg.setDeviceVolume));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "increaseDeviceVolume"), JSIConverter<std::function<void()>>::toJSI(runtime, arg.increaseDeviceVolume));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "decreaseDeviceVolume"), JSIConverter<std::function<void()>>::toJSI(runtime, arg.decreaseDeviceVolume));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "setDeviceMuted"), JSIConverter<std::function<void(bool)>>::toJSI(runtime, arg.setDeviceMuted));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "onTaskRemoved"), JSIConverter<std::function<void()>>::toJSI(runtime, arg.onTaskRemoved));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "customAction"), JSIConverter<std::function<void(const std::string&, const std::string&)>>::toJSI(runtime, arg.customAction));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "onSleepTimer"), JSIConverter<std::function<void()>>::toJSI(runtime, arg.onSleepTimer));
@@ -130,6 +142,10 @@ namespace margelo::nitro {
       if (!JSIConverter<std::function<void(double)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRate")))) return false;
       if (!JSIConverter<std::function<void(margelo::nitro::rnmediamediasession::MediaRepeatMode)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setRepeatMode")))) return false;
       if (!JSIConverter<std::function<void(bool)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setShuffle")))) return false;
+      if (!JSIConverter<std::function<void(double)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setDeviceVolume")))) return false;
+      if (!JSIConverter<std::function<void()>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "increaseDeviceVolume")))) return false;
+      if (!JSIConverter<std::function<void()>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "decreaseDeviceVolume")))) return false;
+      if (!JSIConverter<std::function<void(bool)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "setDeviceMuted")))) return false;
       if (!JSIConverter<std::function<void()>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onTaskRemoved")))) return false;
       if (!JSIConverter<std::function<void(const std::string&, const std::string&)>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "customAction")))) return false;
       if (!JSIConverter<std::function<void()>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "onSleepTimer")))) return false;
