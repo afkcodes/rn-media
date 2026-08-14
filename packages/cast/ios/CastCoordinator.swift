@@ -59,10 +59,16 @@ final class CastCoordinator: NSObject {
 
     context.sessionManager.add(self)
     context.discoveryManager.add(self)
+    // The SDK exports `kGCKCastStateDidChangeNotification` as a plain
+    // `extern NSString *const` whose name ends in "Notification", so Swift's
+    // ClangImporter rewrites it into `NSNotification.Name` (drop the leading
+    // `k`, drop the "Notification" suffix, lowercase the initialism). The
+    // Obj-C spelling is NOT in scope from Swift — this is the only spelling
+    // that compiles, and it is what Google's own Swift sample uses.
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(castStateDidChange),
-      name: NSNotification.Name(kGCKCastStateDidChangeNotification),
+      name: .gckCastStateDidChange,
       object: nil
     )
     // A session may already be live (SDK-side resumption happens before JS
@@ -385,7 +391,7 @@ final class CastCoordinator: NSObject {
     attachedSession = nil
   }
 
-  private func requireClient(_ promise: Promise<some Any>) -> GCKRemoteMediaClient? {
+  private func requireClient<T>(_ promise: Promise<T>) -> GCKRemoteMediaClient? {
     guard let client = attachedClient else {
       promise.reject(withError: CastBridgeError.message(
         "[no-session] No connected cast session. Call requestSession() first."))
@@ -394,7 +400,7 @@ final class CastCoordinator: NSObject {
     return client
   }
 
-  private func requireSession(_ promise: Promise<some Any>) -> GCKCastSession? {
+  private func requireSession<T>(_ promise: Promise<T>) -> GCKCastSession? {
     guard let session = attachedSession else {
       promise.reject(withError: CastBridgeError.message(
         "[no-session] No connected cast session. Call requestSession() first."))
@@ -454,7 +460,7 @@ final class CastCoordinator: NSObject {
     )
   }
 
-  private func mediaInfo(_ source: CastMediaSource, promise: Promise<some Any>) -> GCKMediaInformation? {
+  private func mediaInfo<T>(_ source: CastMediaSource, promise: Promise<T>) -> GCKMediaInformation? {
     guard let url = URL(string: source.url) else {
       promise.reject(withError: CastBridgeError.message(
         "[invalid-argument] \"\(source.url)\" is not a valid URL."))
@@ -479,7 +485,7 @@ final class CastCoordinator: NSObject {
     return builder.build()
   }
 
-  private func queueItem(_ input: CastQueueItemInput, promise: Promise<some Any>) -> GCKMediaQueueItem? {
+  private func queueItem<T>(_ input: CastQueueItemInput, promise: Promise<T>) -> GCKMediaQueueItem? {
     guard let media = mediaInfo(input.source, promise: promise) else { return nil }
     let builder = GCKMediaQueueItemBuilder()
     builder.mediaInformation = media
@@ -565,7 +571,7 @@ extension CastCoordinator: GCKSessionManagerListener {
     // reason to fail the endSession() promise.
     pendingEnd?.resolve(withResult: ())
     pendingEnd = nil
-    emitSession(.ended, session, errorCode: (error as NSError?).map { Double($0.code) })
+    emitSession(.ended, session, errorCode: error.map { Double(($0 as NSError).code) })
     emitter?.onCastState(NativeCastStateEvent(state: .idle, device: nil))
   }
 
@@ -667,6 +673,7 @@ final class RequestBridge: NSObject, GCKRequestDelegate {
     self.family = family
     self.operation = operation
     self.onSettled = onSettled
+    super.init()
   }
 
   func requestDidComplete(_ request: GCKRequest) {

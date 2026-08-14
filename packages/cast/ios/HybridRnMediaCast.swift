@@ -57,7 +57,10 @@ final class HybridRnMediaCast: HybridRnMediaCastSpec, CastEmitter {
         promise.resolve(withResult: state)
         return
       }
-      if !GCKCastContext.isSharedInstanceInitialized {
+      // `isSharedInstanceInitialized` is a class METHOD in the SDK
+      // (`+ (BOOL)isSharedInstanceInitialized;`, GCKCastContext.h:92), not a
+      // property — it must be called, not read.
+      if !GCKCastContext.isSharedInstanceInitialized() {
         let appId = receiverApplicationId ?? kGCKDefaultMediaReceiverApplicationID
         let criteria = GCKDiscoveryCriteria(applicationID: appId)
         let options = GCKCastOptions(discoveryCriteria: criteria)
@@ -67,7 +70,7 @@ final class HybridRnMediaCast: HybridRnMediaCastSpec, CastEmitter {
         options.suspendSessionsWhenBackgrounded = false
         GCKCastContext.setSharedInstanceWith(options)
       }
-      guard GCKCastContext.isSharedInstanceInitialized else {
+      guard GCKCastContext.isSharedInstanceInitialized() else {
         withLock { cachedState = .unavailable }
         promise.resolve(withResult: .unavailable)
         return
@@ -322,7 +325,7 @@ final class HybridRnMediaCast: HybridRnMediaCastSpec, CastEmitter {
   ) -> Promise<T> {
     let promise = Promise<T>()
     runOnMain { [self] in
-      guard let coordinator else {
+      guard let coordinator = self.coordinator else {
         promise.reject(withError: CastBridgeError.message(
           "[unavailable] Cast framework is not initialized — call initialize() first."))
         return

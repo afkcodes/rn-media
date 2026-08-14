@@ -194,3 +194,4 @@ jobs:
             apps/example/ios/Pods/Target Support Files/RnMediaPlayer/*.xcconfig
             apps/example/ios/Pods/Target Support Files/RnMediaAudioSession/*.xcconfig
             apps/example/ios/Pods/Target Support Files/RnMediaMediaSession/*.xcconfig
+            apps/example/ios/Pods/Target Support Files/RnMediaCast/*.xcconfig
