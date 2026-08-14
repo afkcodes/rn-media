@@ -32,7 +32,10 @@ data class NativeRemotePlayback(
   val volumeControl: RemoteVolumeControl,
   @DoNotStrip
   @Keep
-  val routingControllerId: String?
+  val routingControllerId: String?,
+  @DoNotStrip
+  @Keep
+  val holdLocalAudioSlot: Boolean
 ) {
   /* primary constructor */
 
@@ -44,6 +47,7 @@ data class NativeRemotePlayback(
       && Objects.deepEquals(this.steps, other.steps)
       && Objects.deepEquals(this.volumeControl, other.volumeControl)
       && Objects.deepEquals(this.routingControllerId, other.routingControllerId)
+      && Objects.deepEquals(this.holdLocalAudioSlot, other.holdLocalAudioSlot)
   }
 
   override fun hashCode(): Int {
@@ -52,7 +56,8 @@ data class NativeRemotePlayback(
       muted,
       steps,
       volumeControl,
-      routingControllerId
+      routingControllerId,
+      holdLocalAudioSlot
     ).contentDeepHashCode()
   }
 
@@ -64,8 +69,8 @@ data class NativeRemotePlayback(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(volume: Double, muted: Boolean, steps: Double, volumeControl: RemoteVolumeControl, routingControllerId: String?): NativeRemotePlayback {
-      return NativeRemotePlayback(volume, muted, steps, volumeControl, routingControllerId)
+    private fun fromCpp(volume: Double, muted: Boolean, steps: Double, volumeControl: RemoteVolumeControl, routingControllerId: String?, holdLocalAudioSlot: Boolean): NativeRemotePlayback {
+      return NativeRemotePlayback(volume, muted, steps, volumeControl, routingControllerId, holdLocalAudioSlot)
     }
   }
 }

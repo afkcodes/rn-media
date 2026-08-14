@@ -111,6 +111,41 @@ export interface RemotePlayback {
    * that is playing. A refinement — omit it and everything else still works.
    */
   routingControllerId?: string
+  /**
+   * Android only: hold a **silent local audio output** for as long as this
+   * remote playback is published, so the app keeps the platform's
+   * "last played locally" slot. @default false
+   *
+   * ## What it is for
+   * With the screen off, `MediaSessionService` discards the session it just
+   * chose — and drops the key entirely — when the *caller's* uid was the last
+   * to play local audio (b/275185436). The caller with the screen off is
+   * `PhoneWindowManager`, uid 1000, so **any system sound (a notification, a
+   * ringtone) takes the volume keys away** from a remote session. It is sticky,
+   * not momentary: the platform's list never evicts its head entry, and an app
+   * whose audio is remote never plays locally to displace it.
+   *
+   * The one documented escape: when the head uid goes *inactive*, the platform
+   * promotes the first still-**active** uid to the head. An app holding a
+   * silent local output is that uid, so it reclaims the slot as soon as the
+   * interfering sound ends. See the package README, "Two platform conditions".
+   *
+   * ## What it costs, and why it is off by default
+   * A real audio output stays open for the whole remote session, which keeps
+   * the audio HAL awake — measurable battery, for a feature the user only
+   * notices when they reach for the rocker. It also makes
+   * `AudioSystem.isStreamActive(STREAM_MUSIC)` true, which **changes the
+   * failure mode** rather than only removing one: if the session is ever
+   * discarded for the other reason (playback not PLAYING), the key now moves
+   * the *phone's* volume instead of doing nothing.
+   *
+   * So it is opt-in. Turn it on when lock-screen volume over a remote device
+   * matters more than idle power — a cast-heavy music app — and leave it off
+   * otherwise. It takes no audio focus and does not touch your player.
+   *
+   * No-op on iOS, where the hardware buttons cannot be taken over at all.
+   */
+  holdLocalAudioSlot?: boolean
 }
 
 /** Which way a hardware volume key moved. See {@link MediaHandler.onAdjustDeviceVolume}. */

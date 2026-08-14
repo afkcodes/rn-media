@@ -1427,12 +1427,41 @@ not read about):**
   asymmetry the owner reported — foreground fine, screen off dead — is the
   shape of this bug, not a coincidence.
 
-  The escape hatch is in the same file and is the basis of any fix: when the
-  head uid goes **inactive**, `onPlaybackConfigChanged` promotes the first
+  The escape hatch is in the same file, and is what we shipped: when the head
+  uid goes **inactive**, `onPlaybackConfigChanged` promotes the first
   still-**active** uid to index 0. An app that keeps a local audio player
   active for the duration of the handoff therefore reclaims the head on its own
   as soon as the interfering sound ends. Nothing else in the public API moves
   that list.
+
+  **The fix: `RemotePlayback.holdLocalAudioSlot`, opt-in and OFF by default**
+  (owner decision, 2026-08-15). `LocalAudioSlot` holds a silent, looping,
+  zero-filled `AudioTrack` (`USAGE_MEDIA`, `MODE_STATIC` with
+  `setLoopPoints(…, -1)` so there is no writer thread and no periodic wakeup,
+  `PERFORMANCE_MODE_POWER_SAVING`) for exactly as long as a remote device is
+  published — started in the same `setRemotePlayback` hop that publishes it,
+  released in the hop that clears it and in every session teardown, so it can
+  never outlive the cast. It takes **no audio focus** (an `AudioTrack` never
+  requests any) and never touches the engine: mpv stays paused through the
+  handoff exactly as §25 has always said.
+
+  It is off by default for three reasons worth recording, because the easy
+  choice was to default it on:
+  - It keeps a real output — and the audio HAL — awake for the whole remote
+    session. That is measurable battery for a feature the user only notices
+    when they reach for the rocker.
+  - It contradicts this section's own "the engine is paused, nothing is
+    producing audio" framing. An app should opt into that contradiction
+    knowingly rather than inherit it.
+  - We refused the equivalent silent-audio trick on iOS. Shipping it on by
+    default here would be an inconsistency we would have to defend.
+
+  And it *changes* the residual failure mode rather than only removing one:
+  with the slot held, `isStreamActive(STREAM_MUSIC)` is true, so if the session
+  is discarded for the other documented reason (playback not PLAYING) the key
+  now moves the **phone's** volume instead of doing nothing. Both behaviours
+  are documented on the option. The example app opts in, because it exists to
+  demonstrate the library at full capability.
 
   **What #53 teaches about evidence.** The screen-off row above was true when
   it was measured and false an hour later, and nothing about the measurement

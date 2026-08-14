@@ -458,6 +458,17 @@ export function normalizeRemotePlayback(
       'remotePlayback.routingControllerId'
     )
   }
+  if (
+    remote.holdLocalAudioSlot !== undefined &&
+    typeof remote.holdLocalAudioSlot !== 'boolean'
+  ) {
+    throw invalidArgument(
+      `remotePlayback.holdLocalAudioSlot must be a boolean, got ` +
+        `${JSON.stringify(remote.holdLocalAudioSlot)}. It opts in to holding a ` +
+        `silent local audio output so the hardware volume keys keep reaching ` +
+        `the remote device with the screen off.`
+    )
+  }
 
   return {
     volume: remote.volume,
@@ -465,6 +476,9 @@ export function normalizeRemotePlayback(
     steps: remote.steps ?? DEFAULT_REMOTE_VOLUME_STEPS,
     volumeControl: remote.volumeControl ?? DEFAULT_REMOTE_VOLUME_CONTROL,
     routingControllerId: remote.routingControllerId,
+    // Off by default: it holds a real audio output open for the whole remote
+    // session (see `RemotePlayback.holdLocalAudioSlot` for the cost).
+    holdLocalAudioSlot: remote.holdLocalAudioSlot ?? false,
   }
 }
 

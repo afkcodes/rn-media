@@ -83,6 +83,13 @@ internal object MediaSessionController : CommandDispatcher {
   private var service: RnMediaMediaSessionService? = null
 
   /**
+   * Main thread only. Empty unless an app opted in through
+   * `RemotePlayback.holdLocalAudioSlot`; see [LocalAudioSlot] for why it exists
+   * and what it costs.
+   */
+  private val localAudioSlot = LocalAudioSlot()
+
+  /**
    * Main thread only. `true` between asking the OS for the service and the
    * service telling us it is gone, so a burst of `playing` broadcasts issues
    * one start, not twenty.
@@ -291,6 +298,10 @@ internal object MediaSessionController : CommandDispatcher {
       deferred.clear()
       revivalPending = false
       clearTrackEndLatch()
+      // Ending the session ends the remote output with it — a silent track
+      // outliving the thing it was holding a slot for would be a pure battery
+      // leak with nothing left to protect.
+      localAudioSlot.set(false)
       player?.releasePending()
       service?.releaseAndStop()
       // `service` is nulled by `detachService` when the OS actually destroys
@@ -364,6 +375,10 @@ internal object MediaSessionController : CommandDispatcher {
     main.post {
       val next = current.copy(remote = device)
       current = next
+      // Before the broadcast, so the slot is already held when the platform
+      // next re-reads its "last played locally" list — and released the instant
+      // remote playback is cleared, never outliving the session it belongs to.
+      localAudioSlot.set(shouldHoldLocalAudioSlot(device))
       player?.updateRemotePlayback(next)
     }
   }
@@ -735,6 +750,7 @@ internal object MediaSessionController : CommandDispatcher {
   fun discardRevival() {
     deferred.clear()
     revivalPending = false
+    localAudioSlot.set(false)
     player?.releasePending()
     player = null
     current = Snapshot.EMPTY

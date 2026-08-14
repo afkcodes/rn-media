@@ -278,6 +278,42 @@ adb shell dumpsys media_session | grep -A3 "Audio playback"
 swallowed. Verified on Android 16 (API 36); the same code is in
 `android15-release` and `main`.
 
+#### Opting out of condition 2: `holdLocalAudioSlot`
+
+The platform documents one escape, in the same file: when the head uid goes
+**inactive**, the first still-**active** uid is promoted to the head. So an app
+that keeps a local audio output active reclaims the slot as soon as the
+interfering sound ends.
+
+```ts
+service.setRemotePlayback({
+  volume: 0.4,
+  holdLocalAudioSlot: true, // hold a silent local output while remote plays
+})
+```
+
+This holds a silent, looping, zero-filled `AudioTrack` (`USAGE_MEDIA`,
+`MODE_STATIC` at the device's native sample rate, deep-buffer path where the HAL
+accepts it) for exactly as long as the remote playback is published — cleared
+with it, never leaked. No writer thread, no periodic wakeup. It takes no audio
+focus and never touches your player.
+
+Two honest side effects: while it runs the audio HAL never enters standby (an
+active track keeps the output powered — that is the battery cost, and no flag
+removes it), and if your app *loses* audio focus the track is faded out like any
+other `USAGE_MEDIA` player, so the slot is briefly given up while something else
+is audible. Both self-heal.
+
+**It is off by default, and that is deliberate.** It keeps a real audio output —
+and so the audio HAL — awake for the whole remote session, which is measurable
+battery for something the user only notices when they reach for the rocker. It
+also makes `AudioSystem.isStreamActive(STREAM_MUSIC)` true, which *changes* the
+remaining failure mode rather than only removing one: if the session is
+discarded for condition 1 (not PLAYING), the key now moves the **phone's**
+volume instead of doing nothing. Turn it on when lock-screen volume over a
+remote device matters more than idle power; leave it off otherwise. No-op on
+iOS, where the buttons cannot be taken over at all.
+
 ### Options, and their defaults
 
 | field | default | what it is for |
