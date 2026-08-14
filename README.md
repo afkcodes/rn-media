@@ -57,15 +57,20 @@ binds libmpv's client API directly, no bridge layer. Lineage: Flutter's
 | Sleep timer | ❌ a DIY guide (V5, commercial, ships one) | ❌ | ❌ | ✅ duration / end-of-track, with fade | ✅ native, duration + end-of-track (no fade) |
 | Spectrum visualizer | ❌ | ❌ | ❌ | ✅ | ✅ both platforms, no `RECORD_AUDIO` |
 | Crossfade | ❌ | ❌ | ❌ | ✅ | ❌ deliberately — built, listened to, dropped ([Limitations](#limitations)) |
-| Casting (Chromecast / AirPlay) | ✅ | ❌ | ❌ app-side | ✅ | ❌ deferred with a reason ([Limitations](#limitations)) |
+| Casting (Chromecast / AirPlay) | ❌ (V5, commercial: Chromecast/Android + AirPlay/iOS, platform-split) | ❌ | ❌ app-side | ✅ | ✅ Chromecast, both platforms — session handoff, receiver-side queue, live streams, exact-position continuity; Android device-verified, iOS built on the same official SDK with CI verification only, [below](#cast-to-a-speaker) |
 | Android Auto / CarPlay | ✅ | ❌ | ❌ | ✅ | 🚧 next feature ([Roadmap](#roadmap)) |
 | DRM (Widevine/FairPlay) | ⚠️ announced | ❌ | ✅ | not documented | ❌ libmpv cannot ([Limitations](#limitations)) |
 | Native binary it adds | ≈none (platform codecs) | ≈none | ≈none | — | 3.63 MB downloaded for `arm64-v8a`, ≈7.1 MB for the iOS device slice ([Requirements](#requirements)) |
 
 Every cell in the four competitor columns comes from that project's own
-documentation, read on 2026-08-12/13. The track-player column is **V4, the
-open-source baseline** — V5 is a commercial rewrite, and where it advertises
-something V4 lacks, the cell says so. Ours are linked to the section that proves
+documentation, read on 2026-08-12/13 (the Casting row re-verified 2026-08-14
+against rntp.dev, expo-audio's docs, react-native-video's own "no, use
+react-native-google-cast" answer on their tracker, and doublesymmetry/
+react-native-track-player's maintainer comment that cast support "was removed
+due to issues with React Native itself" and would return as a separate addon
+— it never shipped). The track-player column is **V4, the open-source
+baseline** — V5 is a commercial rewrite, and where it advertises something V4
+lacks, the cell says so. Ours are linked to the section that proves
 them. The sweet spot: music apps with **non-DRM audio** — indie catalogs,
 self-hosted libraries (Plex / Jellyfin / Subsonic), podcasts, radio, audiobooks.
 The row we pay for is the last one: a shipped engine costs megabytes that
@@ -485,6 +490,87 @@ The full story, including the honest edges:
 · [sleep timer](packages/media-session/README.md#sleep-timer-native)
 · [foreground-service lifecycle](packages/media-session/README.md#android).
 
+## Cast to a speaker
+
+Casting is a **URL handoff, not an output route**: mpv can never *be* the
+thing driving a Chromecast, so `@rn-media/cast` doesn't try — it pauses your
+local player, hands the receiver the same queue as a set of URLs, and lets
+the receiver fetch and decode them itself. The JS queue stays the single
+source of truth throughout the session: every surface — notification, lock
+screen, your own UI — keeps rendering from the exact same three broadcast
+channels `media-session` already gives you ([Show it on the lock
+screen](#show-it-on-the-lock-screen)), now mirroring the receiver instead of
+mpv. No second UI to build, no new fan-out path.
+
+```ts
+import { wireCastHandoff } from '@rn-media/cast';
+
+const handoff = wireCastHandoff(
+  {
+    // Structural — adapt YOUR player; nothing here imports @rn-media/player.
+    play: () => player.play(),
+    pause: () => player.pause(),
+    seekTo: (s) => player.seekTo(s),
+    skipToIndex: (i) => player.playlist.jumpTo(i, { autoPlay: false }),
+    getPosition: () => player.getPosition(),
+    isPlaying: () => player.state.playing,
+  },
+  {
+    // One coherent read of YOUR queue at handoff time.
+    snapshot: () => ({
+      items: queue.map((t) => ({
+        id: t.id, url: resolve(t), mimeType: t.mimeType,
+        metadata: { title: t.title, artist: t.artist, artworkUrl: t.artUrl },
+      })),
+      index: currentIndex,
+      position: player.getPosition(),
+      playWhenReady: player.state.playing,
+    }),
+    // While cast-active this is the ONLY truthful source for playbackState/
+    // mediaItem — `{ position, at, rate }` is an anchor: project, never poll.
+    onReceiverState: (s) => publishReceiverState(s),
+    onTransfer: ({ direction, position, itemIndex }) => log(direction), // one per handoff
+    onItemsSkipped: (skipped) => showCastNotice(skipped), // canCastMedia-filtered, typed reasons
+  }
+);
+
+await handoff.castTo(devices[0].id);  // or a platform picker starts the session —
+                                       // the Cast dialog, Android 13+'s system
+                                       // output switcher — same machine either way
+await handoff.stopCasting();          // transfer back to local at the receiver's position
+```
+
+`wireCastHandoff` lives in `@rn-media/cast`, not `media-session` —
+media-session stays player-agnostic and cast-free in both directions; the
+handoff talks to your player and queue through structural interfaces, the
+same discipline `wireAudioSession` uses.
+
+**Honest ceilings**, read before shipping:
+
+- Cast receivers decode less than mpv does — HE-/LC-AAC, MP3, FLAC (≤96 kHz/
+  24-bit), Opus, Vorbis, WAV, WebM; no ALAC, hi-res FLAC, WMA, DSD or
+  AC-3/DTS-as-audio. `canCastMedia(item)` answers per track so you grey out
+  the route instead of failing at load.
+- The receiver fetches the URL itself: no `file://`/`content://` sources in
+  v1 (a deliberate, documented decision), and the Default Media Receiver
+  cannot attach auth headers — signed-query URLs work; header auth needs your
+  own Web Receiver.
+- iOS: the `google-cast-sdk` pod raises your deployment floor to **16.0**;
+  the lock screen goes dormant during a session (the phone plays no audio —
+  an OS ceiling every cast app shares, not one of ours); the sender has never
+  run on a physical device, same as the rest of this library's iOS story
+  ([Limitations](#limitations)).
+- Android with no Google Play services resolves a typed `'unavailable'`,
+  never a crash.
+- Hardware volume keys driving the receiver's volume in the background is on
+  the roadmap, not shipped — they work today, foreground-only, and reaching
+  them from the lock screen needs a remote-playback media session.
+
+Live-stream handoff semantics, the receiver-queue reconciliation model, the
+full ceilings list and every device-found failure mode:
+[`@rn-media/cast`](packages/cast/README.md) ·
+[design doc](docs/design/cast.md).
+
 ## Shape the sound
 
 `setAudioFilters` compiles typed descriptors into mpv's own `af` grammar. Our
@@ -690,11 +776,19 @@ development build. [Plugin reference](packages/media-session/README.md#expo-conf
   process runs no timers — either mode's); armed while audio plays — the case
   that matters — it fires, because playing audio is exactly what keeps the
   process out of suspension.
-- **No casting, deferred with a reason.** media3's `CastPlayer` replaces our
-  engine with Google's, and there is no AirPlay path out of mpv at all — so a
-  casting feature here would be Android-shaped and would hand playback to a
-  different engine, which fails the parity gate this project is built on. Use the
-  Cast SDK app-side; AirPlay audio still works through normal iOS routing.
+- **Casting is Chromecast, both platforms — AirPlay-as-handoff stays out of
+  scope, honestly.** [`@rn-media/cast`](packages/cast/README.md) ships a
+  first-party sender binding, device-verified on Android
+  ([Cast to a speaker](#cast-to-a-speaker)); iOS is built on the same official
+  SDK but CI-verified only, the same honesty line the rest of this library's
+  iOS story already draws. No sender SDK exists for AirPlay from a
+  third-party engine like mpv, for anyone — the paid V5 competitor ships
+  around that by splitting the feature (Chromecast on Android, AirPlay on
+  iOS), exactly the platform-capped compromise this project's parity gate
+  rejects, so we did not follow it. **AirPlay audio output still works today,
+  with zero code**: it is a normal iOS system output route, the same picker
+  Bluetooth uses, and it carries whatever this library is already playing —
+  a different feature from a Chromecast-style handoff, and always was.
 - **No crossfade.** It was built, listened to on a device, and dropped by owner
   decision: mpv's gapless is an output-buffer guarantee, and the crossfade built
   on top of it was not good enough to ship. Loudness-aware fade points are
@@ -791,5 +885,5 @@ Next in the queue, owner-approved:
 Investigations rather than promises: output-device routing. Pitch control used
 to sit on this line, pending an LGPL filter path (rubberband is GPL and
 therefore banned) — it shipped instead with no filter at all, as
-`setPitch(ratio)` over mpv 0.41's first-class `--pitch`. Casting is deferred
-with the reason in [Limitations](#limitations).
+`setPitch(ratio)` over mpv 0.41's first-class `--pitch`. Casting shipped as
+first-party `@rn-media/cast` — see [Cast to a speaker](#cast-to-a-speaker).
