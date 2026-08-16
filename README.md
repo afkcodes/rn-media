@@ -457,7 +457,7 @@ listeners — is public when you want the policy yourself:
 
 | | |
 |---|---|
-| React Native | **>= 0.82** (New Architecture); developed against 0.86.2 |
+| React Native | **>= 0.82** (New Architecture); developed against 0.87.0 |
 | Peer dependency | [`react-native-nitro-modules`](https://nitro.margelo.com) |
 | Android setup | minSdk **24**, compileSdk **36**. Nothing to configure: the `media-session` manifest merges the foreground-service permissions and the `mediaPlayback` service, and `POST_NOTIFICATIONS` is *not* required for media notifications |
 | iOS setup | **15.1+** — `@rn-media/cast` raises the floor to **16.0** and needs **Xcode 26+** to build. One `Info.plist` key: `UIBackgroundModes` → `<array><string>audio</string></array>` |
