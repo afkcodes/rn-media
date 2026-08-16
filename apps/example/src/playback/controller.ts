@@ -332,6 +332,31 @@ export class Playback implements PlaybackCommands {
     }
     this.#transport.pause()
   }
+  /**
+   * The **remote** stop: stop playing, keep the session.
+   *
+   * Deliberately not {@link stop}. `MediaHandler.stop` is documented as
+   * "Release resources. Does NOT end background execution — call
+   * `stopService()` for that", and this app used to route it to the teardown
+   * anyway. On iOS that was a one-way door: the system replaces pause with a
+   * **stop** button for anything marked live (Apple's own behaviour — a live
+   * stream cannot be paused), so on a radio entry the destructive stop was the
+   * only transport control the lock screen offered, and pressing it removed
+   * the now-playing card with no path back — iOS has no resumption card to
+   * come back through.
+   *
+   * Casting keeps its own semantics: the receiver is paused rather than
+   * disconnected, since a stop that dropped the session would take the audio
+   * off the speaker entirely.
+   */
+  async stopPlayback(): Promise<void> {
+    if (this.#cast.owns) {
+      this.#cast.pause()
+      return
+    }
+    await this.#transport.stopPlayback()
+    this.#notify()
+  }
   toggle(): void {
     if (this.#cast.owns) {
       this.#cast.toggle()

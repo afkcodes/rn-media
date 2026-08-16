@@ -31,12 +31,65 @@ export class Transport {
     const player = this.#hooks.player()
     if (player === undefined) return
     this.#hooks.ensureSession()
-    if (await AudioSession.activate()) player.play()
-    else console.warn('[example] audio focus denied — not starting')
+    if (!(await AudioSession.activate())) {
+      console.warn('[example] audio focus denied — not starting')
+      return
+    }
+    // `play()` alone cannot resume a *stopped* player, and the library says so:
+    // `player.stop()` keeps the queue but leaves no entry current, so
+    // `playlist-pos` reads `-1` and `play()` only "flips `pause` with nothing
+    // playing". The way back in is `jumpTo`. Without this branch the lock
+    // screen's play button is dead after a remote stop — which on iOS is the
+    // *only* way a live stream can be stopped, because the system replaces
+    // pause with a stop button whenever `isLive` is set (see `stopPlayback`
+    // in `controller.ts`).
+    if (player.state.playlist.index < 0) {
+      // Nothing to re-enter: `jumpTo` is `playlist-play-index`, which is handed
+      // the index unvalidated, so an empty queue would send mpv a row that does
+      // not exist. A remote surface can reach `play` before anything is loaded.
+      const { count } = player.state.playlist
+      if (count === 0) return
+      await player.playlist.jumpTo(Math.min(this.#resumeIndex, count - 1))
+      return
+    }
+    player.play()
   }
 
   pause(): void {
     this.#hooks.player()?.pause()
+  }
+
+  /**
+   * Where {@link play} re-enters after a stop.
+   *
+   * Remembered on the way out rather than read on the way in, because by the
+   * time `play` runs the player has already forgotten: a stopped mpv reports
+   * `playlist.index === -1`, which is exactly the condition that sends `play`
+   * here.
+   *
+   * **Nothing downstream bounds it**, so `play` does: `playlist.jumpTo` passes
+   * the index straight to mpv's `playlist-play-index`, with no validation in
+   * the library and no clamp in mpv. A queue that shrank while playback was
+   * stopped, or a remote `play` arriving before anything was ever loaded,
+   * would otherwise name a row that does not exist.
+   */
+  #resumeIndex = 0
+
+  /**
+   * Stop playback and unload, **keeping the queue and the media session**.
+   *
+   * This is the library's documented `stop` — "Release resources. Does NOT end
+   * background execution — call `stopService()` for that" — and it is what a
+   * remote surface's stop button must reach. Ending the session instead is the
+   * app's own "stop & dismiss notification" affordance, and routing a remote
+   * stop there made the iOS lock-screen card unrecoverable.
+   */
+  async stopPlayback(): Promise<void> {
+    const player = this.#hooks.player()
+    if (player === undefined) return
+    const index = player.state.playlist.index
+    if (index >= 0) this.#resumeIndex = index
+    await player.stop()
   }
 
   toggle(): void {
