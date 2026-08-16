@@ -778,6 +778,65 @@ suppresses, replays or undoes an event.
   typed options (`userAgent`, `cacheSecs`, `prefetchPlaylist`, `replayGain`,
   `networkReconnect`), then whatever you put in `mpvOptions`.
 
+## Platform parity
+
+Every public member of this package behaves identically on Android and iOS
+except the three rows below. There is no member that exists on one platform and
+quietly does nothing on the other — where a platform genuinely cannot, it is
+named here and in the TSDoc.
+
+**Why the surface is symmetric by construction.** Playback, the queue, filters,
+EQ, ReplayGain, prefetch, the source resolver, the visualizer and the whole
+error taxonomy live in one shared C++ core over libmpv's client API. There is
+no `#if defined(__APPLE__)`, no `#ifdef __ANDROID__` and no `Platform.OS` in the
+playback path, and the core sets no `ao=` at all — each platform's libmpv has
+exactly one audio output compiled in (`audiotrack` on Android, `audiounit` on
+iOS), so mpv picks the only one there is. The two binary forks are configured
+against each other on every release: **103 mpv options each, 101 identical, and
+the only two that differ are those audio outputs**; the 17 audio filters the EQ
+and loudness APIs compile to, the PCM-tap patch the visualizer needs and the
+prefetch-hook patch `prefetchStarted` needs are the same patch files in both
+(see `android/libmpv.gradle` and `ios/libmpv.pin`, which carry the pinned tags
+and SHA-256s, and ARCHITECTURE §11).
+
+| Member | Android | iOS | Verdict |
+|---|---|---|---|
+| `getScreenStateSource().interactive` and its subscription | `PowerManager.isInteractive()` + `ACTION_SCREEN_ON`/`OFF` | constant `true`, subscription never fires | **ceiling** |
+| Background playback setup | nothing to add | `UIBackgroundModes: audio` in your `Info.plist` | **setup differs** |
+| `content://` sources | not playable | n/a (iOS has no equivalent scheme) | **gap** |
+
+- **The display-state signal has no iOS half, and answering `true` is the
+  honest implementation.** It exists because on Android `AppState` and "is the
+  display on" are different facts — a measured MIUI soak flapped `AppState` back
+  to `active` with the screen off and burned 65-80 % of a core drawing a
+  spectrum nobody could see. On iOS the two are the same fact by construction:
+  locking the device resigns active state and moves the app to the background,
+  which `AppState` already reports, and there is no public API for the display's
+  power state (`UIScreen` exposes `brightness`, not on/off). So
+  `useVisualizer` ANDs `AppState` with this signal on both platforms, and on iOS
+  the second input is a constant that changes nothing. Nothing else in the
+  package reads it. See `src/specs/screen-state.nitro.ts`.
+- **Background audio is an iOS-only setup step.** Neither package touches your
+  `Info.plist`; add the `audio` background mode yourself, or install
+  `@rn-media/media-session`, whose Expo plugin merges it. On Android this
+  package's `AndroidManifest.xml` is deliberately empty: it merges **no**
+  permissions into your app — in particular no `RECORD_AUDIO`, because the
+  visualizer taps mpv rather than `android.media.audiofx.Visualizer`. The one
+  permission network playback needs, `android.permission.INTERNET`, is yours to
+  declare; the React Native app template already does, so this only bites a
+  manifest someone has trimmed.
+- **`content://` URIs are not playable.** Android's storage picker hands back a
+  `content://` URI, and neither libmpv nor FFmpeg has a handler for that scheme,
+  so `load()` fails with a typed `load-failed` — an honest failure, not a silent
+  one, but a real gap against iOS, where a document picker hands back a file URL
+  that plays. Copy the file, or resolve it to a path, until this is closed.
+  Everything else — `https://`, `file://` and absolute paths — behaves the same
+  on both platforms.
+- **Verification is not symmetric either.** The Android engine and player are
+  device-verified (Poco F4, AOSP); the iOS half is verified by CI plus
+  inspection of the shipped `Mpv.xcframework`, and CI builds the simulator slice
+  only. See ARCHITECTURE §11.
+
 ## Credits
 
 Bootstrapped with [create-nitro-module](https://github.com/patrickkabwe/create-nitro-module).

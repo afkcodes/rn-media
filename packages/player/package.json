@@ -27,7 +27,7 @@
   ],
   "files": [
     "src",
-    "react-native.config.js",
+    "!src/__tests__",
     "lib",
     "nitrogen",
     "cpp",

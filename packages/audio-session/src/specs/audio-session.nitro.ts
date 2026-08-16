@@ -115,6 +115,9 @@ export interface AndroidAudioSessionConfig {
    * `true` opts out of the system's automatic ducking so we receive
    * `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` ourselves — this is what makes the
    * `speech` preset pause instead of duck.
+   *
+   * **No iOS equivalent exists** — see {@link AudioInterruptionType}. On iOS the
+   * `speech` preset is ducked by the system like any other audio.
    */
   willPauseWhenDucked: boolean
 }
@@ -140,18 +143,41 @@ export interface AudioSessionConfig {
 /**
  * What the app is being asked to do for the duration of an interruption.
  *
- * - `duck` — Android `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK`. Never emitted on
- *   iOS: AVAudioSession has no "duck me" interruption.
+ * - `duck` — Android `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK`, and only when the
+ *   config sets {@link AndroidAudioSessionConfig.willPauseWhenDucked}.
  * - `pause` — Android `AUDIOFOCUS_LOSS` / `AUDIOFOCUS_LOSS_TRANSIENT`, and
  *   every iOS `AVAudioSession.InterruptionType.began`.
+ *
+ * **Platform asymmetry — `duck` is never emitted on iOS.** This is a platform
+ * ceiling, not a gap: `AVAudioSession.InterruptionType` has exactly two cases,
+ * `.began` and `.ended`
+ * (https://developer.apple.com/documentation/avfaudio/avaudiosession/interruptiontype),
+ * and there is no notification anywhere in AVFAudio for "another session is
+ * ducking you". Ducking on iOS is applied *by the system, to your audio*, when
+ * another app activates a session carrying `.duckOthers` — your app is not told
+ * and does not act. The audible outcome therefore matches Android's default
+ * (`willPauseWhenDucked: false`, where the platform also ducks you without a
+ * callback, API 26+); what iOS cannot offer is Android's *opt-out*, i.e. "tell
+ * me instead so I can pause". An app whose content is speech gets the pause
+ * behaviour on Android and system ducking on iOS.
  */
 export type AudioInterruptionType = 'duck' | 'pause'
 
 /**
  * Unified route-change reason.
  *
- * Values mirror `AVAudioSession.RouteChangeReason`. Android only ever produces
- * `newDeviceAvailable` / `oldDeviceUnavailable` (from `AudioDeviceCallback`).
+ * Values mirror `AVAudioSession.RouteChangeReason`.
+ *
+ * **Platform asymmetry — Android only ever produces `newDeviceAvailable` /
+ * `oldDeviceUnavailable`.** A ceiling, not a gap: Android has no
+ * route-change notification. The nearest platform signal is
+ * `AudioManager.registerAudioDeviceCallback`, whose entire surface is
+ * `onAudioDevicesAdded` / `onAudioDevicesRemoved`
+ * (https://developer.android.com/reference/android/media/AudioDeviceCallback),
+ * so the other six reasons have no source to come from. `categoryChange`,
+ * `routeOverride`, `wakeFromSleep`, `noSuitableRouteForCategory` and
+ * `routeConfigurationChange` are iOS-only values; `unknown` is reachable on iOS
+ * only (an `AVAudioSession.RouteChangeReason` this build does not recognise).
  *
  * NOTE: `routeOverride` is Apple's `.override`, renamed to keep the generated
  * Swift enumerator (`.override`) away from Swift's `override` modifier.
@@ -186,12 +212,26 @@ export interface NativeInterruptionEvent {
    *
    * iOS: `AVAudioSession.InterruptionOptions.shouldResume`.
    * Android: `true` for `AUDIOFOCUS_GAIN` after a transient loss.
+   *
+   * On both platforms this means "the system permits resuming", never "you were
+   * playing" — see `AudioSessionPlayerLike.isPlaying` in `src/wire.ts`.
    */
   shouldResume: boolean
   /**
-   * Only meaningful when {@link begin} is `true`. `true` when focus is gone for
-   * good (Android `AUDIOFOCUS_LOSS`). Always `false` on iOS, where every
-   * interruption may be followed by an `.ended` notification.
+   * Only meaningful when {@link begin} is `true`. `true` when the session is
+   * gone for good and no `begin: false` event is coming.
+   *
+   * - Android: `AUDIOFOCUS_LOSS`.
+   * - iOS: a media-services failure
+   *   (`AVAudioSession.mediaServicesWereLostNotification` /
+   *   `mediaServicesWereResetNotification`), which destroys the session's
+   *   configuration and is the one iOS condition with no `.ended` to follow.
+   *
+   * **Platform asymmetry — an ordinary iOS interruption is never `permanent`.**
+   * A ceiling: `AVAudioSession.InterruptionType.began` carries no permanence
+   * information at all, and whether the interruption is recoverable is only
+   * knowable later, from `.shouldResume` on the `.ended` notification. Android
+   * says so up front; iOS cannot.
    */
   permanent: boolean
 }
@@ -227,20 +267,48 @@ export interface RnMediaAudioSession extends HybridObject<{
   /**
    * Apply `config` to the OS session.
    *
-   * iOS: `setCategory(_:mode:options:)` + `setRouteSharingPolicy`, and installs
-   * the interruption/route-change observers.
-   * Android: stores the `AudioAttributes` + focus gain used by the next
+   * iOS: `setCategory(_:mode:options:)` (or the `policy:` overload when
+   * {@link IosAudioSessionConfig.routeSharingPolicy} is set) — **applied
+   * immediately**, and remembered so it can be replayed after a media-services
+   * reset.
+   * Android: stores the `AudioAttributes` + focus gain used by the *next*
    * {@link activate}.
+   *
+   * **Platform asymmetry — when the config takes effect.** On iOS the category
+   * is a property of the session and changing it is a live operation. On
+   * Android there is no session object to mutate: `AudioAttributes` and the
+   * focus gain are constructor arguments of an `AudioFocusRequest`, which only
+   * exists as an argument to `requestAudioFocus`
+   * (https://developer.android.com/reference/android/media/AudioFocusRequest).
+   * So calling `configure()` while already active changes the live session on
+   * iOS and takes effect on the next `activate()` on Android. Configure before
+   * activating — which both presets and every example do — and the two agree.
+   *
+   * Rejects on iOS if `setCategory` fails (a category/mode/option combination
+   * the device does not support). Cannot reject on Android: nothing is called.
    */
   configure(config: AudioSessionConfig): Promise<void>
 
   /**
    * Request the session.
    *
-   * iOS: `setActive(true)` — resolves `false` if the OS refuses.
-   * Android: `requestAudioFocus`, resolves `true` only for
-   * `AUDIOFOCUS_REQUEST_GRANTED`. Also registers the becoming-noisy receiver
-   * and the audio-device callback.
+   * Resolves `true` when the app may start playing and `false` when the OS
+   * refused. It never resolves `false` for a programming error — those reject.
+   *
+   * - Android: `requestAudioFocus`; `true` only for
+   *   `AUDIOFOCUS_REQUEST_GRANTED`.
+   * - iOS: `setActive(true)`; `false` for the four `AVAudioSessionErrorCode`s
+   *   that mean "the system declined" — `cannotStartPlaying` (`'!pla'`),
+   *   `cannotInterruptOthers` (`'!int'`, a backgrounded non-mixable app that is
+   *   not the Now Playing app), `insufficientPriority` (`'!pri'`, another app
+   *   such as Phone is controlling audio) and `siriIsRecording` (`'siri'`).
+   *   Everything else (`badParam`, `incompatibleCategory`,
+   *   `missingEntitlement`, `mediaServicesFailed`, …) rejects.
+   *
+   * Also arms the platform listeners: on Android the focus listener, the
+   * becoming-noisy receiver and the audio-device callback; on iOS the
+   * `AVAudioSession` notification observers (which are also armed by
+   * {@link configure} and by adding any listener).
    */
   activate(): Promise<boolean>
 
@@ -248,19 +316,54 @@ export interface RnMediaAudioSession extends HybridObject<{
    * Give the session back.
    *
    * iOS: `setActive(false, options: .notifyOthersOnDeactivation)`.
-   * Android: `abandonAudioFocusRequest` + unregisters the becoming-noisy
-   * receiver and the audio-device callback.
+   * Android: `abandonAudioFocusRequest`.
+   *
+   * Listeners are **not** removed: subscriptions outlive activation on both
+   * platforms (see {@link addBecomingNoisyListener}).
+   *
+   * **Platform asymmetry — this can reject on iOS and cannot on Android.**
+   * `setActive(false)` fails with `AVAudioSessionErrorCode.isBusy` (`'!act'`)
+   * when the app "attempted to set its audio session inactive … but it is still
+   * actively playing and/or recording"
+   * (`CoreAudioTypes.framework/Headers/AudioSessionTypes.h`). Stop the player
+   * first. `AudioManager.abandonAudioFocusRequest` has no comparable failure.
    */
   deactivate(): Promise<void>
 
+  /**
+   * Observe interruptions.
+   *
+   * **Delivery window.** iOS delivers from the moment the observer exists —
+   * adding a listener installs it — whether or not the session was ever
+   * activated. Android delivers only while a focus request is outstanding,
+   * because `AudioManager.OnAudioFocusChangeListener` is a field of the
+   * `AudioFocusRequest` and the system has nobody to call before
+   * `requestAudioFocus`
+   * (https://developer.android.com/media/optimize/audio-focus). In practice
+   * every app activates before it plays, and no interruption is meaningful to
+   * an app that holds no focus.
+   */
   addInterruptionListener(
     listener: (event: NativeInterruptionEvent) => void
   ): number
   removeInterruptionListener(listenerId: number): void
 
+  /**
+   * Observe "the output the user was listening on went away" — Android's
+   * `ACTION_AUDIO_BECOMING_NOISY`, iOS's `oldDeviceUnavailable` route change.
+   *
+   * Delivered from the moment the listener is added on both platforms: the
+   * Android `BroadcastReceiver` and the iOS notification observer are derived
+   * from the listener set, not from {@link activate}.
+   */
   addBecomingNoisyListener(listener: () => void): number
   removeBecomingNoisyListener(listenerId: number): void
 
+  /**
+   * Observe output-route changes. Same delivery window as
+   * {@link addBecomingNoisyListener}; see {@link AudioRouteChangeReason} for
+   * which reasons each platform can produce.
+   */
   addRouteChangeListener(
     listener: (event: NativeRouteChangeEvent) => void
   ): number
