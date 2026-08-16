@@ -1714,8 +1714,83 @@ on Android. That is the ownership contract, not a regression, and an app that
 wants the old behaviour can pass `audiounit-skip-session-management=no` through
 the player's own options, which are applied after these defaults.
 
+### 27. The parity audit, and the bug class it is named after
+
+Parity is a gate, so on 2026-08-16 every public member of all four packages was
+read against **the actual Kotlin and the actual Swift** — one audit per surface.
+The rule was that TSDoc is a claim, not evidence, and that a "ceiling" without a
+citation is not a ceiling but an uninvestigated gap. Eight defects fell out, and
+they share a shape worth naming.
+
+**The silent no-op**: an API that exists in the TS surface, compiles on both
+platforms, and does nothing on one. It passes typecheck, passes CI, passes
+review, and is invisible until someone runs the app on the platform that does
+not implement it. It has now appeared in three of four packages:
+
+- **audio-session, iOS** — `installObservers()` was reachable only from
+  `configure()`, so `wireAudioSession(player)` with no preset (a call the TSDoc
+  explicitly invites) registered *zero* notification observers: no
+  interruptions, no route changes, no headphone unplug, forever. Observers are
+  now derived from interest — `configure`, `activate`, or any `add*Listener`.
+- **audio-session, Android** — the mirror image: the becoming-noisy receiver and
+  `AudioDeviceCallback` lived strictly between `activate()` and `deactivate()`,
+  and the `AUDIOFOCUS_LOSS` handler tore them down permanently, so after one
+  permanent loss an app never heard a headphone unplug again. Registration is
+  now the union of "we hold focus" and "somebody subscribed".
+- **media-session, iOS** — `publishNowPlayingInfo` bailed out when there was no
+  `setMediaItem`, so the queue was never consulted. A `setQueue` + `queueIndex`
+  broadcast (what `QueueHandler` emits before a track is prepared) produced a
+  blank lock screen on iOS and a correct notification on Android, and a sparse
+  item over a rich queue entry dropped the artist and artwork on iOS only.
+  **Our own TSDoc had documented the merge as the contract: the documentation
+  was true on one platform.** `ios/NowPlayingItem.swift` is now a line-for-line
+  twin of the Kotlin resolver, mismatch rule included, and the JVM test table
+  is what pins the two together.
+- **media-session, iOS** — media3 answers both the on-screen fast-forward button
+  and an accessory's FF key from one command; MediaPlayer splits them into a
+  drawn button and an accessory scan, and only the button was bound. The
+  Bluetooth/car-head-unit key was dead on iOS and live on Android.
+- **cast, iOS** — `addMediaErrorListener` was registered and unfirable, because
+  `GCKRemoteMediaClientListener` reports no errors at all.
+
+Two more were *not* no-ops but genuine divergences of the same family, and both
+are worse than a missing feature:
+
+- **A crash.** Kotlin's `Double.toInt()` is total; Swift's `UInt(_: Double)`
+  **traps** on NaN, infinity and negatives. Every queue id and index originates
+  in JS, where all three are expressible, so `queueJumpTo(NaN)` was a typed
+  rejection on Android and a process crash on iOS. Both sides now fold nonsense
+  to the invalid-item id the SDKs already define, and clamp finite overflow
+  rather than wrapping onto a different, real queue item.
+- **A hang.** Android bounds every `PendingResult` at 10 s; `GCKRequest` has no
+  timeout at all, so the same call could hang forever on iOS where Android
+  surfaces a typed `TIMEOUT`.
+
+And one bug was found *by* the audit rather than in it: cast's error latch was
+set but never checked on Android, so a status-then-callback ordering emitted two
+`error` events for one failure — which, in the `handoff-to-cast` phase, is two
+fallbacks to local. The de-dupe now lives in one place with first-wins
+semantics, re-armed when playback leaves idle.
+
+**What the audit did not change is as important.** The player came out clean:
+there is no `#if defined(__APPLE__)` in `cpp/`, no `Platform.OS` in `src/`, and
+the core sets no `ao=` at all — each fork compiles exactly one audio output, so
+mpv picks the only one present. Parity there is a property of the build, not of
+vigilance, which is precisely why it held. Every ceiling that survived carries
+its citation, and each is stated on the member a caller will actually reach —
+because the failure mode this whole exercise is about is discovering a no-op at
+runtime.
+
 ## Platform truths we build around (learned, verified)
 
+- **`UInt(_: Double)` traps in Swift where `Double.toInt()` is total in
+  Kotlin.** NaN, infinity and negatives all reach native code from JS, so the
+  same argument that yields a typed rejection on Android crashes the process on
+  iOS. Any `Double` crossing the bridge into an unsigned native type needs an
+  explicit fold, not a cast (§27).
+- **`GCKRequest` has no timeout**, while media3's `PendingResult` accepts one.
+  An unbounded request is a hang on one platform and a typed error on the other
+  (§27).
 - **JS timers freeze in background** without an Activity (JavaTimerManager
   gates on lifecycle + headless tasks; Samsung freezes them even with one —
   RN #56324). Nothing timing-critical may live in JS. The consequence is not
