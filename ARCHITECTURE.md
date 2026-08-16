@@ -1724,6 +1724,26 @@ the player's own options, which are applied after these defaults.
   a bug that only appears with the screen off.
 - **An unhandled JS exception destroys the whole runtime** (default
   ReactHostDelegate rethrows). All handler dispatch is wrapped.
+- **iOS replaces pause with STOP for anything marked live**, whatever the app
+  advertises. Setting `MPNowPlayingInfoPropertyIsLiveStream` — which
+  `publishNowPlayingInfo` does for every item with no duration, not just an
+  explicit `isLive` — makes the system draw a stop button in the pause slot on
+  the Lock Screen, in Control Center and on CarPlay's `NowPlayingTemplate`,
+  "even when configured for play and pause button only" (Apple DTS, forums
+  thread 663795). It is deliberate: a live stream cannot be paused. The
+  consequence is a trap rather than a cosmetic difference — on a live entry
+  **`MediaHandler.stop` is the only transport a remote surface can reach**, so
+  a `stop` wired to teardown is a one-way door. iOS has no resumption card to
+  come back through (§26 and `setResumptionSnapshot`'s "Android-only, and
+  deliberately not emulated"), so the now-playing card simply vanishes. This is
+  why `MediaHandler.stop` is documented as "Release resources. Does NOT end
+  background execution — call `stopService()` for that": an app that routes it
+  to `stopService()` ships a dead lock screen on every radio station. The
+  example app did exactly that until 2026-08-16; its remote stop now unloads via
+  `player.stop()` (queue kept) and its `play` re-enters with `jumpTo`, because
+  a stopped mpv reports `playlist.index === -1` and `play()` alone cannot
+  resume from there. Regression test:
+  `apps/example/src/playback/__tests__/transport.test.ts`.
 - **CocoaPods `exclude_files` applies to *every* attribute including
   `vendored_frameworks`** — a `dir/**/*` guard pattern silently de-linked all
   ten libmpv frameworks. Exclusions must name compilable extensions.
