@@ -16,7 +16,16 @@ import type { VisualizerFrame, VisualizerOptions } from '../visualizer'
  * on an indeterminate value would strand the visualizer until the next
  * `AppState` change, which on Android is the *next* time the user leaves.
  */
-function isForeground(status: AppStateStatus | null | undefined): boolean {
+// `string`, not `AppStateStatus`, on purpose. React Native 0.87 made the Strict
+// TypeScript API the default, and its generated types declare
+// `AppState.currentState: null | undefined | string`
+// (react-native/types_generated/Libraries/AppState/AppState.d.ts) — the old
+// hand-maintained types narrowed it to the union, but the Flow source has
+// always typed it `?string` and the runtime really can hand back a platform
+// state outside the union. Accepting `string` keeps the honest type at the
+// `currentState` call sites while still accepting an `AppStateStatus` from the
+// 'change' listener, and the comparisons below are correct for any string.
+function isForeground(status: AppStateStatus | string | null | undefined): boolean {
   return status !== 'background' && status !== 'inactive'
 }
 
