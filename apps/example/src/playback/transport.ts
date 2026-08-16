@@ -44,7 +44,12 @@ export class Transport {
     // pause with a stop button whenever `isLive` is set (see `stopPlayback`
     // in `controller.ts`).
     if (player.state.playlist.index < 0) {
-      await player.playlist.jumpTo(this.#resumeIndex)
+      // Nothing to re-enter: `jumpTo` is `playlist-play-index`, which is handed
+      // the index unvalidated, so an empty queue would send mpv a row that does
+      // not exist. A remote surface can reach `play` before anything is loaded.
+      const { count } = player.state.playlist
+      if (count === 0) return
+      await player.playlist.jumpTo(Math.min(this.#resumeIndex, count - 1))
       return
     }
     player.play()
@@ -60,7 +65,13 @@ export class Transport {
    * Remembered on the way out rather than read on the way in, because by the
    * time `play` runs the player has already forgotten: a stopped mpv reports
    * `playlist.index === -1`, which is exactly the condition that sends `play`
-   * here. Clamped to a real row by `jumpTo` itself.
+   * here.
+   *
+   * **Nothing downstream bounds it**, so `play` does: `playlist.jumpTo` passes
+   * the index straight to mpv's `playlist-play-index`, with no validation in
+   * the library and no clamp in mpv. A queue that shrank while playback was
+   * stopped, or a remote `play` arriving before anything was ever loaded,
+   * would otherwise name a row that does not exist.
    */
   #resumeIndex = 0
 
