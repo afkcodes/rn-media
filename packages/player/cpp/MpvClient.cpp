@@ -46,8 +46,17 @@ constexpr const char* kAudioOnlyDefaults[][2] = {
 ///    forced to `.moviePlayback` — after which CoreAudio refused the output
 ///    client (`AQIONode.cpp: is NOT Now Playing eligible`) and iOS showed no
 ///    Lock Screen / Control Center card, however correct
-///    `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` were. Verified on
-///    an iPhone 17 Pro and the iOS 26.2 simulator, 2026-08-16.
+///    `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` were.
+///
+/// What is proven, and what is not (2026-08-16, iPhone 17 Pro + iOS 26.2
+/// simulator — this project's first on-device iOS run): the clobber is proven
+/// from the shipped `Mpv.framework` itself (`nm -u` lists
+/// `_AVAudioSessionCategoryPlayback` and `_AVAudioSessionModeMoviePlayback`;
+/// the policy-carrying setter appears zero times), and the missing card was
+/// observed on the device. That this option *restores* the card is **not**
+/// confirmed: the simulator's `AVAudioSession` is a shim that reports the
+/// client ineligible either way, so only a device run of the fixed build can
+/// close it. See ARCHITECTURE §26, which carries the same caveat.
 ///
 /// Tolerated rather than required (see `setOptionIfKnown`): the option only
 /// exists on a libmpv carrying patch 007, and a player that refuses to be
