@@ -11,6 +11,24 @@ React Native audio player built on libmpv, powered by Nitro Modules.
 - React Native **v0.82.0 or higher** (New Architecture only)
 - Node 18.0.0 or higher
 
+> **iOS: this player does not configure `AVAudioSession`, on purpose.** The
+> session is a process-wide singleton, and it belongs to
+> [`@rn-media/audio-session`](../audio-session/README.md) — the same split as
+> Android, where this player requests no audio focus and that package requests
+> all of it. The engine is told to keep its hands off
+> (`audiounit-skip-session-management`), because stock mpv reconfigures the
+> session on *every* playback start and would otherwise always win: it resets
+> the route-sharing policy and forces `.moviePlayback`, after which CoreAudio
+> refuses the output client and iOS shows **no Lock Screen or Control Center
+> card at all** (ARCHITECTURE §26).
+>
+> The practical consequence: an app that uses this package **without**
+> `@rn-media/audio-session` (or its own session code) gets the process default
+> category rather than `.playback`, which on iOS is the difference between
+> playing in the background and not. Configure a session, or pass
+> `audiounit-skip-session-management=no` in `Player.create`'s options to hand
+> the job back to the engine — caller options are applied after these defaults.
+
 ## Installation
 
 ```bash

@@ -110,6 +110,30 @@ describe('Transport.play after a stop', () => {
     expect(player.playlist.jumpTo).not.toHaveBeenCalled()
   })
 
+  it('does nothing when the queue is empty rather than naming a missing row', async () => {
+    // `jumpTo` is `playlist-play-index` with the index passed through
+    // unvalidated — neither the library nor mpv clamps it — and a remote
+    // surface can reach `play` before anything has been loaded.
+    const { player, calls } = fakePlayer(-1)
+    player.state.playlist.count = 0
+
+    await transportFor(player).play()
+
+    expect(calls).toEqual([])
+    expect(player.playlist.jumpTo).not.toHaveBeenCalled()
+  })
+
+  it('clamps to the last row when the queue shrank while stopped', async () => {
+    const { player, calls } = fakePlayer(4)
+    const transport = transportFor(player)
+
+    await transport.stopPlayback() // remembers 4
+    player.state.playlist.count = 2 // …and then the queue lost three entries
+    await transport.play()
+
+    expect(calls).toEqual(['stop', 'jumpTo(1)'])
+  })
+
   it('does not start anything when the audio session is refused', async () => {
     h.activate.mockResolvedValue(false)
     const { player, calls } = fakePlayer(3)
