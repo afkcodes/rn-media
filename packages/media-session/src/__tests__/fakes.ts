@@ -6,6 +6,7 @@ import type {
   NativeRemotePlayback,
   NativeSleepTimerState,
   RnMediaMediaSession,
+  SessionErrorCode,
   SleepTimerMode,
 } from '../specs/media-session.nitro'
 import type {
@@ -14,6 +15,7 @@ import type {
   MediaRepeatMode,
   PlaybackState,
   RemoteVolumeDirection,
+  SessionError,
 } from '../types'
 
 /**
@@ -197,6 +199,14 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
     }
     return this.handlers
   }
+
+  /**
+   * Play the part of native reporting a failure nobody was waiting on — a
+   * refused foreground service, an artwork download that came back empty.
+   */
+  emitSessionError(code: SessionErrorCode, message = 'something failed'): void {
+    this.emit().onSessionError(code, message)
+  }
 }
 
 /** Records every handler call, in order, with its arguments. */
@@ -261,6 +271,12 @@ export class RecordingHandler implements MediaHandler {
   }
   onPlaybackResumption() {
     return this.record('onPlaybackResumption')
+  }
+  /** Every session error, in order — the payload, not just the call. */
+  readonly sessionErrors: SessionError[] = []
+  onSessionError(error: SessionError) {
+    this.sessionErrors.push(error)
+    return this.record(`onSessionError(${error.code})`)
   }
   customAction(name: string, extras?: Record<string, unknown>) {
     return this.record(

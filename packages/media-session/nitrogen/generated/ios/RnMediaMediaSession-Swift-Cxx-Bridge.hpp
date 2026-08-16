@@ -30,6 +30,8 @@ namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 // Forward declaration of `RemoteVolumeControl` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; }
+// Forward declaration of `SessionErrorCode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class SessionErrorCode; }
 // Forward declaration of `SleepTimerMode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 
@@ -49,6 +51,7 @@ namespace RnMediaMediaSession { class HybridRnMediaMediaSessionSpec_cxx; }
 #include "NativeRemotePlayback.hpp"
 #include "NativeSleepTimerState.hpp"
 #include "RemoteVolumeControl.hpp"
+#include "SessionErrorCode.hpp"
 #include "SleepTimerMode.hpp"
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/PromiseHolder.hpp>
@@ -295,6 +298,28 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
   Func_void_std__string_std__string create_Func_void_std__string_std__string(void* NON_NULL swiftClosureWrapper) noexcept;
   inline Func_void_std__string_std__string_Wrapper wrap_Func_void_std__string_std__string(Func_void_std__string_std__string value) noexcept {
     return Func_void_std__string_std__string_Wrapper(std::move(value));
+  }
+  
+  // pragma MARK: std::function<void(SessionErrorCode /* code */, const std::string& /* message */)>
+  /**
+   * Specialized version of `std::function<void(SessionErrorCode, const std::string&)>`.
+   */
+  using Func_void_SessionErrorCode_std__string = std::function<void(SessionErrorCode /* code */, const std::string& /* message */)>;
+  /**
+   * Wrapper class for a `std::function<void(SessionErrorCode / * code * /, const std::string& / * message * /)>`, this can be used from Swift.
+   */
+  class Func_void_SessionErrorCode_std__string_Wrapper final {
+  public:
+    explicit Func_void_SessionErrorCode_std__string_Wrapper(std::function<void(SessionErrorCode /* code */, const std::string& /* message */)>&& func): _function(std::make_unique<std::function<void(SessionErrorCode /* code */, const std::string& /* message */)>>(std::move(func))) {}
+    inline void call(int code, std::string message) const noexcept {
+      _function->operator()(static_cast<SessionErrorCode>(code), message);
+    }
+  private:
+    std::unique_ptr<std::function<void(SessionErrorCode /* code */, const std::string& /* message */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_void_SessionErrorCode_std__string create_Func_void_SessionErrorCode_std__string(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_void_SessionErrorCode_std__string_Wrapper wrap_Func_void_SessionErrorCode_std__string(Func_void_SessionErrorCode_std__string value) noexcept {
+    return Func_void_SessionErrorCode_std__string_Wrapper(std::move(value));
   }
   
   // pragma MARK: std::vector<MediaControl>

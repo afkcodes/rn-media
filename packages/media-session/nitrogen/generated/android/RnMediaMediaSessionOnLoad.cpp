@@ -21,6 +21,7 @@
 #include "JFunc_void_MediaRepeatMode.hpp"
 #include "JFunc_void_bool.hpp"
 #include "JFunc_void_std__string_std__string.hpp"
+#include "JFunc_void_SessionErrorCode_std__string.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 
 namespace margelo::nitro::rnmediamediasession {
@@ -51,6 +52,7 @@ void registerAllNatives() {
   margelo::nitro::rnmediamediasession::JFunc_void_MediaRepeatMode_cxx::registerNatives();
   margelo::nitro::rnmediamediasession::JFunc_void_bool_cxx::registerNatives();
   margelo::nitro::rnmediamediasession::JFunc_void_std__string_std__string_cxx::registerNatives();
+  margelo::nitro::rnmediamediasession::JFunc_void_SessionErrorCode_std__string_cxx::registerNatives();
 
   // Register Nitro Hybrid Objects
   HybridObjectRegistry::registerHybridObjectConstructor(

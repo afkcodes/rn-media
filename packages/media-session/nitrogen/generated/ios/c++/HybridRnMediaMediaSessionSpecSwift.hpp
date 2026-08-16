@@ -22,6 +22,8 @@ namespace margelo::nitro::rnmediamediasession { struct IosMediaSessionConfig; }
 namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
 // Forward declaration of `MediaRepeatMode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
+// Forward declaration of `SessionErrorCode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class SessionErrorCode; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
 // Forward declaration of `MediaPlaybackStatus` to properly resolve imports.
@@ -55,6 +57,7 @@ namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 #include "MediaSessionHandlers.hpp"
 #include <functional>
 #include "MediaRepeatMode.hpp"
+#include "SessionErrorCode.hpp"
 #include "NativePlaybackState.hpp"
 #include "MediaPlaybackStatus.hpp"
 #include "PositionAnchor.hpp"

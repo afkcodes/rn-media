@@ -16,6 +16,7 @@ import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import com.margelo.nitro.rnmediamediasession.NativePlaybackState
 import com.margelo.nitro.rnmediamediasession.NativeRemotePlayback
 import com.margelo.nitro.rnmediamediasession.NativeSleepTimerState
+import com.margelo.nitro.rnmediamediasession.SessionErrorCode
 import com.margelo.nitro.rnmediamediasession.SleepTimerMode
 
 /**
@@ -196,14 +197,18 @@ internal object MediaSessionController : CommandDispatcher {
     // has to build the same notification channel, small icon and grace period
     // this call configured, and it cannot ask JavaScript for them.
     ResumptionStore.putConfig(application, sessionConfig)
+    // Reported (and de-duplicated) from here on: the handlers are installed, so
+    // anything held from a revival that failed while the session was down has
+    // somewhere to go.
+    SessionErrors.onSessionInitialized()
     // Turning the feature off must also forget what it would have resumed:
     // an opted-out app should not leave a session behind for a service created
     // by something else to find.
     if (config?.playbackResumption != true) {
       ResumptionStore.putSession(application, null)
     } else if (!ResumptionStore.hasMediaButtonReceiver(application)) {
-      Log.w(
-        RnMediaMediaSessionService.TAG,
+      SessionErrors.report(
+        SessionErrorCode.PLAYBACKRESUMPTIONUNAVAILABLE,
         "android.playbackResumption is on, but this app declares no receiver for " +
           "android.intent.action.MEDIA_BUTTON. media3 reads that declaration as the app's " +
           "promise that it can resume, and without it the System UI never offers a " +
@@ -287,6 +292,10 @@ internal object MediaSessionController : CommandDispatcher {
     // Cleared synchronously, before anything is posted: after this point no
     // media3 callback can reach a JS handler the caller is about to discard.
     handlers = null
+    // Same instant, same reason: a session error reported after this has no
+    // handler to reach, and what has already been reported belongs to the
+    // session that is ending.
+    SessionErrors.reset()
     current = Snapshot.EMPTY
     beforeDestroy?.let { listener ->
       appContext?.let { ReactRuntime.removeBeforeDestroyListener(it, listener) }
@@ -688,16 +697,23 @@ internal object MediaSessionController : CommandDispatcher {
       // startable, so there will be no notification and no protected process.
       val restricted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
         error is ForegroundServiceStartNotAllowedException
-      Log.e(
-        RnMediaMediaSessionService.TAG,
+      // Reported rather than only logged, and NOT de-duplicated: `serviceRequested`
+      // stays false, so the next `playing` broadcast tries again — and by then the
+      // app may be in the foreground, where the same call succeeds. Every refusal
+      // is a distinct fact about a distinct attempt.
+      SessionErrors.report(
+        SessionErrorCode.BACKGROUNDPLAYBACKUNAVAILABLE,
         if (restricted) {
           "Refused to start the media foreground service: playback began while the app " +
             "was in the background with no exemption (Android 12+). The session will " +
-            "have no notification until playback is started from the foreground."
+            "have no notification until playback is started from the foreground. " +
+            "(${error.javaClass.simpleName}: ${error.message})"
         } else {
-          "Could not start the media foreground service."
+          "Could not start the media foreground service. " +
+            "(${error.javaClass.simpleName}: ${error.message})"
         },
-        error,
+        severe = true,
+        cause = error,
       )
     }
   }

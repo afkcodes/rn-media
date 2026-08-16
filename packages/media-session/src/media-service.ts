@@ -1,10 +1,11 @@
-import { MediaSessionError } from './errors'
+import { logSessionError, MediaSessionError } from './errors'
 import { getNativeMediaSession } from './native'
 import {
   normalizeConfig,
   normalizePlaybackState,
   normalizeRemotePlayback,
   stepRemoteVolume,
+  toSessionError,
   validateMediaItem,
   validateQueue,
   validateSleepTimerSeconds,
@@ -13,6 +14,7 @@ import type {
   MediaSessionHandlers,
   NativeRemotePlayback,
   RnMediaMediaSession,
+  SessionErrorCode,
 } from './specs/media-session.nitro'
 import type {
   MediaHandler,
@@ -182,6 +184,30 @@ export function createMediaService(
     dispatch('onSetDeviceVolume', (h) => h.onSetDeviceVolume?.(next))
   }
 
+  /**
+   * A native failure that had no caller to reject to.
+   *
+   * Not routed through {@link dispatch} unchanged, for one reason: `dispatch`
+   * returns silently when there is no handler, and an *error* channel that goes
+   * quiet exactly when the app has torn its session down would re-create the
+   * bug this whole channel exists to fix. So the floor is explicit — no
+   * handler, or a handler that did not implement the optional method, and it
+   * goes to the console (see `logSessionError`).
+   *
+   * When there *is* a method it goes through `dispatch` like every other
+   * command, so a throwing implementation lands on `onHandlerError` and cannot
+   * take the session down. `onHandlerError` is not this channel, so the two
+   * cannot loop.
+   */
+  function reportSessionError(code: SessionErrorCode, message: string): void {
+    const error = toSessionError(code, message)
+    if (handler?.onSessionError === undefined) {
+      logSessionError(error)
+      return
+    }
+    dispatch('onSessionError', (h) => h.onSessionError?.(error))
+  }
+
   const handlers: MediaSessionHandlers = {
     play: () => dispatch('play', (h) => h.play()),
     pause: () => dispatch('pause', (h) => h.pause()),
@@ -232,6 +258,7 @@ export function createMediaService(
         )
       }
     },
+    onSessionError: (code, message) => reportSessionError(code, message),
   }
 
   function assertReady(call: string): void {
