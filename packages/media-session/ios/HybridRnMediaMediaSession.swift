@@ -58,9 +58,23 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
   private var mediaItem: NativeMediaItem?
   private var queue: [NativeMediaItem] = []
 
-  /// Bumped on every metadata change so a slow artwork download that lands
-  /// after the user skipped cannot paint the previous track's cover.
+  /// Bumped on every artwork change so a slow download that lands after the
+  /// user skipped cannot paint the previous track's cover.
   private var artworkGeneration = 0
+
+  /**
+   * The artwork URI the last published now-playing info was built with. Main
+   * queue only; drives ``artworkGeneration``.
+   *
+   * Tracked on the **resolved** item rather than on the `setMediaItem` channel,
+   * because since the queue merge landed the cover can change from any of the
+   * three channels — a `setQueue` that re-points the current entry moves it just
+   * as surely as a `setMediaItem` does.
+   */
+  private var publishedArtworkUri: String?
+
+  /// Last value passed to ``warnOnce(_:)``; see it for why only one is kept.
+  private var warnedMismatch: String?
 
   private var nowPlayingCenter: MPNowPlayingInfoCenter { .default() }
 
@@ -141,11 +155,11 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
   func setMediaItem(item: NativeMediaItem?) throws {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
-      let changed = self.mediaItem?.artworkUri != item?.artworkUri
       self.mediaItem = item
-      if changed {
-        self.artworkGeneration &+= 1
-      }
+      // The artwork generation is bumped by `publishNowPlayingInfo` off the
+      // *resolved* item, not here: the cover the surface shows is now the merge
+      // of this channel and the queue, so this channel alone cannot say whether
+      // it changed.
       self.publishNowPlayingInfo()
       // This channel is where a duration usually arrives and where a track
       // change usually shows up first — both move an end-of-track deadline.
@@ -157,8 +171,11 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.queue = items
-      // Only the queue index/count fields change; still a full re-post, which
-      // re-projects the elapsed time rather than replaying a stale one.
+      // A full re-post, and not only for the queue index/count fields: since
+      // the channel merge landed, the entry at `queueIndex` is the *base* of
+      // everything the surface shows, so a queue edit can change the title, the
+      // artist and the cover. Re-posting also re-projects the elapsed time
+      // rather than replaying a stale one.
       self.publishNowPlayingInfo()
       self.retargetTrackEndTimer()
     }
@@ -239,7 +256,10 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       self.queue = []
       self.projection = .zero
       self.clearTrackEndLatch()
-      self.artworkGeneration &+= 1
+      // Drops any artwork download still in flight, and lets the next session
+      // start from a clean "nothing published yet".
+      self.trackArtwork(nil)
+      self.warnedMismatch = nil
       self.nowPlayingCenter.nowPlayingInfo = nil
       promise.resolve(withResult: ())
     }
@@ -320,67 +340,66 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     trackEndItemKey = nil
   }
 
-  /// The queue entry at the broadcast index, if the index addresses one.
-  private var currentQueueEntry: NativeMediaItem? {
-    guard let index = playbackState?.queueIndex, index >= 0, Int(index) < queue.count else {
-      return nil
-    }
-    return queue[Int(index)]
-  }
-
   /**
-   * The entry the now-playing surface is currently describing.
+   * The entry the now-playing surface is describing, with both metadata
+   * channels merged onto it. `nil` when nothing has been broadcast.
    *
-   * `setMediaItem` is the more specific statement (the same channel-priority
-   * rule Android's `Snapshot.timeline` applies), so it wins; the queue entry at
-   * the broadcast index is the fallback for the window before it arrives.
+   * The whole rule lives in ``NowPlaying/resolve(item:queue:queueIndex:)``,
+   * which is the twin of Kotlin's `Snapshot.timeline` / `enrichedWith` — the
+   * queue entry at the broadcast index is the base, `setMediaItem` is overlaid
+   * field by field, and on an id mismatch the queue entry wins. Computed rather
+   * than stored: it is read a handful of times per broadcast (never on a timer,
+   * never on a hot path) and a stored copy is one more thing three channels
+   * would each have to remember to refresh.
    */
-  private var currentItem: NativeMediaItem? {
-    mediaItem ?? currentQueueEntry
+  private var nowPlaying: NowPlaying? {
+    // Narrowed to an `Int` here rather than inside the resolver so the resolver
+    // stays free of the bridge's `Double`. `Int(_: Double)` traps on NaN and on
+    // anything outside `Int`'s range, so the conversion happens only for a value
+    // that already addresses the queue; everything else — including NaN, whose
+    // comparisons are all false — becomes the "no usable queue position" -1 the
+    // resolver already handles.
+    let raw = playbackState?.queueIndex ?? -1
+    let index = raw >= 0 && raw < Double(queue.count) ? Int(raw) : -1
+    return NowPlaying.resolve(item: mediaItem, queue: queue, queueIndex: index)
   }
 
   /**
-   * The duration the timer should count down to, in **milliseconds**, or `nil`
-   * when there is none to count to.
-   *
-   * Merged rather than read off one channel, for the reason
-   * `Snapshot.enrichedWith` exists: apps rarely know a duration up front and
-   * send it through `setMediaItem` once the track is prepared — but the reverse
-   * also happens, a queue built with durations and a `setMediaItem` sent without
-   * one. Taking either channel alone loses half of those cases. The queue entry
-   * only counts as describing the same track when the ids agree, exactly as on
-   * Android; the difference from Android is which side wins on a *mismatch*, and
-   * here it is `setMediaItem`, because that is also what iOS is showing on the
-   * lock screen.
-   *
-   * `isLive` (merged the same way) drops the duration entirely — the iOS twin of
-   * `NativeMediaItem.effectiveDurationMs`.
-   */
-  private var currentEffectiveDurationMs: Double? {
-    let entry = currentQueueEntry
-    guard let item = mediaItem else {
-      // Nothing on channel 2 yet: the queue entry is all there is.
-      if entry?.isLive == true { return nil }
-      return entry?.duration
-    }
-    // The queue entry fills gaps only when it describes the same track.
-    let fallback = entry?.id == item.id ? entry : nil
-    if (item.isLive ?? fallback?.isLive) == true { return nil }
-    return item.duration ?? fallback?.duration
-  }
-
-  /**
-   * A stable identity for "the item the end-of-track timer was armed against".
-   *
-   * Index *and* id, because either alone is wrong: ids legitimately repeat
-   * within a queue, and the index alone changes under a queue edit that did not
-   * change what is playing.
+   * A stable identity for "the item the end-of-track timer was armed against":
+   * timeline index *and* id, because either alone is wrong (ids legitimately
+   * repeat within a queue; the index alone moves under a queue edit that did not
+   * change what is playing).
    */
   private var currentItemKey: String? {
-    guard let item = currentItem else { return nil }
-    var index = -1
-    if let queueIndex = playbackState?.queueIndex { index = Int(queueIndex) }
-    return "\(index):\(item.id)"
+    nowPlaying?.key
+  }
+
+  /**
+   * Report a `setMediaItem`/queue disagreement once per distinct combination.
+   * Main queue only.
+   *
+   * The iOS twin of `BroadcastPlayer.warnOnce`, and it exists for the same
+   * reason: a mismatch means everything the item carries — typically the
+   * duration, and with it the scrubber — is being dropped rather than merged,
+   * which is invisible from the outside. Android has logged this since the merge
+   * landed; iOS staying silent about the same defect would just move the blind
+   * spot to the other platform.
+   *
+   * Only the last reported combination is remembered: mismatches are sticky in
+   * practice, and a genuine flip-flop between two of them is worth seeing twice.
+   */
+  private func warnOnce(_ mismatch: String?) {
+    guard let mismatch, mismatch != warnedMismatch else { return }
+    warnedMismatch = mismatch
+    // `%@` with the whole message as the single argument: the message is built
+    // by interpolation and must never be read as a format string itself.
+    NSLog(
+      "%@",
+      "[media-session] setMediaItem does not describe the current queue entry "
+        + "(\(mismatch)); the queue entry wins and the item's fields — including its "
+        + "duration — are ignored. Broadcast the matching queueIndex, or an item whose "
+        + "id matches it."
+    )
   }
 
   /**
@@ -392,7 +411,9 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
    */
   private func trackEndDelaySeconds() -> Double? {
     guard projection.rate > 0 else { return nil }
-    guard let durationMs = currentEffectiveDurationMs, durationMs > 0 else { return nil }
+    guard let durationMs = nowPlaying?.item.effectiveDurationMs, durationMs > 0 else {
+      return nil
+    }
     let remaining = durationMs / 1000 - projection.projectedSeconds()
     // Divided by the rate: at 2x a minute of audio arrives in thirty seconds,
     // and a timer that ignores that fires a minute late.
@@ -505,13 +526,25 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
    * (which buttons, in which compact slots) collapses to a single enabled set
    * here — exactly as the spec prescribes.
    *
-   * Deliberately unmapped:
-   * - `skipToQueueItem` — MediaPlayer exposes no queue-jump command. The
-   *   handler method still exists because Android Auto and the app's own UI use
-   *   it; it is simply unreachable from iOS remote surfaces.
-   * - custom actions — `MPRemoteCommandCenter` has a fixed command set. There
-   *   is no iOS surface for them at all (`likeCommand`/`ratingCommand` are
-   *   semantically specific and out of scope for v1).
+   * Unmapped, and each of these is a platform ceiling rather than a TODO. The
+   * command centre's full property list was read to be sure
+   * (developer.apple.com/documentation/mediaplayer/mpremotecommandcenter,
+   * 2026-08-16): play, pause, stop, togglePlayPause, nextTrack, previousTrack,
+   * changeRepeatMode, changeShuffleMode, changePlaybackRate, seekForward,
+   * seekBackward, skipForward, skipBackward, changePlaybackPosition, rating,
+   * like, dislike, bookmark, enableLanguageOption, disableLanguageOption. That
+   * is the entire set; it is fixed and an app cannot add to it.
+   *
+   * - `skipToQueueItem` — **there is no queue-jump command in that list.** The
+   *   handler method still exists because Android Auto, Android's own
+   *   notification queue and the app's UI all use it; it is simply unreachable
+   *   from an iOS remote surface.
+   * - custom actions — nothing in that list carries an app-defined identifier.
+   *   `likeCommand`/`dislikeCommand`/`bookmarkCommand` are `MPFeedbackCommand`s
+   *   with fixed system semantics and system-drawn heart/thumb icons, and
+   *   `ratingCommand` is a star rating; re-purposing one of them as a generic
+   *   "custom action" would draw the user a heart for "Add to playlist". A wrong
+   *   button is worse than a missing one, so there is none.
    */
   private static func desiredCommands(
     for state: NativePlaybackState
@@ -525,8 +558,18 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       case .stop: desired.insert(.stop)
       case .skiptonext: desired.insert(.nextTrack)
       case .skiptoprevious: desired.insert(.previousTrack)
-      case .fastforward: desired.insert(.skipForward)
-      case .rewind: desired.insert(.skipBackward)
+      // Two commands per control, because MediaPlayer splits one Android
+      // concept in half: `skipForwardCommand` is the ±N-seconds button a UI
+      // draws, `seekForwardCommand` is the FF key on a Bluetooth remote or a car
+      // head unit. media3 answers both from the single `COMMAND_SEEK_FORWARD`
+      // this control maps to, so enabling only the first made the accessory key
+      // a silent no-op on iOS. See `RemoteCommandKind.seekForward`.
+      case .fastforward:
+        desired.insert(.skipForward)
+        desired.insert(.seekForward)
+      case .rewind:
+        desired.insert(.skipBackward)
+        desired.insert(.seekBackward)
       // iOS has no notion of button *layout*, so a control and its capability
       // are the same statement here — which is why `controls` and
       // `capabilities` are unioned. On Android they differ: the control is what
@@ -564,10 +607,14 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
 
   /// Main queue only.
   private func publishNowPlayingInfo() {
-    guard let item = mediaItem else {
+    guard let current = nowPlaying else {
+      trackArtwork(nil)
       nowPlayingCenter.nowPlayingInfo = nil
       return
     }
+    warnOnce(current.mismatch)
+    let item = current.item
+    trackArtwork(item.artworkUri)
 
     var info: [String: Any] = [
       MPMediaItemPropertyTitle: item.title,
@@ -580,11 +627,16 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     if let artist = item.artist { info[MPMediaItemPropertyArtist] = artist }
     if let album = item.album { info[MPMediaItemPropertyAlbumTitle] = album }
     if let genre = item.genre { info[MPMediaItemPropertyGenre] = genre }
-    // Extended tags. `AlbumTrackNumber` and `DiscNumber` are both on
-    // `MPNowPlayingInfoCenter`'s documented list of supported `MPMediaItem`
-    // keys; `AlbumArtist` is NOT, and is sent anyway because the key is real,
-    // unknown keys are ignored, and some surfaces do read it — no promise is
-    // made that the lock screen shows it.
+    // Extended tags. All three keys are real `MPMediaItemProperty*` constants
+    // (`MPMediaItemPropertyAlbumTrackNumber` and `MPMediaItemPropertyDiscNumber`
+    // under MPMediaItem's "General media item property keys",
+    // `MPMediaItemPropertyAlbumArtist` under "Filterable property keys";
+    // developer.apple.com/documentation/mediaplayer/mpmediaitem, read
+    // 2026-08-16). Apple no longer publishes a "supported subset" for
+    // `nowPlayingInfo` — the property's own Discussion says only "To clear the
+    // now playing info center dictionary, set it to nil" — so what the lock
+    // screen actually renders is not something Apple documents. Unknown keys are
+    // ignored, so sending them is free; no promise is made that they are drawn.
     if let albumArtist = item.albumArtist {
       info[MPMediaItemPropertyAlbumArtist] = albumArtist
     }
@@ -594,18 +646,21 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     if let discNumber = item.discNumber {
       info[MPMediaItemPropertyDiscNumber] = NSNumber(value: Int(discNumber))
     }
-    // `year`, `subtitle` and `extras` are deliberately absent: MediaPlayer has
-    // no year key (`MPMediaItemPropertyReleaseDate` is an `NSDate` and is not on
-    // the supported list either), no third display line, and no arbitrary-payload
-    // key. They are carried through the session and through persistence so an
-    // app gets them back; they are not faked into keys that mean other things.
+    // `year`, `subtitle` and `extras` are deliberately absent, and the whole key
+    // space was enumerated to be sure (MPMediaItem's two key lists plus
+    // MPNowPlayingInfoCenter's "Accessing Now Playing metadata properties",
+    // read 2026-08-16): there is no year key at all — `MPMediaItemPropertyReleaseDate`
+    // is an `NSDate`, and a bare year is not a date — no third display line, and
+    // no arbitrary-payload key. They are carried through the session and through
+    // persistence so an app gets them back; they are not faked into keys that
+    // mean other things.
     // `item.id` is deliberately NOT published: the only string-typed identity
     // key MediaPlayer offers is
     // `MPNowPlayingInfoPropertyExternalContentIdentifier`, which is reserved
     // for content shared with external services, and
     // `MPMediaItemPropertyPersistentID` is a `UInt64` our ids are not.
 
-    if let duration = item.duration, item.isLive != true {
+    if let duration = item.effectiveDurationMs {
       info[MPMediaItemPropertyPlaybackDuration] = duration / 1000
     } else {
       // Two ways to get here and they now say different things. `isLive == true`
@@ -637,6 +692,22 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
     if let uri = item.artworkUri, artworkCache.cached(uri) == nil {
       loadArtwork(uri)
     }
+  }
+
+  /**
+   * Note which cover the surface is now showing, and invalidate any download
+   * still in flight for a different one. Main queue only.
+   *
+   * Called from ``publishNowPlayingInfo()`` on the **resolved** artwork URI, so
+   * a cover that changes because the queue moved is caught as surely as one that
+   * changes because `setMediaItem` did. Re-publishing for the *same* URI — which
+   * is exactly what ``loadArtwork(_:)``'s completion does — leaves the
+   * generation alone, so a finished download never invalidates itself.
+   */
+  private func trackArtwork(_ uri: String?) {
+    guard uri != publishedArtworkUri else { return }
+    publishedArtworkUri = uri
+    artworkGeneration &+= 1
   }
 
   /// Main queue only.

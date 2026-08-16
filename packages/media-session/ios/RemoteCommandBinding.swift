@@ -20,6 +20,22 @@ enum RemoteCommandKind: CaseIterable {
   case changePlaybackRate
   case skipForward
   case skipBackward
+  /**
+   * `MPRemoteCommandCenter.seekForwardCommand` — an accessory's **press-and-hold
+   * scan**, which is a different surface from ``skipForward``.
+   *
+   * `skipForwardCommand` is the ±N-seconds button a UI draws (CarPlay, the
+   * lock screen); `seekForwardCommand` is what a Bluetooth remote, a car head
+   * unit or a wired inline control sends for its FF/RW key. Binding only the
+   * first left that key **dead on iOS while it worked on Android**, where
+   * media3's `MediaSessionLegacyStub.onFastForward()` dispatches
+   * `COMMAND_SEEK_FORWARD` → `Player.seekForward()` (media3 1.11.0,
+   * `MediaSessionLegacyStub.java:720-735`) and lands on the app's handler as an
+   * absolute seek. See ``RemoteCommandBinding/handle(_:_:)``.
+   */
+  case seekForward
+  /** `seekBackwardCommand`. See ``seekForward``. */
+  case seekBackward
   case changeRepeatMode
   case changeShuffleMode
 }
@@ -176,6 +192,8 @@ final class RemoteCommandBinding {
     case .changePlaybackRate: return center.changePlaybackRateCommand
     case .skipForward: return center.skipForwardCommand
     case .skipBackward: return center.skipBackwardCommand
+    case .seekForward: return center.seekForwardCommand
+    case .seekBackward: return center.seekBackwardCommand
     case .changeRepeatMode: return center.changeRepeatModeCommand
     case .changeShuffleMode: return center.changeShuffleModeCommand
     }
@@ -219,6 +237,17 @@ final class RemoteCommandBinding {
   func applyModes(repeatMode: MediaRepeatMode, shuffleEnabled: Bool) {
     center.changeRepeatModeCommand.currentRepeatType = repeatMode.repeatType
     center.changeShuffleModeCommand.currentShuffleType = shuffleEnabled ? .items : .off
+  }
+
+  /**
+   * A relative move, delivered as the absolute seek the handler interface
+   * speaks. Negative jumps backwards; the result is clamped at the start of the
+   * track, because MediaPlayer will happily hand us a negative position and no
+   * player wants one.
+   */
+  private func jump(by seconds: TimeInterval) {
+    let target = max(0, actions.currentPositionSeconds() + seconds)
+    actions.seekTo(target * 1000)
   }
 
   private func handle(
@@ -265,9 +294,33 @@ final class RemoteCommandBinding {
         ? config.jumpForwardSeconds
         : config.jumpBackwardSeconds
       let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? fallback
-      let delta = kind == .skipForward ? interval : -interval
-      let target = max(0, actions.currentPositionSeconds() + delta)
-      actions.seekTo(target * 1000)
+      jump(by: kind == .skipForward ? interval : -interval)
+
+    case .seekForward, .seekBackward:
+      // The accessory FF/RW key (AVRCP, a car head unit, an inline remote), which
+      // MediaPlayer models as a *scan*: `MPSeekCommandEvent.type` is
+      // `.beginSeeking` on press and `.endSeeking` on release
+      // (developer.apple.com/documentation/mediaplayer/mpseekcommandeventtype).
+      //
+      // Android answers the same key with **one discrete jump per press** —
+      // `MediaSessionLegacyStub.onFastForward()` → `Player.seekForward()`, which
+      // resolves the seek-forward increment and arrives at the app as a single
+      // absolute seek. So only `.beginSeeking` acts, and it moves by the same
+      // configured interval the skip buttons use, which makes one press mean the
+      // same thing on both platforms. A continuous scan has no twin on Android
+      // and no handler method here to express it, so inventing one would create
+      // the asymmetry rather than remove it.
+      //
+      // `.endSeeking` is accepted and ignored: returning `.commandFailed` for
+      // the release half of a press the system already honoured would tell the
+      // accessory the command failed.
+      guard let seek = event as? MPSeekCommandEvent else { return .commandFailed }
+      guard seek.type == .beginSeeking else { return .success }
+      jump(
+        by: kind == .seekForward
+          ? config.jumpForwardSeconds
+          : -config.jumpBackwardSeconds
+      )
     case .changeRepeatMode:
       guard let event = event as? MPChangeRepeatModeCommandEvent else {
         return .commandFailed
