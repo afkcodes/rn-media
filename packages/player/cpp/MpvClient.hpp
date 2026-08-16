@@ -306,6 +306,10 @@ private:
   /// dispatch point — setup time only, never a latency-sensitive path.
   void registerLoadHooks(mpv_handle* handle);
   void setOptionOrThrow(mpv_handle* handle, const std::string& name, const std::string& value);
+  /// As `setOptionOrThrow`, but treats "this libmpv has no such option" as a
+  /// no-op. For options that come from our engine forks and may be absent from
+  /// an older build.
+  void setOptionIfKnown(mpv_handle* handle, const std::string& name, const std::string& value);
 
   ClientState _state;
 

@@ -21,6 +21,43 @@ constexpr const char* kAudioOnlyDefaults[][2] = {
     {"audio-display", "no"},
 };
 
+#if defined(__APPLE__)
+/// Apple-only defaults. Same ordering rule as `kAudioOnlyDefaults` — applied
+/// before the caller's options, so an app can put any of them back.
+///
+/// `AVAudioSession` is a **process-wide singleton**, and stock `ao_audiounit`
+/// treats it as if it owned it: `init()` sets category, mode, active state and
+/// preferred channel count, and it does so on every AO open — i.e. at every
+/// playback start, not once. That is wrong for this library twice over.
+///
+/// 1. **Ownership.** `@rn-media/audio-session` is the package that owns the
+///    session (categories, interruptions, route changes), exactly as it owns
+///    audio focus on Android — where this player requests none. Two owners is
+///    worse than either, which is why our fork's patch 007 added this option
+///    in the first place (rn-media-engine
+///    `patches/007-mpv-audiounit-shared-session`, whose docs name
+///    `packages/audio-session` as the intended owner). Not setting it left the
+///    engine and the host fighting, and the engine — reopening its AO on every
+///    playback start — always configured last and won.
+/// 2. **It broke the iOS now-playing surface.** mpv calls
+///    `setCategory:withOptions:error:`, the variant that cannot carry a route
+///    sharing policy, so the `.longFormAudio` policy
+///    `@rn-media/audio-session` sets was reset to `.default` and the mode was
+///    forced to `.moviePlayback` — after which CoreAudio refused the output
+///    client (`AQIONode.cpp: is NOT Now Playing eligible`) and iOS showed no
+///    Lock Screen / Control Center card, however correct
+///    `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` were. Verified on
+///    an iPhone 17 Pro and the iOS 26.2 simulator, 2026-08-16.
+///
+/// Tolerated rather than required (see `setOptionIfKnown`): the option only
+/// exists on a libmpv carrying patch 007, and a player that refuses to be
+/// created because an engine predates a patch would be a worse failure than
+/// the one this fixes.
+constexpr const char* kAppleOnlyDefaults[][2] = {
+    {"audiounit-skip-session-management", "yes"},
+};
+#endif
+
 /// Reserved key in the options map: it is the argument to
 /// `mpv_request_log_messages`, not an mpv option (mpv has no `log-level`
 /// option, so this cannot shadow a real one).
@@ -151,6 +188,17 @@ void MpvClient::setOptionOrThrow(mpv_handle* handle, const std::string& name, co
   }
 }
 
+void MpvClient::setOptionIfKnown(mpv_handle* handle, const std::string& name, const std::string& value) {
+  const int status = mpv_set_option_string(handle, name.c_str(), value.c_str());
+  // `MPV_ERROR_OPTION_NOT_FOUND` is the one tolerated outcome: it means this
+  // libmpv does not carry the option, which is a fact about the engine and not
+  // a caller error. Every other failure is still a hard error — a *known*
+  // option that will not take the value we ask for is a real bug.
+  if (status < 0 && status != MPV_ERROR_OPTION_NOT_FOUND) {
+    throw MpvError(status, "mpv_set_option_string(\"" + name + "\", \"" + value + "\")");
+  }
+}
+
 void MpvClient::initialize(const std::unordered_map<std::string, std::string>& options) {
   // Serialises against `destroy()` and guarantees `_handle` stays alive for
   // the whole of initialize.
@@ -163,6 +211,12 @@ void MpvClient::initialize(const std::unordered_map<std::string, std::string>& o
   for (const auto& option : kAudioOnlyDefaults) {
     setOptionOrThrow(handle, option[0], option[1]);
   }
+
+#if defined(__APPLE__)
+  for (const auto& option : kAppleOnlyDefaults) {
+    setOptionIfKnown(handle, option[0], option[1]);
+  }
+#endif
 
   std::string logLevel = kDefaultLogLevel;
   for (const auto& [name, value] : options) {
