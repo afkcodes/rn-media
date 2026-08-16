@@ -10,7 +10,24 @@ import type { HybridObject } from 'react-native-nitro-modules'
  * These are the five states from the spec doc. Deliberately *not* media3's
  * `Player.STATE_*` nor `AVPlayer.timeControlStatus` — this is the union the app
  * thinks in; each platform maps it to its own vocabulary
- * (see `PlaybackFacadePlayer.kt` / `NowPlaying.swift`).
+ * (see `BroadcastPlayer.getState` / `HybridRnMediaMediaSession.publishNowPlayingInfo`).
+ *
+ * ## Platform: iOS collapses three of these into one
+ * Android distinguishes all five — media3 gets `STATE_READY`+`playWhenReady`,
+ * `STATE_BUFFERING`, `STATE_IDLE`, and for `error` a real `PlaybackException`.
+ * **iOS has no playback-state key at all** for an app to write: the only lever
+ * `MPNowPlayingInfoCenter` gives is `MPNowPlayingInfoPropertyPlaybackRate`, and
+ * `paused`, `stopped` and `error` all publish a rate of `0`, so every iOS remote
+ * surface renders them identically. `MPNowPlayingInfoCenter.playbackState` looks
+ * like the missing lever and is not: it exists on iOS 13+ but Apple documents it
+ * as *"This property only applies to macOS"*
+ * (developer.apple.com/documentation/mediaplayer/mpnowplayinginfocenter/playbackstate,
+ * read 2026-08-16), so writing it on iOS is not something the platform promises
+ * to honour and it is deliberately not written.
+ *
+ * `buffering` does survive on iOS, because it is expressed the same way it is on
+ * Android — as a rate of `0` with the transport still advertised — but it too is
+ * indistinguishable from `paused` on the lock screen.
  *
  * NOTE: every member of a string union becomes a native enumerator whose name
  * is the member, upper-cased with separators stripped (`skipToNext` →
@@ -42,6 +59,17 @@ export type MediaControl =
    * target position; iOS's `MPSkipIntervalCommand` is applied to the projected
    * position). One less thing for every app to reimplement, and one less way
    * for the two platforms to disagree.
+   *
+   * ## One control, two iOS commands
+   * media3 answers both the on-screen button and an accessory's FF/RW key from
+   * the single `COMMAND_SEEK_FORWARD` (`MediaSessionLegacyStub.onFastForward()`
+   * → `Player.seekForward()`, media3 1.11.0). MediaPlayer splits them:
+   * `skipForwardCommand`/`skipBackwardCommand` are the ±N-seconds buttons a UI
+   * draws, `seekForwardCommand`/`seekBackwardCommand` are what a Bluetooth
+   * remote or a car head unit sends. Listing this control enables **all four**,
+   * and the accessory's press is delivered as one jump of
+   * {@link MediaSessionConfig.jumpForwardSeconds} — the same distance the button
+   * moves, so one press means the same thing on both platforms.
    */
   | 'fastForward'
   | 'rewind'
@@ -89,6 +117,25 @@ export type MediaCapability =
   | 'seek'
   | 'skipToNext'
   | 'skipToPrevious'
+  /**
+   * Jump to an arbitrary entry of the broadcast queue.
+   *
+   * Android: `Player.COMMAND_SEEK_TO_MEDIA_ITEM`, which is what lets a
+   * controller that renders the queue — Android Auto, Wear, a car head unit,
+   * the notification's queue view — play the row the user tapped.
+   *
+   * **iOS: nothing, and it is a platform ceiling.** `MPRemoteCommandCenter`'s
+   * command set is fixed and contains no queue-jump command — the complete list
+   * is play, pause, stop, togglePlayPause, nextTrack, previousTrack,
+   * changeRepeatMode, changeShuffleMode, changePlaybackRate, seekForward,
+   * seekBackward, skipForward, skipBackward, changePlaybackPosition, rating,
+   * like, dislike, bookmark, enableLanguageOption, disableLanguageOption
+   * (developer.apple.com/documentation/mediaplayer/mpremotecommandcenter, read
+   * 2026-08-16). Advertising this capability on iOS is harmless and enables
+   * nothing, and {@link MediaSessionHandlers.skipToQueueItem} is never invoked
+   * from an iOS remote surface. It is still worth advertising — the same JS runs
+   * on both platforms — and the handler is still called from the app's own UI.
+   */
   | 'skipToQueueItem'
   | 'setRate'
   /**
@@ -419,11 +466,33 @@ export interface PositionAnchor {
   rate: number
 }
 
-/** A custom action: a button with no built-in meaning. */
+/**
+ * A custom action: a button with no built-in meaning.
+ *
+ * ## Android only, by platform ceiling
+ * Android draws these as extra `CommandButton`s in the notification's overflow
+ * and grants them as `SessionCommand`s so third-party controllers can invoke
+ * them; presses arrive at {@link MediaSessionHandlers.customAction}.
+ *
+ * **iOS has no surface for them and no way to gain one.**
+ * `MPRemoteCommandCenter`'s command set is fixed and closed — an app cannot add
+ * a command, and nothing in the set carries an app-defined identifier (the full
+ * list is enumerated on {@link MediaCapability}'s `skipToQueueItem`). The three
+ * commands that look adjacent are not: `likeCommand`, `dislikeCommand` and
+ * `bookmarkCommand` are `MPFeedbackCommand`s with fixed system semantics and
+ * system-drawn heart/thumb icons, and `ratingCommand` is a star rating
+ * (developer.apple.com/documentation/mediaplayer/mpremotecommandcenter, read
+ * 2026-08-16). Re-purposing one of them would draw the user a heart for "Add to
+ * playlist", and a wrong button is worse than a missing one.
+ *
+ * So on iOS this array is accepted, carried, and renders nothing —
+ * `customAction` is never invoked from an iOS remote surface. Your own UI can
+ * still call the handler directly, which is what iOS apps do for this.
+ */
 export interface MediaCustomAction {
   /** Opaque identifier handed back to the JS handler's `customAction`. */
   name: string
-  /** User-visible label. */
+  /** User-visible label. Rendered on Android only; see the interface docs. */
   title: string
   /** Android drawable resource name. Ignored on iOS (no such surface). */
   icon?: string
@@ -438,12 +507,28 @@ export interface MediaCustomAction {
 export interface NativePlaybackState {
   status: MediaPlaybackStatus
   position: PositionAnchor
-  /** Buffered position in ms. Omit when unknown. Android-only surface. */
+  /**
+   * Buffered position in ms. Omit when unknown.
+   *
+   * **Android only.** media3 renders it as the secondary bar behind the
+   * scrubber (`SimpleBasePlayer.State.setContentBufferedPositionMs`). iOS has no
+   * key for it: `MPNowPlayingInfoCenter`'s complete metadata key set was read
+   * for one and the nearest thing,
+   * `MPNowPlayingInfoPropertyPlaybackProgress`, is documented as a
+   * *watched-so-far* indicator ("A value of 0.0 indicates the item isn't
+   * watched, while a value of 1.0 indicates the item was fully watched"), not a
+   * buffer level (developer.apple.com/documentation/mediaplayer/mpnowplayinginfocenter,
+   * read 2026-08-16). Broadcasting it on iOS is harmless and renders nothing.
+   */
   bufferedPosition?: number
   /** Buttons to offer, in order. */
   controls: MediaControl[]
   /** Commands to accept. See {@link MediaCapability}. */
   capabilities: MediaCapability[]
+  /**
+   * Extra buttons with app-defined meanings. **Android only** — see
+   * {@link MediaCustomAction} for why iOS cannot have them.
+   */
   customActions: MediaCustomAction[]
   /**
    * Android only: indices into {@link controls} that get the ≤3 slots of the
@@ -453,6 +538,11 @@ export interface NativePlaybackState {
    * have to be separable because Android 13+ derives the *expanded* layout from
    * the session while the compact layout stays an explicit choice
    * (audio_service calls this `androidCompactActionIndices`).
+   *
+   * iOS has no notion of button *layout* at all — `MPRemoteCommandCenter` is a
+   * flat set of commands that are either enabled or not, and the system decides
+   * what to draw — so `controls` and `capabilities` are simply unioned there and
+   * this field is ignored.
    */
   compactControlIndices?: number[]
   /**
@@ -461,7 +551,23 @@ export interface NativePlaybackState {
    * Android then presents a single-item timeline built from the media item.
    */
   queueIndex?: number
-  /** Only meaningful when `status === 'error'`. Shown by some surfaces. */
+  /**
+   * Only meaningful when `status === 'error'`.
+   *
+   * **Android only.** It becomes the `PlaybackException` message on the facade
+   * player's state, which a `MediaController` can read
+   * (`PlaybackException.ERROR_CODE_UNSPECIFIED`, because the app's error
+   * taxonomy does not map onto media3's codes and guessing one would be worse
+   * than admitting we do not know).
+   *
+   * **iOS drops it, and there is nowhere to put it.** `MPNowPlayingInfoCenter`
+   * has no error key anywhere in its metadata set and `MPRemoteCommandCenter`
+   * has no error channel; the whole key space was enumerated
+   * (developer.apple.com/documentation/mediaplayer/mpnowplayinginfocenter, read
+   * 2026-08-16). Combined with {@link MediaPlaybackStatus}'s note that iOS
+   * cannot distinguish `error` from `paused` at all, an errored session simply
+   * looks paused on an iOS remote surface. Surface the message in your own UI.
+   */
   errorMessage?: string
   /**
    * Current repeat mode, as the remote surfaces should draw it.
@@ -603,13 +709,14 @@ export interface NativeMediaItem {
    * Android: `MediaMetadata.Builder.setAlbumArtist(CharSequence)`.
    *
    * iOS: published as `MPMediaItemPropertyAlbumArtist`, with a caveat worth
-   * stating rather than hiding. `MPNowPlayingInfoCenter`'s documentation lists
-   * the *subset* of `MPMediaItem` keys it supports (album title, track
-   * number/count, artist, artwork, composer, disc number/count, genre, media
-   * type, persistent id, duration, title) and album artist is **not** on it. The
-   * key itself is real and passing it is harmless — unknown keys are ignored —
-   * so it is sent for the surfaces that do read it, and no promise is made that
-   * the lock screen will show it.
+   * stating rather than hiding. The key is real (it is one of `MPMediaItem`'s
+   * "Filterable property keys",
+   * developer.apple.com/documentation/mediaplayer/mpmediaitem, read 2026-08-16),
+   * but Apple does not document *which* keys `nowPlayingInfo` actually renders —
+   * the property's own Discussion says only "To clear the now playing info
+   * center dictionary, set it to `nil`". Unknown keys are ignored, so sending it
+   * is free; it goes out for the surfaces that do read it, and no promise is
+   * made that the lock screen shows it.
    */
   albumArtist?: string
   /**
@@ -636,14 +743,18 @@ export interface NativeMediaItem {
    * recording date we were never told is exactly the kind of quiet lie this
    * package refuses elsewhere.
    *
-   * **iOS has no year key at all**, checked rather than assumed: there is no
-   * `MPMediaItemPropertyYear` in any MediaPlayer header, and the one date-shaped
-   * key — `MPMediaItemPropertyReleaseDate` — is an `NSDate` (a bare year is not
-   * a date) *and* is absent from `MPNowPlayingInfoCenter`'s documented supported
-   * subset. So on iOS this field is carried through the session and through
+   * **iOS has no year key at all**, checked rather than assumed: MediaPlayer's
+   * complete key space was enumerated (`MPMediaItem`'s "General media item
+   * property keys" and "Filterable property keys", plus
+   * `MPNowPlayingInfoCenter`'s "Accessing Now Playing metadata properties";
+   * developer.apple.com/documentation/mediaplayer/mpmediaitem and
+   * .../mpnowplayinginfocenter, read 2026-08-16) and there is no
+   * `MPMediaItemPropertyYear`. The one date-shaped key,
+   * `MPMediaItemPropertyReleaseDate`, is an `NSDate` — and a bare year is not a
+   * date. So on iOS this field is carried through the session and through
    * persistence and is simply not published. A synthesised `NSDate` of
-   * "1 January <year>" would be a fabricated precision, which is worse than the
-   * gap.
+   * "1 January &lt;year&gt;" would be a fabricated precision, which is worse than
+   * the gap.
    */
   year?: number
   /**
@@ -652,10 +763,14 @@ export interface NativeMediaItem {
    *
    * Android: `MediaMetadata.Builder.setSubtitle(CharSequence)`, which media3's
    * own notification reads through `getNotificationContentText`.
-   * **iOS has no third line.** The complete `MPMediaItemProperty*` /
-   * `MPNowPlayingInfoProperty*` key set was read for one:
-   * `MPMediaItemPropertyComments` is not in the supported subset, and
-   * `MPNowPlayingInfoPropertyServiceIdentifier` is documented as an opaque
+   * **iOS has no third line.** The lock screen draws title / artist / album and
+   * nothing else, and the complete `MPMediaItemProperty*` /
+   * `MPNowPlayingInfoProperty*` key set was read for a fourth
+   * (developer.apple.com/documentation/mediaplayer/mpmediaitem and
+   * .../mpnowplayinginfocenter, read 2026-08-16): the only free-text keys left
+   * are `MPMediaItemPropertyComments`, `MPMediaItemPropertyLyrics` and
+   * `MPMediaItemPropertyPodcastTitle` — all with defined, different meanings —
+   * and `MPNowPlayingInfoPropertyServiceIdentifier`, documented as an opaque
    * provider-coordination id that is never displayed. The ecosystem's usual
    * workaround is to fold the subtitle into `artist` or `album`; doing that here
    * would corrupt two fields the app also sets, so this is carried through the
@@ -759,7 +874,14 @@ export interface MediaSessionHandlers {
   seekTo: (position: number) => void
   skipToNext: () => void
   skipToPrevious: () => void
-  /** @param index index into the last broadcast queue */
+  /**
+   * **Android only** from a remote surface — see
+   * {@link MediaCapability}'s `skipToQueueItem` for the citation. iOS has no
+   * queue-jump command, so this is never invoked there by the session; the app's
+   * own UI still calls it.
+   *
+   * @param index index into the last broadcast queue
+   */
   skipToQueueItem: (index: number) => void
   setRate: (rate: number) => void
   /**
@@ -783,6 +905,12 @@ export interface MediaSessionHandlers {
    * slider, the output switcher, a `MediaController`. Same request/acknowledge
    * contract as every other command: the app moves the backend and republishes
    * through `setRemotePlayback`.
+   *
+   * **Android only**, along with {@link increaseDeviceVolume},
+   * {@link decreaseDeviceVolume} and {@link setDeviceMuted}:
+   * `setRemotePlayback` is a documented no-op on iOS, where
+   * `MPRemoteCommandCenter` has no volume command and the hardware buttons
+   * cannot be taken over at all.
    */
   setDeviceVolume: (volume: number) => void
   /**
@@ -813,6 +941,10 @@ export interface MediaSessionHandlers {
    */
   onTaskRemoved: () => void
   /**
+   * A custom action was invoked. **Android only** — {@link MediaCustomAction}
+   * documents why iOS has no surface that can invoke one, so this is never
+   * called there by the session.
+   *
    * @param name  {@link MediaCustomAction.name}
    * @param extras JSON object string, `'{}'` when there are none. A JSON string
    * rather than a map because the Android payload is an arbitrary `Bundle` from

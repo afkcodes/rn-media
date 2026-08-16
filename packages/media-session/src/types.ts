@@ -33,22 +33,44 @@ export interface PlaybackState {
    * every surface projects locally. See {@link PositionAnchor}.
    */
   position: PositionAnchor
-  /** Buffered position in ms; omit when unknown. */
+  /**
+   * Buffered position in ms; omit when unknown.
+   *
+   * **Android only** — media3 draws it as the secondary bar behind the scrubber.
+   * MediaPlayer has no buffered-position key anywhere in `MPNowPlayingInfoCenter`
+   * (the nearest, `MPNowPlayingInfoPropertyPlaybackProgress`, is a
+   * watched-so-far indicator, not a buffer level), so it renders nothing on iOS.
+   * Harmless to send on both.
+   */
   bufferedPosition?: number
   /** Buttons to offer, in order. @default [] */
   controls?: MediaControl[]
   /** Commands to accept. @default [] */
   capabilities?: MediaCapability[]
-  /** @default [] */
+  /**
+   * Extra buttons with app-defined meanings. **Android only**:
+   * `MPRemoteCommandCenter`'s command set is fixed and closed, so iOS has no
+   * surface that can render or invoke one — see {@link MediaCustomAction}.
+   * Presses arrive at {@link MediaHandler.customAction}. @default []
+   */
   customActions?: MediaCustomAction[]
   /**
-   * Android: which of {@link controls} occupy the ≤3 collapsed notification
-   * slots. Omit to take the first three.
+   * **Android only**: which of {@link controls} occupy the ≤3 collapsed
+   * notification slots. Omit to take the first three. iOS has no button layout —
+   * commands are enabled or not and the system draws what it draws — so this is
+   * ignored there.
    */
   compactControlIndices?: number[]
   /** Index into the last broadcast queue, or `-1`/omitted when not queue-backed. */
   queueIndex?: number
-  /** Only meaningful when `status === 'error'`. */
+  /**
+   * Only meaningful when `status === 'error'`.
+   *
+   * **Android only**: it becomes the session's `PlaybackException` message.
+   * MediaPlayer has no error surface at all and cannot even distinguish `error`
+   * from `paused` (see {@link MediaPlaybackStatus}), so an errored session looks
+   * paused on the iOS lock screen. Show the message in your own UI.
+   */
   errorMessage?: string
   /**
    * Current repeat mode for the remote surfaces' repeat button.
@@ -190,7 +212,17 @@ export interface MediaHandler {
   seekTo(position: number): void | Promise<void>
   skipToNext(): void | Promise<void>
   skipToPrevious(): void | Promise<void>
-  /** @param index index into the last broadcast queue */
+  /**
+   * Play an arbitrary entry of the broadcast queue.
+   *
+   * Reached from a remote surface on **Android only** — Android Auto, Wear, a
+   * car head unit, any controller that renders the queue
+   * (`Player.COMMAND_SEEK_TO_MEDIA_ITEM`). `MPRemoteCommandCenter` has no
+   * queue-jump command, so no iOS remote surface can invoke this; it is still
+   * part of the interface because your own UI calls it on both platforms.
+   *
+   * @param index index into the last broadcast queue
+   */
   skipToQueueItem(index: number): void | Promise<void>
   setRate(rate: number): void | Promise<void>
   /**
@@ -228,6 +260,13 @@ export interface MediaHandler {
    * method. Move the backend, then republish through `setRemotePlayback`; that
    * republish is what moves the slider on every surface.
    *
+   * **Android only.** iOS gives an app no way to take over the hardware volume
+   * buttons and `MPRemoteCommandCenter` has no volume command at all, so
+   * `setRemotePlayback` is a documented no-op there and this — like
+   * {@link onAdjustDeviceVolume} and {@link onSetDeviceMuted} — is never
+   * invoked by the session on iOS. Drive a remote device's volume from your own
+   * in-app slider there, which is what Google's own iOS cast apps do.
+   *
    * Optional for the reason {@link onSleepTimer} is: a method added after v1
    * must not break structural implementors. `BaseMediaHandler` supplies a
    * no-op.
@@ -253,13 +292,16 @@ export interface MediaHandler {
    * hands the press to the media session's volume provider, which exists only
    * because {@link MediaServiceApi.setRemotePlayback} made the session
    * advertise remote playback.
+   *
+   * **Android only** — see {@link onSetDeviceVolume}.
    */
   onAdjustDeviceVolume?(
     direction: RemoteVolumeDirection
   ): void | Promise<void>
   /**
    * A remote surface asked to mute or unmute the remote device. Same
-   * request/acknowledge contract as {@link onSetDeviceVolume}.
+   * request/acknowledge contract as {@link onSetDeviceVolume}, and **Android
+   * only** for the same reason.
    */
   onSetDeviceMuted?(muted: boolean): void | Promise<void>
   /**
@@ -271,6 +313,18 @@ export interface MediaHandler {
    * decision. Call `stopService()` here to force a stop.
    */
   onTaskRemoved(): void | Promise<void>
+  /**
+   * One of {@link PlaybackState.customActions} was pressed.
+   *
+   * **Android only.** `MPRemoteCommandCenter`'s command set is fixed and carries
+   * no app-defined identifier, so no iOS remote surface can invoke a custom
+   * action and this is never called there by the session — see
+   * {@link MediaCustomAction}. Call it from your own UI if you want one code
+   * path on both platforms.
+   *
+   * @param extras the controller's payload, or `undefined` when there is none.
+   * Only Android controllers can send one.
+   */
   customAction(
     name: string,
     extras?: Record<string, unknown>
@@ -540,8 +594,14 @@ export interface MediaServiceApi {
    * stream.
    *
    * If `item.id` does **not** match the current queue entry, the queue entry
-   * wins unchanged (and Android logs a warning) — that combination means the
-   * two broadcasts have got out of step.
+   * wins unchanged (and both platforms log a warning once) — that combination
+   * means the two broadcasts have got out of step.
+   *
+   * The merge, the priority order and the mismatch rule are identical on Android
+   * (`Snapshot.timeline` / `enrichedWith`) and iOS (`NowPlaying.resolve`). In
+   * particular, broadcasting **only** a queue plus a `queueIndex` is a complete
+   * statement on both: the queue entry at that index is what the notification
+   * and the lock screen show.
    */
   setMediaItem(item?: MediaItem): void
   /**

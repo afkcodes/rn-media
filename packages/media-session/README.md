@@ -86,6 +86,40 @@ service.setPlaybackState({
 await service.stopService() // the ONLY way to end background execution
 ```
 
+## Platform parity, in one table
+
+Everything in the public API works the same on both platforms **except** the
+rows below. Each one is a platform ceiling with a citation, not a to-do — and
+every one of them is also stated in the TSDoc of the member itself, so a caller
+never discovers a no-op at runtime. Anything not listed here behaves identically.
+
+| Member | Android | iOS | Why |
+|---|---|---|---|
+| `customActions` / `MediaHandler.customAction` | notification overflow buttons + `SessionCommand`s | **nothing renders, handler never fires** | `MPRemoteCommandCenter`'s command set is fixed and closed, and nothing in it carries an app-defined id. `like`/`dislike`/`bookmark` are `MPFeedbackCommand`s with system heart/thumb icons and `rating` is a star rating — a wrong button is worse than a missing one ([command list](https://developer.apple.com/documentation/mediaplayer/mpremotecommandcenter)) |
+| `capabilities: ['skipToQueueItem']` / `MediaHandler.skipToQueueItem` | `COMMAND_SEEK_TO_MEDIA_ITEM` — Auto, Wear, car head units | **never reached from a remote surface** | no queue-jump command exists in that same list |
+| `bufferedPosition` | secondary bar behind the scrubber | ignored | no buffered-position key; `MPNowPlayingInfoPropertyPlaybackProgress` is a *watched-so-far* indicator, not a buffer |
+| `status: 'stopped'` / `'error'`, `errorMessage` | distinct media3 states + a real `PlaybackException` | **indistinguishable from `paused`**, message dropped | the only state lever iOS gives an app is the playback *rate*. `MPNowPlayingInfoCenter.playbackState` exists on iOS 13+ but Apple documents it as *"This property only applies to macOS"* ([docs](https://developer.apple.com/documentation/mediaplayer/mpnowplayinginfocenter/playbackstate)) |
+| `compactControlIndices` | picks the ≤3 collapsed notification slots | ignored | iOS has no button *layout*; commands are enabled or not and the system draws what it draws |
+| `year`, `subtitle`, `extras` on `MediaItem` | `setReleaseYear` / `setSubtitle` / `MediaMetadata` `Bundle` | carried + persisted, **not published** | no such key exists — see [Metadata fields](#metadata-fields) |
+| `setRemotePlayback(...)` | hardware volume keys drive the other device | accepted, changes nothing | iOS gives an app no way to take over the volume buttons — see [iOS: a documented no-op](#ios-a-documented-no-op) |
+| `android.*` config, `onRevivalRequested`, `MediaHandler.onTaskRemoved`, `MediaHandler.onPlaybackResumption` | the foreground service, its notification and its revival | not applicable | iOS has no service, and a terminated iOS app stays terminated — see [The platform story](#the-platform-story-read-this-before-why-is-it-android-only) |
+| `ios.supportedPlaybackRates`, `ios.artworkCacheSize` | not applicable | the lock screen's rate list; the decoded-artwork cache | media3 takes an arbitrary float and draws no rate control, and owns its own artwork cache |
+
+Two things people expect to be on this list and are not, because they were
+fixed rather than documented:
+
+- **Queue-only broadcasts.** `setQueue` + `queueIndex` with no `setMediaItem`
+  used to leave the iOS lock screen blank while Android showed the queue entry.
+  Both platforms now resolve the current item the same way, and merge
+  `setMediaItem` over the queue entry field by field — see
+  [`setMediaItem`'s channel priority](#the-model).
+- **The fast-forward / rewind key on a Bluetooth remote or a car head unit.**
+  media3 answers it from the same `COMMAND_SEEK_FORWARD` as the on-screen
+  button; MediaPlayer splits the two (`skipForwardCommand` vs
+  `seekForwardCommand`) and only the first used to be bound, so the accessory key
+  was dead on iOS. Both are bound now, and one press means one
+  `jumpForwardSeconds` jump on both platforms.
+
 ## `MediaItem.id`: stable per **source**, and duplicates are fine
 
 One rule, because two different mechanisms depend on it:
@@ -397,11 +431,11 @@ so rather than pretending:**
 
 | Field | Android (media3 `MediaMetadata`) | iOS (`MPNowPlayingInfoCenter`) |
 |---|---|---|
-| `albumArtist` | `setAlbumArtist` | `MPMediaItemPropertyAlbumArtist` — sent, but **not** on Apple's documented supported-key list, so it may be ignored |
+| `albumArtist` | `setAlbumArtist` | `MPMediaItemPropertyAlbumArtist` — a real key, sent; Apple documents no list of the keys `nowPlayingInfo` actually renders, so no promise is made that it is drawn |
 | `trackNumber` | `setTrackNumber` | `MPMediaItemPropertyAlbumTrackNumber` |
 | `discNumber` | `setDiscNumber` | `MPMediaItemPropertyDiscNumber` |
-| `year` | `setReleaseYear` | **no key exists** — MediaPlayer has no year, and `MPMediaItemPropertyReleaseDate` is an `NSDate` and unsupported here |
-| `subtitle` | `setSubtitle` (media3's notification content text) | **no third line exists** |
+| `year` | `setReleaseYear` | **no key exists** — MediaPlayer has no year key at all, and the one date-shaped key, `MPMediaItemPropertyReleaseDate`, is an `NSDate`; a synthesised "1 January *year*" would be a fabricated precision |
+| `subtitle` | `setSubtitle` (media3's notification content text) | **no third line exists** — the only free-text keys left (`Comments`, `Lyrics`, `PodcastTitle`, `ServiceIdentifier`) all mean something else |
 | `isLive` | drops the duration + seekability, `isDynamic` timeline | `MPNowPlayingInfoPropertyIsLiveStream` |
 | `extras` | `MediaMetadata` `Bundle` (reaches third-party controllers) | **no key exists** |
 
@@ -981,8 +1015,15 @@ What that does **not** cover:
 
 - `MPRemoteCommandCenter` targets are added *and removed* to match
   `controls ∪ capabilities` exactly — stale handlers are the endemic bug here.
-- `MPNowPlayingInfoCenter` is written from `mediaItem` + `playbackState`.
+- `MPNowPlayingInfoCenter` is written from all three channels: the queue entry
+  at `queueIndex` is the base and `setMediaItem` is merged over it field by
+  field, exactly as on Android (`NowPlaying.resolve` ↔ `Snapshot.timeline`).
   Artwork loads off the main thread and is cached.
+- The two accessory scan commands (`seekForwardCommand` / `seekBackwardCommand`
+  — the FF/RW key on a Bluetooth remote or a car head unit) are bound alongside
+  `skipForwardCommand` / `skipBackwardCommand`, because media3 answers both from
+  one `COMMAND_SEEK_FORWARD`. A press delivers one `jumpForwardSeconds` jump; a
+  *continuous* scan has no Android twin, so it is not invented here.
 - There is **no service**. The process lives while audio plays, which requires
   `UIBackgroundModes: audio` in *your* Info.plist (a library cannot merge
   Info.plist keys — the Expo config plugin below writes it for you).

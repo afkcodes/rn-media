@@ -157,6 +157,38 @@ class SnapshotTest {
     assertNull(state.itemQueueMismatch)
   }
 
+  /**
+   * A queue plus a `queueIndex` and **no** `setMediaItem` is a complete
+   * statement: the entry at that index is what the surfaces show.
+   *
+   * Pinned as a cross-platform contract rather than as an Android detail. iOS
+   * used to publish the `setMediaItem` channel and nothing else, so this exact
+   * broadcast — which is what `QueueHandler` produces before a track is prepared
+   * — left the lock screen blank there while Android showed the entry.
+   * `NowPlaying.resolve` is now the twin of this, so the two implementations
+   * have to agree about which item is current, and this is the case that says so.
+   */
+  @Test
+  fun `a queue with no setMediaItem still names a current item`() {
+    val queue = listOf(item("a", title = "First"), item("b", title = "Second"))
+    val state = snapshot(item = null, queue = queue, queueIndex = 1)
+
+    assertSame(queue, state.timeline)
+    assertEquals(1, state.timelineIndex)
+    assertEquals("Second", state.currentItem?.title)
+    assertNull(state.itemQueueMismatch)
+  }
+
+  /** …and with no index either, the head of the queue is the honest answer. */
+  @Test
+  fun `a queue with no index and no item falls back to its first entry`() {
+    val queue = listOf(item("a", title = "First"), item("b"))
+    val state = snapshot(item = null, queue = queue, queueIndex = -1)
+
+    assertEquals(0, state.timelineIndex)
+    assertEquals("First", state.currentItem?.title)
+  }
+
   @Test
   fun `an out-of-range queueIndex falls back to the item`() {
     val state = snapshot(item = item("solo"), queue = listOf(item("a")), queueIndex = 9)
