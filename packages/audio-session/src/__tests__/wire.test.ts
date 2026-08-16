@@ -137,6 +137,51 @@ describe('wireAudioSession — pause sequences', () => {
   })
 })
 
+describe('wireAudioSession — a session that dies (iOS media services)', () => {
+  // iOS emits `permanent: true` for exactly one condition: a media-services
+  // failure. Both `mediaServicesWereLostNotification` and
+  // `mediaServicesWereResetNotification` report it, so the *pair* can arrive —
+  // and nothing is coming after them. Android's `AUDIOFOCUS_LOSS` is the same
+  // shape, hence one set of tests for both.
+  it('stops the player and keeps no resume claim across the lost/reset pair', () => {
+    const aware = new PlayingAwareFakePlayer(true)
+    wireAudioSession(aware, { session })
+
+    // …WereLost
+    native.emitInterruption(beginInterruption('pause', true))
+    aware.reportPlaying(false)
+    // …WereReset, moments later
+    native.emitInterruption(beginInterruption('pause', true))
+
+    // The second one has nothing left to stop — the player already said so.
+    expect(aware.calls).toEqual(['pause'])
+  })
+
+  it('never resumes after a permanent loss, whatever arrives next', () => {
+    const aware = new PlayingAwareFakePlayer(true)
+    wireAudioSession(aware, { session })
+
+    native.emitInterruption(beginInterruption('pause', true))
+    aware.reportPlaying(false)
+    native.emitInterruption(beginInterruption('pause', true))
+    // A stray end (a real interruption that began before the reset) must not
+    // restart audio: the claim was dropped with the session.
+    native.emitInterruption(endInterruption(true))
+
+    expect(aware.calls).toEqual(['pause'])
+  })
+
+  it('restores a duck before stopping when the session dies mid-duck', () => {
+    wire()
+
+    native.emitInterruption(beginInterruption('duck'))
+    native.emitInterruption(beginInterruption('pause', true))
+
+    expect(player.calls).toEqual(['setVolume(0.3)', 'setVolume(1)', 'pause'])
+    expect(player.getVolume()).toBe(1)
+  })
+})
+
 describe('wireAudioSession — escalation between duck and pause', () => {
   it('duck escalating to pause restores the volume before pausing', () => {
     wire()

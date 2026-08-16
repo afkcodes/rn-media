@@ -18,8 +18,13 @@ export type AudioSessionInterruptionEvent =
       /** What the OS is asking us to do while the interruption lasts. */
       readonly type: AudioInterruptionType
       /**
-       * `true` when focus is gone for good (Android `AUDIOFOCUS_LOSS`). A
-       * `begin: false` event with `shouldResume: true` will never follow.
+       * `true` when the session is gone for good — Android `AUDIOFOCUS_LOSS`,
+       * or an iOS media-services failure. A `begin: false` event with
+       * `shouldResume: true` will never follow.
+       *
+       * An ordinary iOS interruption (a call, Siri, another app) is always
+       * `false`: `AVAudioSession` carries no permanence information on
+       * `.began`. See `NativeInterruptionEvent.permanent`.
        */
       readonly permanent: boolean
     }
@@ -56,16 +61,37 @@ export type Unsubscribe = () => void
  * that tests, and anyone wiring a different backend, can substitute a fake.
  */
 export interface AudioSessionApi {
-  /** Apply an {@link AudioSessionConfig} (or a preset) to the OS session. */
+  /**
+   * Apply an {@link AudioSessionConfig} (or a preset) to the OS session.
+   *
+   * Applies immediately on iOS; takes effect at the next {@link activate} on
+   * Android. Configure before activating and the two agree — see
+   * `RnMediaAudioSession.configure` for why the models differ.
+   */
   configure(config: AudioSessionConfig): Promise<void>
   /**
    * Request the session/focus. Resolves `false` when the OS refuses — callers
-   * must not start playback in that case.
+   * must not start playback in that case. A rejection means the call itself was
+   * wrong (or the media server is broken), never "denied"; see
+   * `RnMediaAudioSession.activate` for the exact iOS error codes each side
+   * takes.
    */
   activate(): Promise<boolean>
-  /** Release the session/focus. */
+  /**
+   * Release the session/focus.
+   *
+   * Rejects on iOS if audio is still playing (`AVAudioSessionErrorCode.isBusy`);
+   * cannot reject on Android. Pause the player first.
+   */
   deactivate(): Promise<void>
-  /** Subscribe to one of the three event streams. */
+  /**
+   * Subscribe to one of the three event streams.
+   *
+   * `becomingNoisy` and `routeChange` are delivered from the moment you
+   * subscribe on both platforms. `interruption` additionally requires an
+   * outstanding focus request on Android — see
+   * `RnMediaAudioSession.addInterruptionListener`.
+   */
   addListener<K extends AudioSessionEventName>(
     event: K,
     listener: (payload: AudioSessionEventMap[K]) => void

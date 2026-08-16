@@ -73,8 +73,11 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
   /** Main-thread only. `true` between a transient loss and the matching gain. */
   private var lostFocusTransiently = false
 
-  /** Main-thread only. Guards receiver/callback registration symmetry. */
+  /** Main-thread only. `true` while we hold (or believe we hold) audio focus. */
   private var isActive = false
+
+  /** Main-thread only. Guards receiver/callback registration symmetry. */
+  private var isListeningToRoute = false
 
   private val focusListener =
     AudioManager.OnAudioFocusChangeListener { focusChange ->
@@ -84,11 +87,14 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
         AudioManager.AUDIOFOCUS_LOSS -> {
           lostFocusTransiently = false
           // Focus is gone for good, so the session is no longer "active" in any
-          // meaningful sense: release the receiver + device callback right here
-          // rather than waiting for a `deactivate()` the app may never send.
-          // `focusRequest` is kept so an explicit `deactivate()` still abandons
-          // cleanly; both paths are idempotent.
-          stopListeningToRoute()
+          // meaningful sense. `focusRequest` is kept so an explicit
+          // `deactivate()` still abandons cleanly; both paths are idempotent.
+          // The route listeners are *not* torn down here if anything is still
+          // subscribed — they are derived from the listener set (see
+          // [syncRouteListening]), the same as on iOS, where a permanent
+          // interruption does not silence `becomingNoisy` either.
+          isActive = false
+          syncRouteListening()
           emitInterruption(begin = true, type = AudioInterruptionType.PAUSE, permanent = true)
         }
         // Transient loss (a call, a nav prompt with exclusive focus, ...).
@@ -121,9 +127,10 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
     }
 
   /**
-   * Registered only while active. `ACTION_AUDIO_BECOMING_NOISY` is sticky-free
-   * and cheap, but an unregistered receiver on a long-lived application context
-   * is a leak, so registration is strictly paired with [activate]/[deactivate].
+   * Registered while the session is active **or** anything is subscribed — see
+   * [syncRouteListening]. `ACTION_AUDIO_BECOMING_NOISY` is sticky-free and
+   * cheap, but a forgotten receiver on a long-lived application context is a
+   * leak, so registration stays strictly derived from that pair of facts.
    */
   private val becomingNoisyReceiver =
     object : BroadcastReceiver() {
@@ -183,7 +190,8 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
             )
           }
         val granted = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        if (granted) startListeningToRoute()
+        isActive = granted
+        syncRouteListening()
         promise.resolve(granted)
       } catch (error: Throwable) {
         promise.reject(error)
@@ -196,7 +204,8 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
     val promise = Promise<Unit>()
     runOnMain {
       try {
-        stopListeningToRoute()
+        isActive = false
+        syncRouteListening()
         lostFocusTransiently = false
         val request = focusRequest
         if (request != null) {
@@ -223,19 +232,31 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
     interruptionListeners.remove(listenerId.toLong())
   }
 
-  override fun addBecomingNoisyListener(listener: () -> Unit): Double =
-    register(becomingNoisyListeners, listener)
+  override fun addBecomingNoisyListener(listener: () -> Unit): Double {
+    val id = register(becomingNoisyListeners, listener)
+    // The receiver is derived from the listener set, not from `activate()`:
+    // subscribing must be enough to be told, exactly as it is on iOS, where the
+    // `AVAudioSession` route-change observer is not gated on activation either.
+    runOnMain { syncRouteListening() }
+    return id
+  }
 
   override fun removeBecomingNoisyListener(listenerId: Double) {
     becomingNoisyListeners.remove(listenerId.toLong())
+    runOnMain { syncRouteListening() }
   }
 
   override fun addRouteChangeListener(
     listener: (event: NativeRouteChangeEvent) -> Unit
-  ): Double = register(routeChangeListeners, listener)
+  ): Double {
+    val id = register(routeChangeListeners, listener)
+    runOnMain { syncRouteListening() }
+    return id
+  }
 
   override fun removeRouteChangeListener(listenerId: Double) {
     routeChangeListeners.remove(listenerId.toLong())
+    runOnMain { syncRouteListening() }
   }
 
   // -------------------------------------------------------------------------
@@ -252,9 +273,31 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
     if (Looper.myLooper() == Looper.getMainLooper()) block() else handler.post(block)
   }
 
+  /**
+   * Register (or release) the becoming-noisy receiver and the device callback
+   * so that their lifetime is the union of "we hold focus" and "somebody is
+   * subscribed".
+   *
+   * The listener half is what makes the JS contract identical on both
+   * platforms: on iOS these events come from the `AVAudioSession`
+   * route-change notification, which fires whether or not the session was ever
+   * activated, so an Android build that only listened between `activate()` and
+   * `deactivate()` was a silent no-op for anyone who subscribed first — and
+   * went permanently silent after an `AUDIOFOCUS_LOSS`. The `isActive` half is
+   * kept so an app that subscribes *after* activating (the common order in a
+   * player) is still covered without depending on subscription order.
+   *
+   * Main-thread only.
+   */
+  private fun syncRouteListening() {
+    val wanted =
+      isActive || becomingNoisyListeners.isNotEmpty() || routeChangeListeners.isNotEmpty()
+    if (wanted) startListeningToRoute() else stopListeningToRoute()
+  }
+
   private fun startListeningToRoute() {
-    if (isActive) return
-    isActive = true
+    if (isListeningToRoute) return
+    isListeningToRoute = true
     val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
     // Android 13+ requires an explicit export flag. `ACTION_AUDIO_BECOMING_NOISY`
     // is a protected system broadcast, so NOT_EXPORTED is both allowed and the
@@ -274,11 +317,11 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
   }
 
   private fun stopListeningToRoute() {
-    if (!isActive) return
-    isActive = false
+    if (!isListeningToRoute) return
+    isListeningToRoute = false
     // `unregisterReceiver` throws if the receiver was never registered; the
-    // `isActive` flag makes the pairing exact, and the try/catch is a backstop
-    // for a context torn down underneath us.
+    // `isListeningToRoute` flag makes the pairing exact, and the try/catch is a
+    // backstop for a context torn down underneath us.
     try {
       appContext.unregisterReceiver(becomingNoisyReceiver)
     } catch (_: IllegalArgumentException) {
