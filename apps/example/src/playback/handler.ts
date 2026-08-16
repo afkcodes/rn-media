@@ -19,7 +19,13 @@ import { BaseMediaHandler, type MediaRepeatMode } from '@rn-media/media-session'
 export interface PlaybackCommands {
   play(): Promise<void>
   pause(): void
-  stop(): Promise<void>
+  /**
+   * Stop playback, keep the session — the library's `stop` contract.
+   *
+   * Not the app's "stop & dismiss notification", which ends background
+   * execution and is deliberately reachable only from the app's own UI.
+   */
+  stopPlayback(): Promise<void>
   seekTo(seconds: number): void
   next(): void
   previous(): void
@@ -62,7 +68,10 @@ export class DemoMediaHandler extends BaseMediaHandler {
   }
   override stop(): void {
     this.#log('stop')
-    return void this.target().stop()
+    // `stopPlayback`, never the controller's `stop`: a remote stop must leave
+    // the session standing so the surface keeps a play button. See
+    // `Playback.stopPlayback`.
+    return void this.target().stopPlayback()
   }
   override seekTo(position: number): void {
     this.#log('seekTo')
