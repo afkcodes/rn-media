@@ -1,5 +1,6 @@
 package com.rnmediacast
 
+import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.framework.CastState
 import com.margelo.nitro.rnmediacast.CastConnectionState
@@ -180,5 +181,52 @@ class CastMappingTest {
   fun `milliseconds become seconds`() {
     assertEquals(1.5, CastMapping.millisToSeconds(1_500L), 0.0)
     assertEquals(0.0, CastMapping.millisToSeconds(0L), 0.0)
+  }
+
+  // MARK: - Queue ids and indices (iOS parity)
+
+  @Test
+  fun `a real item id survives the double round trip`() {
+    assertEquals(7, CastMapping.queueItemId(7.0))
+    assertEquals(1, CastMapping.queueItemId(1.0))
+    // Bridge doubles are not always exact integers.
+    assertEquals(7, CastMapping.queueItemId(7.4))
+  }
+
+  @Test
+  fun `nonsensical item ids fold to INVALID_ITEM_ID, never to a wrong item`() {
+    // Same values, same answer as the iOS `CastMapping.queueItemID(_:)`, where
+    // the fold also stops `UInt(_: Double)` from TRAPPING. `MediaQueueItem
+    // .INVALID_ITEM_ID` and `kGCKMediaQueueInvalidItemID` are both 0, so the
+    // SDK rejects the request with a typed error on both platforms.
+    assertEquals(MediaQueueItem.INVALID_ITEM_ID, CastMapping.queueItemId(Double.NaN))
+    assertEquals(
+      MediaQueueItem.INVALID_ITEM_ID,
+      CastMapping.queueItemId(Double.NEGATIVE_INFINITY)
+    )
+    assertEquals(MediaQueueItem.INVALID_ITEM_ID, CastMapping.queueItemId(-4.0))
+    assertEquals(MediaQueueItem.INVALID_ITEM_ID, CastMapping.queueItemId(0.0))
+    // Infinity is nonsense, not "very large" — the `secondsToMillis` rule.
+    assertEquals(
+      MediaQueueItem.INVALID_ITEM_ID,
+      CastMapping.queueItemId(Double.POSITIVE_INFINITY)
+    )
+  }
+
+  @Test
+  fun `a finite but out-of-range item id clamps instead of wrapping`() {
+    // A silent Int wrap would address a DIFFERENT, real queue item; on iOS the
+    // same value would trap the `UInt` initializer outright.
+    assertEquals(Int.MAX_VALUE, CastMapping.queueItemId(1e30))
+  }
+
+  @Test
+  fun `indices are non-negative and never nonsense`() {
+    assertEquals(0, CastMapping.index(0.0))
+    assertEquals(3, CastMapping.index(3.0))
+    assertEquals(0, CastMapping.index(-1.0))
+    assertEquals(0, CastMapping.index(Double.NaN))
+    assertEquals(0, CastMapping.index(Double.POSITIVE_INFINITY))
+    assertEquals(Int.MAX_VALUE, CastMapping.index(1e30))
   }
 }

@@ -49,6 +49,16 @@ final class CastCoordinator: NSObject {
   private var attachedSession: GCKCastSession?
   private var attachedClient: GCKRemoteMediaClient?
 
+  /// A real media status has been seen for the attached session. Gates the
+  /// synthesized idle: only a real→nil transition means "the receiver's media
+  /// session died"; a nil before any status is just a fresh session with
+  /// nothing loaded yet. (Android mirror: `CastController.hadMediaStatus`.)
+  fileprivate var hadMediaStatus = false
+
+  /// One synthesized media error per idle period — see
+  /// `synthesizeMediaError(from:)`.
+  fileprivate var errorReportedForCurrentIdle = false
+
   /// GCKRequest delegates retained until their request settles.
   private var inFlightRequests: Set<RequestBridge> = []
 
@@ -90,10 +100,28 @@ final class CastCoordinator: NSObject {
     CastMapping.connectionState(context.castState)
   }
 
+  /// Broadcast the current state as a `castState` event.
+  ///
+  /// Called once when `initialize` settles, because neither platform replays
+  /// the state to a listener that arrives late and the SDKs *resume an
+  /// existing session before JS initializes* — device-found on Android, and
+  /// structurally identical here (`init` below attaches to
+  /// `currentCastSession`). Without this, an app whose subscription is in
+  /// place before `initialize()` resolves would never learn it is already
+  /// connected, and `<CastButton/>` would stay hidden forever.
+  func emitCurrentState() {
+    emitter?.onCastState(NativeCastStateEvent(
+      state: currentConnectionState(),
+      device: currentDeviceInfo()
+    ))
+  }
+
   func startDiscovery(_ promise: Promise<Void>) {
-    discoveryActive = true
     discoveryStopDeferred = false
-    context.discoveryManager.startDiscovery()
+    if !discoveryActive {
+      discoveryActive = true
+      context.discoveryManager.startDiscovery()
+    }
     emitDevices()
     promise.resolve(withResult: ())
   }
@@ -252,17 +280,59 @@ final class CastCoordinator: NSObject {
 
   func queueLoad(items: [CastQueueItemInput], options: CastQueueLoadOptions, promise: Promise<Void>) {
     guard let client = requireClient(promise) else { return }
+    let startIndex = CastMapping.index(options.startIndex ?? 0)
+    let startPosition = CastMapping.sanitizeSeconds(options.startPosition ?? 0)
+    let repeatMode = CastMapping.toGCKRepeatMode(options.repeatMode ?? .off)
+    let usesCredentials = options.credentials != nil || options.credentialsType != nil
+
     var queueItems: [GCKMediaQueueItem] = []
     queueItems.reserveCapacity(items.count)
-    for item in items {
-      guard let built = queueItem(item, promise: promise) else { return }
+    for (index, item) in items.enumerated() {
+      // Only the credentials path needs the start position baked into the
+      // start item; the plain path carries it as `playPosition`, which is not
+      // sticky (see below).
+      let itemStartTime: TimeInterval? =
+        (usesCredentials && index == startIndex && startPosition > 0) ? startPosition : nil
+      guard let built = queueItem(item, startTimeOverride: itemStartTime, promise: promise)
+      else {
+        return
+      }
       queueItems.append(built)
     }
+
+    if !usesCredentials {
+      // Same call shape as Android's classic `RemoteMediaClient.queueLoad`,
+      // and for the same device-found reason: `queueData.startTime` does NOT
+      // deliver a start position — the Default Media Receiver began at 0:00
+      // every time (POCO F4 → Mi Smart Speaker, 2026-08-14). That is a
+      // RECEIVER-side behaviour, so it is not an Android quirk: the same
+      // receiver ignores the same wire field from an iOS sender.
+      // `queueLoadItems:withOptions:` carries `playPosition` instead, which
+      // the receiver honours; it is current API (GCKRemoteMediaClient.h,
+      // @since 4.3.1) — unlike the `startIndex:repeatMode:` overloads next to
+      // it, which are GCK_DEPRECATED.
+      let loadOptions = GCKMediaQueueLoadOptions()
+      loadOptions.startIndex = UInt(startIndex)
+      loadOptions.playPosition = startPosition
+      loadOptions.repeatMode = repeatMode
+      bridge(
+        client.queueLoad(queueItems, with: loadOptions),
+        promise,
+        family: "load-failed",
+        operation: "queueLoad"
+      )
+      return
+    }
+    // Credentials only travel on GCKMediaLoadRequestData, so that path stays
+    // for custom receivers that need them. The start position rode onto the
+    // START ITEM above (a `GCKMediaQueueItem.startTime` is honoured where
+    // `queueData.startTime` is not) — the Android rule, verbatim, including
+    // its caveat: an item-level startTime is sticky, so jumping back to the
+    // start item later in the session resumes it at this offset rather than 0.
     let queueBuilder = GCKMediaQueueDataBuilder(queueType: .generic)
     queueBuilder.items = queueItems
-    queueBuilder.startIndex = UInt(max(0, Int(options.startIndex ?? 0)))
-    queueBuilder.startTime = CastMapping.sanitizeSeconds(options.startPosition ?? 0)
-    queueBuilder.repeatMode = CastMapping.toGCKRepeatMode(options.repeatMode ?? .off)
+    queueBuilder.startIndex = UInt(startIndex)
+    queueBuilder.repeatMode = repeatMode
     let builder = GCKMediaLoadRequestDataBuilder()
     builder.queueData = queueBuilder.build()
     builder.credentials = options.credentials
@@ -278,7 +348,7 @@ final class CastCoordinator: NSObject {
       guard let built = queueItem(item, promise: promise) else { return }
       queueItems.append(built)
     }
-    let beforeID = beforeItemId.map { UInt($0) } ?? kGCKMediaQueueInvalidItemID
+    let beforeID = beforeItemId.map(CastMapping.queueItemID) ?? kGCKMediaQueueInvalidItemID
     bridge(
       client.queueInsert(queueItems, beforeItemWithID: beforeID),
       promise,
@@ -289,7 +359,9 @@ final class CastCoordinator: NSObject {
   func queueRemove(itemIds: [Double], promise: Promise<Void>) {
     guard let client = requireClient(promise) else { return }
     bridge(
-      client.queueRemoveItems(withIDs: itemIds.map { NSNumber(value: UInt($0)) }),
+      client.queueRemoveItems(
+        withIDs: itemIds.map { NSNumber(value: CastMapping.queueItemID($0)) }
+      ),
       promise,
       operation: "queueRemove"
     )
@@ -297,10 +369,10 @@ final class CastCoordinator: NSObject {
 
   func queueReorder(itemIds: [Double], beforeItemId: Double?, promise: Promise<Void>) {
     guard let client = requireClient(promise) else { return }
-    let beforeID = beforeItemId.map { UInt($0) } ?? kGCKMediaQueueInvalidItemID
+    let beforeID = beforeItemId.map(CastMapping.queueItemID) ?? kGCKMediaQueueInvalidItemID
     bridge(
       client.queueReorderItems(
-        withIDs: itemIds.map { NSNumber(value: UInt($0)) },
+        withIDs: itemIds.map { NSNumber(value: CastMapping.queueItemID($0)) },
         insertBeforeItemWithID: beforeID
       ),
       promise,
@@ -315,12 +387,12 @@ final class CastCoordinator: NSObject {
       // Verified against GCKRemoteMediaClient.h (4.8.6):
       // queueJumpToItemWithID:playPosition:customData:.
       request = client.queueJumpToItem(
-        withID: UInt(itemId),
+        withID: CastMapping.queueItemID(itemId),
         playPosition: CastMapping.sanitizeSeconds(position),
         customData: nil
       )
     } else {
-      request = client.queueJumpToItem(withID: UInt(itemId))
+      request = client.queueJumpToItem(withID: CastMapping.queueItemID(itemId))
     }
     bridge(request, promise, operation: "queueJumpTo")
   }
@@ -345,8 +417,8 @@ final class CastCoordinator: NSObject {
     guard let client = requireClient(promise) else { return }
     let queue = client.mediaQueue
     let total = Int(queue.itemCount)
-    let start = max(0, Int(startIndex))
-    let end = min(start + max(0, Int(count)), total)
+    let start = CastMapping.index(startIndex)
+    let end = min(start + CastMapping.index(count), total)
     guard start < end else {
       promise.resolve(withResult: [])
       return
@@ -376,6 +448,8 @@ final class CastCoordinator: NSObject {
   private func attach(_ session: GCKCastSession) {
     guard attachedSession !== session else { return }
     detach()
+    hadMediaStatus = false
+    errorReportedForCurrentIdle = false
     attachedSession = session
     let client = session.remoteMediaClient
     attachedClient = client
@@ -389,6 +463,8 @@ final class CastCoordinator: NSObject {
     attachedClient?.remove(self)
     attachedClient = nil
     attachedSession = nil
+    hadMediaStatus = false
+    errorReportedForCurrentIdle = false
   }
 
   private func requireClient<T>(_ promise: Promise<T>) -> GCKRemoteMediaClient? {
@@ -485,7 +561,11 @@ final class CastCoordinator: NSObject {
     return builder.build()
   }
 
-  private func queueItem<T>(_ input: CastQueueItemInput, promise: Promise<T>) -> GCKMediaQueueItem? {
+  private func queueItem<T>(
+    _ input: CastQueueItemInput,
+    startTimeOverride: TimeInterval? = nil,
+    promise: Promise<T>
+  ) -> GCKMediaQueueItem? {
     guard let media = mediaInfo(input.source, promise: promise) else { return nil }
     let builder = GCKMediaQueueItemBuilder()
     builder.mediaInformation = media
@@ -495,7 +575,7 @@ final class CastCoordinator: NSObject {
     if let preload = input.preloadTime, preload.isFinite, preload >= 0 {
       builder.preloadTime = preload
     }
-    if let start = input.startPosition, start.isFinite, start >= 0 {
+    if let start = startTimeOverride ?? input.startPosition, start.isFinite, start >= 0 {
       builder.startTime = start
     }
     return builder.build()
@@ -513,7 +593,7 @@ final class CastCoordinator: NSObject {
       self?.inFlightRequests.remove(bridge)
     }
     inFlightRequests.insert(box)
-    request.delegate = box
+    box.start(request)
   }
 
   @objc private func castStateDidChange() {
@@ -575,6 +655,20 @@ extension CastCoordinator: GCKSessionManagerListener {
     emitter?.onCastState(NativeCastStateEvent(state: .idle, device: nil))
   }
 
+  func sessionManager(_ sessionManager: GCKSessionManager, willResumeCastSession session: GCKCastSession) {
+    // Android's `onSessionResuming` counterpart: a resume in flight is
+    // `connecting`, not a silent gap between `idle` and `connected`.
+    // Spelled like `didResumeCastSession` below (the form Google's own
+    // CastVideos-swift sample uses) rather than the pruned `willResume` the
+    // ClangImporter *may* produce; the SDK's own
+    // `kGCKCastStateDidChangeNotification` observer covers this transition
+    // either way, so a naming miss here is redundancy lost, never a silent
+    // gap — and Swift's near-miss-optional-requirement diagnostic would say
+    // so at build time.
+    emitter?.onCastState(NativeCastStateEvent(
+      state: .connecting, device: CastMapping.deviceInfo(session.device)))
+  }
+
   func sessionManager(_ sessionManager: GCKSessionManager, didResumeCastSession session: GCKCastSession) {
     attach(session)
     pendingStart?.resolve(withResult: ())
@@ -620,8 +714,64 @@ extension CastCoordinator: GCKDiscoveryManagerListener {
 
 extension CastCoordinator: GCKRemoteMediaClientListener {
   func remoteMediaClient(_ client: GCKRemoteMediaClient, didUpdate mediaStatus: GCKMediaStatus?) {
-    guard let status = mediaStatus else { return }
+    guard let status = mediaStatus else {
+      // Real → nil: the receiver's MEDIA SESSION died with the cast session
+      // still up. The Android half synthesizes an idle status here for a
+      // device-found reason (a live-stream load the receiver could not start
+      // killed the media session; the phone then showed "playing" for
+      // minutes) — same synthesis, same `interrupted` reason, so an iOS app
+      // is not the one left staring at a stale transport.
+      guard hadMediaStatus else { return }
+      hadMediaStatus = false
+      errorReportedForCurrentIdle = false
+      emitter?.onMediaStatus(NativeCastMediaStatusEvent(
+        playerState: .idle,
+        idleReason: .interrupted,
+        position: 0,
+        duration: nil,
+        playbackRate: 0,
+        streamVolume: 0,
+        streamMuted: false,
+        repeatMode: .off,
+        currentItemId: nil,
+        queueItemCount: 0
+      ))
+      return
+    }
+    hadMediaStatus = true
     emitter?.onMediaStatus(statusEvent(client, status))
+    synthesizeMediaError(from: status)
+  }
+
+  /// iOS's stand-in for `RemoteMediaClient.Callback.onMediaError`.
+  ///
+  /// There is no media-error callback in GoogleCast 4.8.6:
+  /// `GCKRemoteMediaClientListener` (`GCKRemoteMediaClient.h`) declares ten
+  /// optional methods and none of them reports an error, and `GCKMediaStatus`
+  /// (`GCKMediaStatus.h`) has no error code or reason property. Without this,
+  /// `addMediaErrorListener` would be registered-but-never-called on iOS — a
+  /// silent no-op for exactly the failure class we hit most on hardware (a
+  /// receiver that cannot fetch or decode the URL).
+  ///
+  /// The signal is the one the Cast protocol does carry: `.idle` with
+  /// `idleReason == .error`. `finished` / `cancelled` / `interrupted` are
+  /// states, not errors, and are never turned into one.
+  ///
+  /// Latched per idle period so a burst of identical idle statuses produces
+  /// one error, the same "once per failure" cardinality Android's callback
+  /// has; leaving idle re-arms it, so a retry that fails again is reported
+  /// again. The JS facade de-dupes this against the idle status itself.
+  private func synthesizeMediaError(from status: GCKMediaStatus) {
+    guard status.playerState == .idle else {
+      errorReportedForCurrentIdle = false
+      return
+    }
+    guard status.idleReason == .error, !errorReportedForCurrentIdle else { return }
+    errorReportedForCurrentIdle = true
+    // Both fields are nil by platform ceiling — iOS has no receiver-supplied
+    // detail to put in them. The typed family (`cast-receiver-fetch`) and the
+    // message are identical to Android's, which is what app code branches on.
+    emitter?.onMediaError(NativeCastMediaErrorEvent(detailedErrorCode: nil, reason: nil))
   }
 
   func remoteMediaClientDidUpdateQueue(_ client: GCKRemoteMediaClient) {
@@ -657,11 +807,31 @@ enum CastBridgeError: LocalizedError {
 
 /// Settles one promise from one `GCKRequest`'s delegate callbacks, then
 /// releases itself via `onSettled`.
+///
+/// Bounded, exactly like the Android half's `PendingResult.bridge`: a command
+/// issued while the receiver's media session is dead or dying can leave its
+/// request unsettled indefinitely (device-found on Android, POCO F4 → Mi Smart
+/// Speaker: a `queueJumpTo` sat pending for four minutes, so every queue tap
+/// "silently did nothing"). `GCKRequest` has no timeout of its own — the whole
+/// 4.8.6 surface is `cancel`, `requestID`, `error`, `inProgress`
+/// (`GCKRequest.h`) — so the bound is ours, at the same ten seconds and with
+/// the same message shape.
 final class RequestBridge: NSObject, GCKRequestDelegate {
+  /// A healthy LAN command acks well under a second; ten seconds of silence
+  /// means the media channel is not answering. Comfortably under
+  /// `wireCastHandoff`'s 15 s handoff bound, so a hung queueLoad surfaces
+  /// natively first, with the sharper message.
+  static let timeoutSeconds: TimeInterval = 10
+
   private let promise: Promise<Void>
   private let family: String
   private let operation: String
   private let onSettled: (RequestBridge) -> Void
+  /// Settle-once guard: the timeout and a late delegate callback race, and the
+  /// loser must not touch the promise again.
+  private var settled = false
+  private weak var request: GCKRequest?
+  private var timeout: DispatchWorkItem?
 
   init(
     promise: Promise<Void>,
@@ -676,21 +846,56 @@ final class RequestBridge: NSObject, GCKRequestDelegate {
     super.init()
   }
 
-  func requestDidComplete(_ request: GCKRequest) {
-    promise.resolve(withResult: ())
+  /// Arm the bound. Main queue only — the coordinator's threading contract.
+  func start(_ request: GCKRequest) {
+    self.request = request
+    request.delegate = self
+    let work = DispatchWorkItem { [weak self] in self?.fireTimeout() }
+    timeout = work
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + RequestBridge.timeoutSeconds, execute: work)
+  }
+
+  private func fireTimeout() {
+    guard !settled else { return }
+    let request = self.request
+    // Settle FIRST: `cancel()` can deliver `didAbortWith` synchronously, and
+    // that path resolves — so cancelling before settling would hand the caller
+    // a success for a command that never acked. Settling first makes the abort
+    // land on an already-settled bridge, which swallows it.
+    settle {
+      promise.reject(withError: CastBridgeError.message(
+        "[\(family)] \(operation) failed: TIMEOUT — no result within " +
+          "\(Int(RequestBridge.timeoutSeconds * 1000)) ms; the receiver's " +
+          "media session may be gone"))
+    }
+    request?.cancel()
+  }
+
+  private func settle(_ body: () -> Void) {
+    guard !settled else { return }
+    settled = true
+    timeout?.cancel()
+    timeout = nil
+    body()
     onSettled(self)
   }
 
+  func requestDidComplete(_ request: GCKRequest) {
+    settle { promise.resolve(withResult: ()) }
+  }
+
   func request(_ request: GCKRequest, didFailWithError error: GCKError) {
-    promise.reject(withError: CastBridgeError.message(
-      "[\(family)] \(operation) failed, status=\(error.code) (\(error.localizedDescription))"))
-    onSettled(self)
+    settle {
+      promise.reject(withError: CastBridgeError.message(
+        "[\(family)] \(operation) failed, status=\(error.code) (\(error.localizedDescription))"))
+    }
   }
 
   func request(_ request: GCKRequest, didAbortWith abortReason: GCKRequestAbortReason) {
     // Replaced by a newer request (e.g. two rapid seeks). Not a failure the
-    // caller can act on — the newer request's outcome is the truth.
-    promise.resolve(withResult: ())
-    onSettled(self)
+    // caller can act on — the newer request's outcome is the truth. (Android's
+    // mirror of this is treating `CastStatusCodes.REPLACED` as success.)
+    settle { promise.resolve(withResult: ()) }
   }
 }

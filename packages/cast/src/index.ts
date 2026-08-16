@@ -1,7 +1,12 @@
 export { Cast, createCast } from './cast'
 export { CastButton } from './cast-button'
 export { canCastMedia, castabilityTables } from './can-cast'
-export { CastError, errorFromIdleReason, toCastError } from './errors'
+export {
+  CastError,
+  errorFromIdleReason,
+  receiverFetchError,
+  toCastError,
+} from './errors'
 export {
   initialCastHandoffState,
   projectCastQueue,

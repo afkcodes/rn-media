@@ -51,6 +51,23 @@ export type CastSeekResumeState = 'unchanged' | 'play' | 'pause'
  * `SessionManagerListener<CastSession>` (Android) and
  * `GCKSessionManagerListener` (iOS), plus Android's
  * `SessionTransferCallback` for the output-switcher stream transfer.
+ *
+ * Parity notes — two members are **Android-only ceilings**:
+ * - `transferring` / `transferred` / `transferFailed` come from
+ *   `CastContext.addSessionTransferCallback` (play-services-cast-framework
+ *   22.3.1), the Android 13+ system output-switcher stream transfer. iOS has
+ *   no system transfer surface and `GCKSessionManagerListener`
+ *   (GoogleCast 4.8.6, `GCKSessionManager.h`) declares no transfer callback,
+ *   so these never fire there — as does the `transferring` connection state.
+ * - `startFailed` fires on iOS for a failed session *start*
+ *   (`sessionManager:didFailToStartCastSession:withError:`) but not for a
+ *   failed session *resume*: 4.8.6 removed the resume-failure callback
+ *   entirely (there is no `didFailToResume…` anywhere in the 4.8.6 headers;
+ *   Google's own `CastVideos-swift` sample still implements one, which is
+ *   exactly the silent no-op this note exists to prevent). Android reports it
+ *   via `onSessionResumeFailed`.
+ *
+ * Everything else fires on both.
  */
 export type CastSessionEventType =
   | 'starting'
@@ -233,15 +250,29 @@ export interface NativeCastMediaStatusEvent {
 }
 
 /**
- * Receiver-side media failure, out-of-band from status updates
- * (`RemoteMediaClient.Callback.onMediaError` / `GCKRemoteMediaClient`'s error
- * surface). The TS layer folds this into the `cast-receiver-fetch` error
- * family.
+ * Receiver-side media failure. The TS layer folds this into the
+ * `cast-receiver-fetch` error family.
+ *
+ * Fires on **both** platforms, from different sources:
+ * - **Android** — the SDK's own out-of-band callback,
+ *   `RemoteMediaClient.Callback.onMediaError(MediaError)`, carrying
+ *   `getDetailedErrorCode()` and `getReason()`.
+ * - **iOS** — synthesized natively from the media status
+ *   (`playerState == .idle && idleReason == .error`), once per idle period.
+ *
+ * **CEILING — the detail fields are Android-only.** GoogleCast 4.8.6 has no
+ * media-error callback: `GCKRemoteMediaClientListener`
+ * (`GCKRemoteMediaClient.h`) declares ten optional methods and not one of them
+ * reports an error, and `GCKMediaStatus` (`GCKMediaStatus.h`) has no error
+ * code/reason property — the only error surface the SDK exposes is a failed
+ * `GCKRequest`, which is per-request, not out-of-band. So on iOS both fields
+ * below are always absent. Branch on the `CastError`'s `code`, never on the
+ * presence of these.
  */
 export interface NativeCastMediaErrorEvent {
-  /** Receiver's detailed error code, when provided. */
+  /** Receiver's detailed error code, when provided. **Android only.** */
   detailedErrorCode?: number
-  /** Receiver's error reason string, when provided. */
+  /** Receiver's error reason string, when provided. **Android only.** */
   reason?: string
 }
 
@@ -296,6 +327,19 @@ export interface RnMediaCast extends HybridObject<{
    *
    * iOS: `GCKCastContext.setSharedInstanceWith(options)` with
    * `receiverApplicationId` (default: the Default Media Receiver).
+   *
+   * **CEILING (receiver app id, iOS): the id is fixed at first initialize.**
+   * `GCKCastContext` exposes only `+setSharedInstanceWithOptions:` and
+   * `+isSharedInstanceInitialized` (GoogleCast 4.8.6, `GCKCastContext.h`) —
+   * there is no `setReceiverApplicationId`, no writable `options`, and
+   * `GCKDiscoveryManager` has no way to swap its `GCKDiscoveryCriteria`. So a
+   * *later* `initialize` with a **different** id is honoured on Android
+   * (`CastContext.setReceiverApplicationId`, verified with `javap` against
+   * play-services-cast-framework 22.3.1) and cannot be honoured on iOS: the
+   * first id wins for the life of the process, and the native side logs a
+   * warning rather than failing silently. Pass the id on the first call, or
+   * set it in the manifest/plist through the Expo plugin.
+   *
    * NOTE (init timing): Google's guidance is to initialize in
    * `application(_:didFinishLaunchingWithOptions:)` so the SDK can resume a
    * session the app was killed during. Calling this from JS is later than
@@ -356,6 +400,13 @@ export interface RnMediaCast extends HybridObject<{
    * Resolves when the picker is shown (not when a device is picked — watch
    * the session events). Rejects `[invalid-state]` with no foreground
    * Activity (Android).
+   *
+   * **CEILING (iOS): "shown" is unverifiable.**
+   * `-[GCKCastContext presentCastDialog]` returns `void`
+   * (GoogleCast 4.8.6, `GCKCastContext+UI.h`) — with no key window the SDK
+   * simply does nothing and reports nothing, so iOS always resolves. Android
+   * can and does reject. Do not treat a resolved promise as "the user saw a
+   * picker" on either platform.
    */
   showCastPicker(): Promise<void>
 
@@ -406,9 +457,19 @@ export interface RnMediaCast extends HybridObject<{
 
   /**
    * Physical device volume (0..1) — the primary layer. Android:
-   * `CastSession.setVolume`; iOS: `GCKCastSession.setDeviceVolume`. Note the
-   * iOS ceiling: hardware volume buttons cannot drive receiver volume on
-   * iOS 15+; this API is the programmatic path.
+   * `CastSession.setVolume`; iOS: `GCKCastSession.setDeviceVolume`.
+   *
+   * **CEILING (iOS): the hardware volume buttons cannot drive it.** The SDK
+   * still ships the switch
+   * (`GCKCastOptions.physicalVolumeButtonsWillControlDeviceVolume`,
+   * `GCKCastOptions.h`, default `NO`), but Google's own iOS sender guide
+   * states the behaviour is *"currently not supported for iOS 15+"* because of
+   * OS changes
+   * (https://developers.google.com/cast/docs/ios_sender/integrate) — so this
+   * package deliberately leaves the flag off rather than shipping a switch
+   * that does nothing. On Android the cast framework routes the volume keys
+   * to the receiver for a connected session. This method is the programmatic
+   * path, and on iOS it is the *only* path.
    */
   setDeviceVolume(volume: number): Promise<void>
   setDeviceMuted(muted: boolean): Promise<void>
@@ -475,6 +536,16 @@ export interface RnMediaCast extends HybridObject<{
   ): number
   removeMediaStatusListener(listenerId: number): void
 
+  /**
+   * Receiver-side media failures. Fires on both platforms — see
+   * {@link NativeCastMediaErrorEvent} for how (and for the Android-only
+   * detail fields).
+   *
+   * A single failure reaches JS on two channels (this one and a `mediaStatus`
+   * with `idleReason: 'error'`); the `Cast.addListener('error', …)` facade
+   * de-duplicates them into one `CastError`. Subscribe to that, not to this,
+   * unless you are driving the hybrid object directly.
+   */
   addMediaErrorListener(
     listener: (event: NativeCastMediaErrorEvent) => void
   ): number

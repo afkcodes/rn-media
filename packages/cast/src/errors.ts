@@ -133,6 +133,51 @@ function firstLine(text: string): string {
 }
 
 /**
+ * The one sentence every `cast-receiver-fetch` error carries, whichever native
+ * channel produced it. Deliberately identical across platforms: a receiver
+ * failure looks the same to app code on Android and iOS, and only the optional
+ * `reason`/`statusCode` detail (Android-only — see
+ * {@link receiverFetchError}) differs.
+ */
+const RECEIVER_FETCH_MESSAGE =
+  'The receiver failed to fetch or play the media. The receiver fetches ' +
+  'URLs itself — check that the URL is reachable from the receiver’s ' +
+  'network (not localhost, not behind per-request auth headers).'
+
+/**
+ * Build the one `cast-receiver-fetch` error, optionally enriched with the
+ * receiver's own detail.
+ *
+ * **The detail is Android-only, by platform ceiling.** Android's
+ * `RemoteMediaClient.Callback.onMediaError(MediaError)` hands over
+ * `getDetailedErrorCode()` / `getReason()`
+ * (play-services-cast 22.3.1, verified with `javap`). iOS has no equivalent:
+ * `GCKRemoteMediaClientListener` (GoogleCast 4.8.6,
+ * `GCKRemoteMediaClient.h`) declares ten optional callbacks and none of them
+ * is a media-error callback, and `GCKMediaStatus` (`GCKMediaStatus.h`) carries
+ * no error code or reason field. On iOS the failure is synthesized natively
+ * from `playerState == .idle && idleReason == .error`, so `code`/`message` are
+ * identical to Android's and `statusCode`/`reason` are simply absent.
+ *
+ * Never branch on `statusCode` being present — branch on `code`.
+ */
+export function receiverFetchError(detail?: {
+  /** Receiver-supplied reason string (Android only). */
+  reason?: string
+  /** Receiver-supplied detailed error code (Android only). */
+  statusCode?: number
+}): CastError {
+  const reason = detail?.reason
+  const message =
+    reason !== undefined && reason !== ''
+      ? `${RECEIVER_FETCH_MESSAGE} (receiver reason: ${reason})`
+      : RECEIVER_FETCH_MESSAGE
+  return new CastError('cast-receiver-fetch', message, {
+    statusCode: detail?.statusCode,
+  })
+}
+
+/**
  * Classify a receiver idle reason into what it means for playback.
  *
  * - `finished` → natural end of media — not an error.
@@ -144,11 +189,5 @@ function firstLine(text: string): string {
 export function errorFromIdleReason(
   idleReason: CastIdleReason
 ): CastError | null {
-  if (idleReason !== 'error') return null
-  return new CastError(
-    'cast-receiver-fetch',
-    'The receiver failed to fetch or play the media. The receiver fetches ' +
-      'URLs itself — check that the URL is reachable from the receiver’s ' +
-      'network (not localhost, not behind per-request auth headers).'
-  )
+  return idleReason === 'error' ? receiverFetchError() : null
 }

@@ -210,7 +210,9 @@ await handoff.castTo(devices[0].id)   // or let <CastButton/>/the system
                                       // output switcher start the session —
                                       // the same machine handles both.
 await handoff.stopCasting()           // transfer back; { transferBackToLocal:
-                                      // false } leaves the receiver playing.
+                                      // false } just disconnects (it does NOT
+                                      // keep the receiver playing — see the
+                                      // ceilings below).
 handoff.syncQueue()                   // JS queue edited while casting
 handoff.skipToNext()                  // receiver transport over the queue
                                       // mapping (skips non-castable items)
@@ -342,8 +344,41 @@ not get the system output switcher.
   on the *first cast-button use*, never before (OS rule); the lock screen
   stays dormant during a cast session (the phone plays no audio — an OS
   ceiling shared by every cast app; Google's own checklist marks lock-screen
-  controls "Android only"); hardware volume buttons cannot drive receiver
-  volume on iOS 15+ — use `setDeviceVolume()`.
+  controls "Android only").
+- **iOS: hardware volume buttons cannot drive receiver volume.** The switch
+  still exists (`GCKCastOptions.physicalVolumeButtonsWillControlDeviceVolume`)
+  but Google's own guide says the behaviour is *"currently not supported for
+  iOS 15+"*
+  ([ios_sender/integrate](https://developers.google.com/cast/docs/ios_sender/integrate)),
+  so this package deliberately leaves it off rather than shipping a switch
+  that does nothing. Use `setDeviceVolume()`; on Android the framework routes
+  the volume keys to the receiver for a connected session.
+- **iOS: no receiver *detail* on a media error.** The `error` event fires on
+  both platforms with the same `cast-receiver-fetch` code and the same
+  message — but `statusCode` and the receiver's reason string are Android-only.
+  GoogleCast 4.8.6 has no media-error callback at all
+  (`GCKRemoteMediaClientListener` declares ten optional methods and none of
+  them reports an error; `GCKMediaStatus` has no error field), so the iOS half
+  synthesizes the failure from `playerState == .idle && idleReason == .error`.
+  Branch on `error.code`, never on `error.statusCode` being present.
+- **iOS: the receiver app id is fixed at the first `initialize()`.**
+  `GCKCastContext` exposes only `+setSharedInstanceWithOptions:` — no
+  `setReceiverApplicationId` (Android has one), no way to swap the live
+  `GCKDiscoveryCriteria`. A later `initialize()` with a *different* id is
+  honoured on Android and logged-and-ignored on iOS. Pass it on the first
+  call, or set it through the Expo plugin.
+- **iOS: no stream transfer, and no resume-failure notification.** The
+  `transferring`/`transferred`/`transferFailed` session events and the
+  `transferring` connection state come from Android's system output switcher
+  (`CastContext.addSessionTransferCallback`); iOS has no such surface.
+  `startFailed` covers a failed session *start* on both, but a failed session
+  *resume* only on Android — 4.8.6 has no `didFailToResume…` callback
+  anywhere (Google's own `CastVideos-swift` sample still implements one, which
+  is precisely the silent no-op this list exists to prevent).
+- **iOS: `Cast.requestSession()` with no id always resolves.**
+  `-[GCKCastContext presentCastDialog]` returns `void`, so "the picker was
+  shown" is unverifiable; Android rejects `invalid-state` with no foreground
+  Activity. Watch the `castState`/`session` events for the outcome on both.
 - **iOS init timing**: Google recommends initializing the Cast context in
   `didFinishLaunching` so a session survives process death.
   `Cast.initialize()` from JS is later than that; automatic *post-process-
@@ -352,6 +387,13 @@ not get the system output switcher.
 - **Android**: no Google Play services → `initialize()` resolves
   `'unavailable'` (typed capability answer, never a crash). Full
   output-switcher behaviour needs Android 13+.
+- **Leaving the receiver playing is not possible from a lone sender** —
+  `endSession({ transferBackToLocal: false })` disconnects without resuming
+  locally, but the receiver stops anyway. Android: measured on hardware across
+  every teardown path (framework 22.3.1). iOS: documented in the SDK itself —
+  `endSessionAndStopCasting:` *"only applies when multiple sender devices are
+  connected"*, and with one sender the receiver stops *"even if it's set to
+  `NO`"* (`GCKSessionManager.h`, 4.8.6).
 - **Gapless does not survive the handoff**: receiver queues pre-buffer
   (`preloadTime`), they do not promise sample-accurate gapless.
 - **Receiver app id**: zero-config default is Google's Default Media Receiver.

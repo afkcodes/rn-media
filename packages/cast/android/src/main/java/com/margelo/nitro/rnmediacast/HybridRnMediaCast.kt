@@ -92,6 +92,7 @@ class HybridRnMediaCast : HybridRnMediaCastSpec(), CastEmitter {
         // Idempotent: a second initialize only re-applies the app id.
         receiverApplicationId?.let { existing.setReceiverApplicationId(it) }
         cachedState = existing.currentConnectionState()
+        existing.emitCurrentState()
         promise.resolve(cachedState)
         return@runOnMain
       }
@@ -108,6 +109,9 @@ class HybridRnMediaCast : HybridRnMediaCastSpec(), CastEmitter {
             controller = created
             receiverApplicationId?.let { created.setReceiverApplicationId(it) }
             cachedState = created.currentConnectionState()
+            // The framework may have resumed a session before JS got here;
+            // nothing replays that to a late listener. See emitCurrentState().
+            created.emitCurrentState()
             promise.resolve(cachedState)
           }
           .addOnFailureListener { error ->
