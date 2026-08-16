@@ -1658,6 +1658,62 @@ choreography (discovery starts on first tap, never earlier).
   the example's transfer note reported the round trip with no app code
   involved in starting it.
 
+### 26. `AVAudioSession` has exactly one owner, and it is not the engine
+
+`@rn-media/player` sets **`audiounit-skip-session-management=yes`** on Apple
+platforms (`MpvClient::initialize`, `kAppleOnlyDefaults`), so `ao_audiounit`
+never touches the process-wide `AVAudioSession`. Ownership belongs to
+`@rn-media/audio-session` — categories, modes, route sharing policy,
+activation, interruptions, route changes — which is the same split Android
+already has, where this player requests no audio focus and `audio-session`
+requests all of it. iOS was the odd one out only because mpv did it silently.
+
+**The option is ours and always was.** Our fork's patch 007
+(rn-media-engine `patches/007-mpv-audiounit-shared-session`) added
+`--audiounit-skip-session-management` for exactly this, and its own docs name
+`packages/audio-session` as the intended owner: "two owners is worse than
+either… The option lets the engine defer to it." We shipped the mechanism four
+generations ago and never turned it on. Nothing in the engine needed changing;
+the defect was entirely on this side of the pin.
+
+**What two owners actually cost.** Stock `ao_audiounit` configures the session
+in `init()` — category, mode, active state, preferred channel count — and
+`init()` runs on **every AO open**, i.e. at every playback start, not once. So
+the engine always configures *last* and the host always loses. Worse, mpv calls
+`setCategory:withOptions:error:`, the variant that cannot carry a route sharing
+policy, so the `.longFormAudio` policy `audio-session` sets is reset to
+`.default`, and the mode is forced to `.moviePlayback`. Read off the shipped
+`Mpv.framework` rather than from source: `nm -u` lists
+`_AVAudioSessionCategoryPlayback` and `_AVAudioSessionModeMoviePlayback`, the
+selectors present are `setCategory:withOptions:error:`, `setMode:error:`,
+`setActive:error:`, and the policy-carrying setter appears **zero** times.
+
+**The symptom that found it.** No Lock Screen / Control Center card on iOS,
+with `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` both provably
+correct — MediaRemote logs show `nowPlayingInfo` arriving with real metadata and
+`PlaybackRate = 1`, commands bound, and
+`MRMediaRemoteSetCanBeNowPlayingForPlayer … set to YES` — while CoreAudio
+refused the output client on every audio start:
+`AQIONode.cpp:693 … is NOT Now Playing eligible`. This is also the first defect
+found by an actual on-device iOS run (2026-08-16); CI never plays audio, which
+is precisely why four generations of shipped-artifact verification did not
+surface it.
+
+**Honest verification status.** The ownership defect and the clobber mechanism
+are proven from the shipped binary and are fixed here. That mpv's session
+configuration is the *sole* cause of the missing now-playing card is NOT yet
+proven: the iOS Simulator's `AVAudioSession` is a shim
+(`AVAudioSessionImpl_Simulator.mm`) and reports the client ineligible whether or
+not the option is set, so the simulator cannot confirm it. Device confirmation
+is required before this section may claim the card is fixed.
+
+**Consequence for consumers.** An app using `@rn-media/player` on iOS *without*
+`@rn-media/audio-session` (or its own session code) now gets the process default
+category rather than mpv's `.playback` — the same position it has always been in
+on Android. That is the ownership contract, not a regression, and an app that
+wants the old behaviour can pass `audiounit-skip-session-management=no` through
+the player's own options, which are applied after these defaults.
+
 ## Platform truths we build around (learned, verified)
 
 - **JS timers freeze in background** without an Activity (JavaTimerManager
