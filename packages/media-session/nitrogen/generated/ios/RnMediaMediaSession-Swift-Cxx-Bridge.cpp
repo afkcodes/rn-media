@@ -62,6 +62,14 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     };
   }
   
+  // pragma MARK: std::function<void(SessionErrorCode /* code */, const std::string& /* message */)>
+  Func_void_SessionErrorCode_std__string create_Func_void_SessionErrorCode_std__string(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_void_SessionErrorCode_std__string::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](SessionErrorCode code, const std::string& message) mutable -> void {
+      swiftClosure.call(static_cast<int>(code), message);
+    };
+  }
+  
   // pragma MARK: std::shared_ptr<HybridRnMediaMediaSessionSpec>
   std::shared_ptr<HybridRnMediaMediaSessionSpec> create_std__shared_ptr_HybridRnMediaMediaSessionSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
     RnMediaMediaSession::HybridRnMediaMediaSessionSpec_cxx swiftPart = RnMediaMediaSession::HybridRnMediaMediaSessionSpec_cxx::fromUnsafe(swiftUnsafePointer);

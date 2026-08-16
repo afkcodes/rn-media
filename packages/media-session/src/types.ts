@@ -7,6 +7,7 @@ import type {
   NativeMediaItem,
   PositionAnchor,
   RemoteVolumeControl,
+  SessionErrorCode,
   SleepTimerMode,
 } from './specs/media-session.nitro'
 
@@ -195,6 +196,61 @@ export type SleepTimerState =
   | { readonly mode: 'trackEnd'; readonly remainingSeconds?: number }
 
 /**
+ * How much a {@link SessionError} took away.
+ *
+ * Two members, and the split is operational rather than editorial — an app
+ * reacts differently to each, which is the only reason a severity exists at
+ * all:
+ *
+ * - `'fatal'` — **background playback is not going to work.** Either the OS
+ *   refused to protect the process (so the audio the user started is running
+ *   unprotected, with no notification on Android), or a resumption the user
+ *   asked for did not happen. Worth surfacing to the user, or worth stopping
+ *   for; it is not going to fix itself.
+ * - `'degraded'` — the session is alive and playing; some surface is showing
+ *   less than the app asked for (no cover, a fallback icon, a missing scrubber),
+ *   or an opt-in is quietly inert. Worth a log and a bug, not an alert.
+ *
+ * It is a pure function of {@link SessionError.code} and it is still carried on
+ * every event, deliberately: an app that branches on severity keeps behaving
+ * correctly when this closed union grows a member, where an app that branches on
+ * `code` alone would drop the new one into its `default` arm.
+ */
+export type SessionErrorSeverity = 'fatal' | 'degraded'
+
+/**
+ * Something the session could not do, delivered to
+ * {@link MediaHandler.onSessionError}.
+ *
+ * The failures on this channel have **no caller to reject to** — they happen on
+ * a media3 service callback, an `MPRemoteCommandCenter` target, or an artwork
+ * download that finished long after the broadcast that asked for it. A call the
+ * app makes still throws {@link MediaSessionError} synchronously; this is the
+ * other half, and before it existed every member of it was a log line and
+ * nothing more (CLAUDE.md principle 6).
+ *
+ * ```ts
+ * class Handler extends BaseMediaHandler {
+ *   override onSessionError(error: SessionError): void {
+ *     if (error.severity === 'fatal') showBanner(error.message)
+ *     else console.warn(`[${error.code}] ${error.message}`)
+ *   }
+ * }
+ * ```
+ */
+export interface SessionError {
+  /** Which failure. See {@link SessionErrorCode} for the per-platform rules. */
+  readonly code: SessionErrorCode
+  /** Derived from {@link code}. See {@link SessionErrorSeverity}. */
+  readonly severity: SessionErrorSeverity
+  /**
+   * A complete sentence, written for the developer who has to fix it — what
+   * failed, and where there is one, the fix. Not a bare exception string.
+   */
+  readonly message: string
+}
+
+/**
  * The fan-in interface. Every remote surface — notification, lock screen,
  * Bluetooth, headset, watch, Android Auto, Control Center, and the app's own
  * UI — arrives here.
@@ -369,6 +425,35 @@ export interface MediaHandler {
    * {@link MediaServiceConfig.android}.
    */
   onPlaybackResumption?(): void | Promise<void>
+
+  /**
+   * **The session failed at something, and there was no call to reject.**
+   *
+   * The one method here that is not a user gesture. Everything on this channel
+   * used to be a native log line — the OS refusing a foreground service, an
+   * artwork download that came back empty, a drawable name that does not
+   * resolve, a resumption that never completed — so an app could ship a broken
+   * background story and only find out from a bug report. See
+   * {@link SessionError} and, for the per-platform emission rules, the codes
+   * themselves.
+   *
+   * **Nothing here is required.** Every code names a degradation the session has
+   * already handled as well as it can; implementing this changes no behaviour,
+   * it only makes the failure visible. It is `void`/`Promise<void>` and
+   * fire-and-forget like the rest: a throw or a rejection is routed to
+   * {@link MediaServiceConfig.onHandlerError} (as `'onSessionError'`) and can
+   * never take the session down, and it cannot re-enter this channel.
+   *
+   * **Never silently dropped.** A handler that does not implement it — including
+   * a {@link CompositeMediaHandler} whose inner handler does not — gets a
+   * `console.error` floor instead, because a swallowed error channel would be a
+   * worse bug than the ones it reports.
+   *
+   * Optional for the reason {@link onSleepTimer} is: this interface is the
+   * player-agnostic contract, and a method added after v1 must not break
+   * structural implementors. `BaseMediaHandler` supplies the console floor.
+   */
+  onSessionError?(error: SessionError): void | Promise<void>
 
   /* --- Android Auto / CarPlay browse: reserved, not wired to native in v1 --- */
 
@@ -769,5 +854,6 @@ export type {
   MediaRepeatMode,
   PositionAnchor,
   RemoteVolumeControl,
+  SessionErrorCode,
   SleepTimerMode,
 }

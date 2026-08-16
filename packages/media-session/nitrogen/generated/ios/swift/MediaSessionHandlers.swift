@@ -18,7 +18,7 @@ public extension MediaSessionHandlers {
   /**
    * Create a new instance of `MediaSessionHandlers`.
    */
-  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, setDeviceVolume: @escaping (_ volume: Double) -> Void, increaseDeviceVolume: @escaping () -> Void, decreaseDeviceVolume: @escaping () -> Void, setDeviceMuted: @escaping (_ muted: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void, onRevivalRequested: @escaping () -> Void) {
+  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, setDeviceVolume: @escaping (_ volume: Double) -> Void, increaseDeviceVolume: @escaping () -> Void, decreaseDeviceVolume: @escaping () -> Void, setDeviceMuted: @escaping (_ muted: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void, onRevivalRequested: @escaping () -> Void, onSessionError: @escaping (_ code: SessionErrorCode, _ message: String) -> Void) {
     self.init({ () -> bridge.Func_void in
       let __closureWrapper = Func_void(play)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
@@ -76,6 +76,9 @@ public extension MediaSessionHandlers {
     }(), { () -> bridge.Func_void in
       let __closureWrapper = Func_void(onRevivalRequested)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_SessionErrorCode_std__string in
+      let __closureWrapper = Func_void_SessionErrorCode_std__string(onSessionError)
+      return bridge.create_Func_void_SessionErrorCode_std__string(__closureWrapper.toUnsafe())
     }())
   }
 
@@ -265,6 +268,16 @@ public extension MediaSessionHandlers {
       let __wrappedFunction = bridge.wrap_Func_void(self.__onRevivalRequested)
       return { () -> Void in
         __wrappedFunction.call()
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var onSessionError: (_ code: SessionErrorCode, _ message: String) -> Void {
+    return { () -> (SessionErrorCode, String) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_SessionErrorCode_std__string(self.__onSessionError)
+      return { (__code: SessionErrorCode, __message: String) -> Void in
+        __wrappedFunction.call(__code.rawValue, std.string(__message))
       }
     }()
   }

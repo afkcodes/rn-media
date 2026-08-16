@@ -677,3 +677,121 @@ describe('remote playback', () => {
     expect(handler.calls).toEqual([])
   })
 })
+
+/**
+ * The channel for failures with no caller — ARCHITECTURE §28.
+ *
+ * Everything here is about the *floor*: the point of the channel is that a
+ * native failure can never be swallowed again, and the ways to swallow one are
+ * (a) a handler that did not implement the optional method, (b) no handler at
+ * all, (c) a handler whose implementation throws.
+ */
+describe('session errors', () => {
+  it('delivers the code, the message and the derived severity to the handler', async () => {
+    const { native, handler } = await ready()
+
+    native.emitSessionError(
+      'backgroundPlaybackUnavailable',
+      'The system refused to start the media foreground service.'
+    )
+
+    expect(handler.sessionErrors).toEqual([
+      {
+        code: 'backgroundPlaybackUnavailable',
+        severity: 'fatal',
+        message: 'The system refused to start the media foreground service.',
+      },
+    ])
+  })
+
+  it('grades a cosmetic failure as degraded, not fatal', async () => {
+    const { native, handler } = await ready()
+
+    native.emitSessionError('artworkFailed', 'no bytes came back')
+
+    expect(handler.sessionErrors[0]?.severity).toBe('degraded')
+  })
+
+  it('logs to the console when the handler does not implement the method', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const native = new FakeNativeMediaSession()
+      // A structural implementor written before this channel existed: every
+      // required method, no `onSessionError`. It must not swallow the error.
+      const handler: MediaHandler = {
+        play() {},
+        pause() {},
+        stop() {},
+        seekTo() {},
+        skipToNext() {},
+        skipToPrevious() {},
+        skipToQueueItem() {},
+        setRate() {},
+        onTaskRemoved() {},
+        customAction() {},
+        getChildren: () => Promise.resolve([]),
+        getMediaItem: () => Promise.resolve(undefined),
+      }
+      await createMediaService(native).init(() => handler)
+
+      native.emitSessionError('iconNotFound', 'ic_nope did not resolve')
+
+      expect(consoleError).toHaveBeenCalledWith(
+        '[media-session] degraded · iconNotFound: ic_nope did not resolve'
+      )
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('logs to the console when the session has been stopped', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { native, service } = await ready()
+      // Held across the stop the way the native side holds its own callbacks:
+      // the failure this exists for (an abandoned revival) happens precisely
+      // when there is no handler left.
+      const handlers = native.emit()
+      await service.stopService()
+
+      handlers.onSessionError('playbackResumptionFailed', 'runtime never came up')
+
+      expect(consoleError).toHaveBeenCalledWith(
+        '[media-session] fatal · playbackResumptionFailed: runtime never came up'
+      )
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('routes a throwing handler to onHandlerError, and does not re-enter itself', async () => {
+    const onHandlerError = vi.fn()
+    const { native, handler } = await ready({ onHandlerError })
+    handler.throwWith = new Error('reporting boom')
+
+    expect(() =>
+      native.emitSessionError('metadataMismatch', 'ids disagree')
+    ).not.toThrow()
+
+    expect(onHandlerError).toHaveBeenCalledWith(
+      'onSessionError',
+      handler.throwWith
+    )
+    // One delivery attempt, not a loop: `onHandlerError` is a different channel.
+    expect(handler.sessionErrors).toHaveLength(1)
+  })
+
+  it('reports a rejecting handler through onHandlerError too', async () => {
+    const onHandlerError = vi.fn()
+    const { native, handler } = await ready({ onHandlerError })
+    handler.rejectWith = new Error('async boom')
+
+    native.emitSessionError('localAudioSlotUnavailable', 'no output')
+    await Promise.resolve()
+
+    expect(onHandlerError).toHaveBeenCalledWith(
+      'onSessionError',
+      handler.rejectWith
+    )
+  })
+})

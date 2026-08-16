@@ -6,7 +6,11 @@
  * `@rn-media/media-session` — one interface, however many surfaces — and it is
  * why this file has no idea which of them called it.
  */
-import { BaseMediaHandler, type MediaRepeatMode } from '@rn-media/media-session'
+import {
+  BaseMediaHandler,
+  type MediaRepeatMode,
+  type SessionError,
+} from '@rn-media/media-session'
 
 /**
  * What the handler needs from the app's playback layer.
@@ -50,7 +54,16 @@ export interface PlaybackCommands {
  * (`adb logcat -s ReactNativeJS`).
  */
 export class DemoMediaHandler extends BaseMediaHandler {
-  constructor(private readonly target: () => PlaybackCommands) {
+  /**
+   * @param target the playback layer, resolved lazily — see the class docs.
+   * @param onSessionError where a native failure with no caller goes. Injected
+   * rather than logged here, because the point of the channel is that an app
+   * can *render* the failure; this one puts it in a strip on screen.
+   */
+  constructor(
+    private readonly target: () => PlaybackCommands,
+    private readonly onError: (error: SessionError) => void
+  ) {
     super()
   }
 
@@ -179,5 +192,30 @@ export class DemoMediaHandler extends BaseMediaHandler {
    */
   override onPlaybackResumption(): void {
     this.#log('onPlaybackResumption (revived after process death)')
+  }
+
+  /**
+   * The session could not do something, and there was no call to reject.
+   *
+   * The channel is the answer to a class of bug you cannot see from JavaScript:
+   * Android refusing the foreground service (playback continues with no
+   * notification and an unprotected process), a `notificationIcon` name that
+   * does not resolve, a cover that 404s, an iOS `Info.plist` with no
+   * `UIBackgroundModes: audio`. All of them used to be a native log line and
+   * nothing else.
+   *
+   * This app does the two things a real app should: it draws the `fatal` ones
+   * (`SessionErrorBanner`) and logs every one of them. Note what it does **not**
+   * do — stop playback, or retry. Nothing here is recoverable from JS; the fix
+   * is always in the app's configuration or in when it started playing.
+   *
+   * `super` is deliberately not called: `BaseMediaHandler.onSessionError` logs,
+   * and this method already does.
+   */
+  override onSessionError(error: SessionError): void {
+    console.warn(
+      `[example] session error · ${error.severity} · ${error.code}: ${error.message}`
+    )
+    this.onError(error)
   }
 }

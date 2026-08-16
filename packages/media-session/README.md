@@ -484,6 +484,49 @@ indices from remote surfaces). It deliberately does *not* implement "restart the
 track if more than 3 s in" — that needs player state it does not have; override
 `skipToPrevious` and call `super` for the real skip.
 
+## When the session itself fails: `onSessionError`
+
+An argument you got wrong throws — synchronously, at the call, as a
+`MediaSessionError`. But most of what can go wrong here happens where **no call
+is waiting**: a media3 service callback, an `MPRemoteCommandCenter` target, an
+artwork download that finishes long after the broadcast that asked for it. Those
+used to be a `Log.e` / `NSLog` and nothing else, which meant an app could ship a
+broken background story and only learn about it from a bug report.
+
+```ts
+class Handler extends BaseMediaHandler {
+  override onSessionError(error: SessionError) {
+    if (error.severity === 'fatal') banner(error.message)
+    else console.warn(`[${error.code}] ${error.message}`)
+  }
+}
+```
+
+`SessionError` is `{ code, severity, message }`. **Optional** — implement
+nothing and every failure still reaches `console.error`, including through a
+`CompositeMediaHandler` whose inner handler does not implement it. It cannot
+take the session down: a throw or rejection goes to `onHandlerError`. Nothing on
+this channel is retryable from JS; each code is fixed in configuration, or in
+*when* playback was started.
+
+`severity` is `'fatal'` (background playback is not going to work) or
+`'degraded'` (a surface is showing less than you asked for). Branch on it rather
+than on `code` if you want new codes handled sensibly on the day they are added.
+
+| `code` | `severity` | Android | iOS |
+|---|---|---|---|
+| `backgroundPlaybackUnavailable` | fatal | the OS refused the foreground service (Android 12+ background start) — playback runs on with **no notification and an unprotected process**. Per refused attempt | at `init`: the app's `Info.plist` has no `audio` in `UIBackgroundModes`, so iOS suspends the process the moment it backgrounds |
+| `playbackResumptionFailed` | fatal | a resumption started and never finished — the message says which half. Delivered to the *next* `init` when the runtime is alive but stopped; log-only when the process had no JS at all | not applicable (no resumption — see [The platform story](#the-platform-story-read-this-before-why-is-it-android-only)) |
+| `playbackResumptionUnavailable` | degraded | `playbackResumption` is on but inert: no `MediaButtonReceiver` in the manifest, or the native mirror could not be written | not applicable |
+| `artworkFailed` | degraded | media3's `BitmapLoader` future failed (404, unreachable host, undecodable bytes). Once per URI | `ArtworkCache` could not build a `UIImage` — unparseable URI, transport error, non-2xx, or data `UIImage` refused |
+| `metadataMismatch` | degraded | `setMediaItem` does not describe the current queue entry, so the merge did not happen and its `duration` (and the scrubber) was dropped — see [the model](#the-model) | identical rule, identical message |
+| `iconNotFound` | degraded | a drawable *name* — `notificationIcon`, or a `customActions[].icon` — does not resolve, so a fallback icon is drawn. Once per name | not applicable (no small icon, no custom actions) |
+| `localAudioSlotUnavailable` | degraded | `holdLocalAudioSlot: true` but the silent output would not open, so the opt-in is inert — see [Two platform conditions](#two-platform-conditions-because-both-look-like-bugs) | not applicable (iOS cannot take the volume buttons over) |
+
+The four Android-only rows are not an asymmetry this channel introduces: each
+belongs to a feature that is *already* Android-only for a documented platform
+reason. There is no code only iOS can emit.
+
 ## Surviving process death: `withPersistence`
 
 A paused, demoted foreground service is **killable** (see [Android](#android)

@@ -1,4 +1,4 @@
-export { MediaSessionError } from './errors'
+export { logSessionError, MediaSessionError } from './errors'
 export type { MediaSessionErrorCode } from './errors'
 
 export { BaseMediaHandler, CompositeMediaHandler } from './handler'
@@ -43,7 +43,9 @@ export {
   normalizeConfig,
   normalizePlaybackState,
   normalizeRemotePlayback,
+  SESSION_ERROR_SEVERITY,
   stepRemoteVolume,
+  toSessionError,
   validateAnchor,
   validateMediaItem,
   validateQueue,
@@ -65,6 +67,9 @@ export type {
   RemotePlayback,
   RemoteVolumeControl,
   RemoteVolumeDirection,
+  SessionError,
+  SessionErrorCode,
+  SessionErrorSeverity,
   SleepTimerMode,
   SleepTimerState,
 } from './types'

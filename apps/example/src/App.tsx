@@ -73,6 +73,7 @@ import { PersistenceNote } from './components/PersistenceNote'
 import { PlaybackModes } from './components/PlaybackModes'
 import { PrefetchBanner } from './components/PrefetchBanner'
 import { RetryBanner } from './components/RetryBanner'
+import { SessionErrorBanner } from './components/SessionErrorBanner'
 import { QueueList } from './components/QueueList'
 import { ReplayGainToggle } from './components/ReplayGainToggle'
 import { SleepTimerSection } from './components/SleepTimerSection'
@@ -181,6 +182,17 @@ function App(): React.JSX.Element {
           attempts={playback.errorAttempts}
           onRetry={() => void playback.jumpTo(shell.index)}
           onDismiss={() => playback.dismissError()}
+        />
+
+        {/* The other half of "no swallowed errors": everything above is about
+            the PLAYER failing, this is the media SESSION failing — a refused
+            foreground service, an icon that does not resolve, a cover that
+            404s. All of it used to be a native log line and nothing an app
+            could see. Severity and message are the library's; this screen adds
+            a headline and a colour. */}
+        <SessionErrorBanner
+          error={playback.sessionError}
+          onDismiss={() => playback.dismissSessionError()}
         />
 
         {/* The banner's state IS the library's `usePrefetchStatus` hook — the

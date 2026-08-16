@@ -13,6 +13,7 @@ import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
 import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
 import com.margelo.nitro.rnmediamediasession.MediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
+import com.margelo.nitro.rnmediamediasession.SessionErrorCode
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -118,7 +119,21 @@ internal object ResumptionStore {
         if (payload.isEmpty()) editor.remove(KEY_SESSION) else editor.putString(KEY_SESSION, payload)
         editor.commit()
       } catch (error: Throwable) {
-        Log.w(RnMediaMediaSessionService.TAG, "Could not mirror the session for resumption.", error)
+        // Only when there was something to save: failing to *clear* the mirror
+        // is not "resumption is unavailable", it is the opposite, and an app
+        // that has opted out is not waiting to hear about it.
+        if (payload.isNotEmpty()) {
+          SessionErrors.report(
+            SessionErrorCode.PLAYBACKRESUMPTIONUNAVAILABLE,
+            "Could not mirror the session for playback resumption, so a service created " +
+              "after this process dies will have nothing to resume. " +
+              "(${error.javaClass.simpleName}: ${error.message})",
+            dedupeKey = "mirror-session",
+            cause = error,
+          )
+        } else {
+          Log.w(RnMediaMediaSessionService.TAG, "Could not clear the mirrored session.", error)
+        }
       }
     }
   }
@@ -137,13 +152,31 @@ internal object ResumptionStore {
   fun putConfig(context: Context, config: MediaSessionConfig?) {
     val app = context.applicationContext
     val json = config?.takeIf { it.android != null }?.let(::encodeConfig)
+    // Read here, on the caller's thread: the struct is a view onto memory the
+    // JS call owns, and the writer thread runs later.
+    val optedIn = config?.android?.playbackResumption == true
     writer.post {
       try {
         val editor = prefs(app).edit().remove(LEGACY_KEY_CONFIG)
         if (json == null) editor.remove(KEY_CONFIG) else editor.putString(KEY_CONFIG, json)
         editor.commit()
       } catch (error: Throwable) {
-        Log.w(RnMediaMediaSessionService.TAG, "Could not mirror the config for resumption.", error)
+        // Reported only to an app that opted into resumption: the config mirror
+        // exists so a JS-less service can rebuild the notification, and for
+        // everybody else its loss changes nothing observable.
+        if (optedIn) {
+          SessionErrors.report(
+            SessionErrorCode.PLAYBACKRESUMPTIONUNAVAILABLE,
+            "Could not mirror the media-session config for playback resumption, so a " +
+              "service created after this process dies cannot rebuild the notification " +
+              "channel or icon this session configured. " +
+              "(${error.javaClass.simpleName}: ${error.message})",
+            dedupeKey = "mirror-config",
+            cause = error,
+          )
+        } else {
+          Log.w(RnMediaMediaSessionService.TAG, "Could not mirror the config for resumption.", error)
+        }
       }
     }
   }

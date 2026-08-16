@@ -1,8 +1,10 @@
+import { logSessionError } from './errors'
 import type {
   MediaHandler,
   MediaItem,
   MediaRepeatMode,
   RemoteVolumeDirection,
+  SessionError,
 } from './types'
 
 /**
@@ -76,6 +78,20 @@ export class BaseMediaHandler implements MediaHandler {
    * `play()` (refreshing an expired stream token, say).
    */
   onPlaybackResumption(): void | Promise<void> {}
+
+  /**
+   * **The one method here that is not a no-op**, and the exception is the
+   * point: every other default is silent because the app advertises what it
+   * supports, but a silent default on an *error* channel would swallow the very
+   * failures the channel was added to stop swallowing (CLAUDE.md principle 6).
+   *
+   * So the default logs — the same floor the service applies to a handler that
+   * does not implement the method at all. Override it to render the failure;
+   * call `super.onSessionError(error)` if you want the log as well.
+   */
+  onSessionError(error: SessionError): void | Promise<void> {
+    logSessionError(error)
+  }
 
   /** Reserved for the Android Auto browse tree. Not invoked in v1. */
   getChildren(_parentId: string): Promise<MediaItem[]> {
@@ -160,6 +176,23 @@ export class CompositeMediaHandler implements MediaHandler {
   }
   onPlaybackResumption(): void | Promise<void> {
     return this.inner.onPlaybackResumption?.()
+  }
+  /**
+   * Forwarded — or logged, when `inner` has no `onSessionError`.
+   *
+   * The `?.()` every other optional method uses would be a swallow here, and a
+   * particularly good hiding place: this class *defines* the method, so the
+   * service's own console floor sees a handler that implements the channel and
+   * steps back, while the decorator quietly drops the error on the way to an
+   * inner handler that never implemented it. Decorating a handler must not be
+   * able to silence its errors.
+   */
+  onSessionError(error: SessionError): void | Promise<void> {
+    if (this.inner.onSessionError === undefined) {
+      logSessionError(error)
+      return
+    }
+    return this.inner.onSessionError(error)
   }
   getChildren(parentId: string): Promise<MediaItem[]> {
     return this.inner.getChildren(parentId)

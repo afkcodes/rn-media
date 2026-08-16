@@ -35,6 +35,7 @@ import {
 import { AudioSession } from '@rn-media/audio-session'
 import type {
   MediaRepeatMode,
+  SessionError,
   SleepTimerState,
 } from '@rn-media/media-session'
 import type { Track } from '../data/tracks'
@@ -65,6 +66,17 @@ export class Playback implements PlaybackCommands {
   #station: string | undefined
   #retrying: RetryNote | undefined
   /**
+   * The last thing the media session could not do — see
+   * `DemoMediaHandler.onSessionError`.
+   *
+   * Kept here rather than in the React tree for the same reason every other
+   * fact is: these arrive with no Activity alive (a refused foreground service
+   * happens while the app is backgrounded, which is *why* it was refused), so
+   * the strip has to be able to render one that was recorded minutes before the
+   * user came back.
+   */
+  #sessionError: SessionError | undefined
+  /**
    * The shuffle toggle — **app** state, because mpv has no shuffle *mode*.
    *
    * What mpv has is a reorder command, so "shuffle on" here is an honest
@@ -78,7 +90,11 @@ export class Playback implements PlaybackCommands {
   readonly #listeners = new Set<() => void>()
 
   readonly #session = new SessionBridge({
-    handler: () => new DemoMediaHandler(() => this),
+    handler: () =>
+      new DemoMediaHandler(
+        () => this,
+        (error) => this.#sessionFailed(error)
+      ),
     snapshot: () => this.#engine?.player.state,
     shuffleEnabled: () => this.#shuffleEnabled,
     onChange: () => this.#notify(),
@@ -179,6 +195,10 @@ export class Playback implements PlaybackCommands {
   /** Set while an entry is being re-attempted; cleared when it plays or gives up. */
   get retrying(): RetryNote | undefined {
     return this.#retrying
+  }
+  /** The last session failure, for the strip. See {@link dismissSessionError}. */
+  get sessionError(): SessionError | undefined {
+    return this.#sessionError
   }
   get prefetchEnabled(): boolean {
     return this.#output.prefetchEnabled
@@ -593,6 +613,31 @@ export class Playback implements PlaybackCommands {
     } catch (cause) {
       console.warn('[example] clearError:', cause)
     }
+    this.#notify()
+  }
+
+  /**
+   * Dismiss the session-error strip.
+   *
+   * Nothing is retried and nothing is cleared natively — there is nothing to
+   * clear. Every code on that channel names a degradation that has already
+   * happened and is already logged; the strip is a notice, not a state.
+   */
+  dismissSessionError(): void {
+    this.#sessionError = undefined
+    this.#notify()
+  }
+
+  /**
+   * The media session reported a failure of its own.
+   *
+   * Recorded rather than acted on: a refused foreground service, a missing
+   * icon or an unreachable cover are all fixed in the app's configuration or in
+   * *when* it started playing, and none of them is recoverable from here. The
+   * strip shows the fatal ones; `DemoMediaHandler` logs them all.
+   */
+  #sessionFailed(error: SessionError): void {
+    this.#sessionError = error
     this.#notify()
   }
 
