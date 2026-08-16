@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { CastError, errorFromIdleReason, toCastError } from '../errors'
+import {
+  CastError,
+  errorFromIdleReason,
+  receiverFetchError,
+  toCastError,
+} from '../errors'
 
 describe('toCastError', () => {
   it('parses every native code prefix', () => {
@@ -110,5 +115,37 @@ describe('errorFromIdleReason', () => {
     const error = errorFromIdleReason('error')
     expect(error).toBeInstanceOf(CastError)
     expect(error?.code).toBe('cast-receiver-fetch')
+  })
+})
+
+describe('receiverFetchError — one shape for both platforms', () => {
+  it('the detail-free error is byte-identical to the idle-derived one', () => {
+    // The iOS half has no receiver detail to supply (no media-error callback
+    // in GoogleCast 4.8.6), so its synthesized error must be exactly what the
+    // idle status produces on either platform — app code must not be able to
+    // tell which platform, or which native channel, it came from.
+    const fromIdle = errorFromIdleReason('error')
+    const synthesized = receiverFetchError()
+    expect(synthesized.code).toBe(fromIdle?.code)
+    expect(synthesized.message).toBe(fromIdle?.message)
+    expect(synthesized.statusCode).toBeUndefined()
+  })
+
+  it('Android detail is additive — same family and guidance, plus the reason', () => {
+    const detailed = receiverFetchError({
+      reason: 'LOAD_FAILED',
+      statusCode: 311,
+    })
+    expect(detailed.code).toBe('cast-receiver-fetch')
+    expect(detailed.statusCode).toBe(311)
+    expect(detailed.message).toContain('LOAD_FAILED')
+    // The guidance sentence survives — it is the actionable half.
+    expect(detailed.message).toContain('reachable from the receiver')
+  })
+
+  it('an empty reason string does not produce an empty parenthetical', () => {
+    expect(receiverFetchError({ reason: '' }).message).toBe(
+      receiverFetchError().message
+    )
   })
 })

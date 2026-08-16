@@ -117,4 +117,32 @@ internal object CastMapping {
 
   /** Framework milliseconds → public-API seconds. */
   fun millisToSeconds(millis: Long): Double = millis / 1000.0
+
+  /** `MediaQueueItem.INVALID_ITEM_ID` (0), inlined to keep this file GMS-free. */
+  private const val INVALID_ITEM_ID = 0
+
+  /**
+   * A receiver queue item id, from the [Double] the bridge carries.
+   *
+   * NaN, infinity and negatives are all expressible from JS and none of them
+   * is an id, so they fold to [INVALID_ITEM_ID] — the value both SDKs already
+   * define as "no item" — and the SDK answers with a typed rejection. This is
+   * the twin of the iOS `CastMapping.queueItemID(_:)`, where the same fold is
+   * not a nicety but a crash guard: Swift's `UInt(_: Double)` traps on all
+   * three. Kept in lockstep so an id behaves identically on both platforms.
+   */
+  fun queueItemId(value: Double): Int =
+    when {
+      !value.isFinite() || value <= 0 -> INVALID_ITEM_ID
+      value >= Int.MAX_VALUE.toDouble() -> Int.MAX_VALUE
+      else -> value.toInt()
+    }
+
+  /** A non-negative array index, with the same rule as [queueItemId]. */
+  fun index(value: Double): Int =
+    when {
+      !value.isFinite() || value <= 0 -> 0
+      value >= Int.MAX_VALUE.toDouble() -> Int.MAX_VALUE
+      else -> value.toInt()
+    }
 }

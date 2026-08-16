@@ -88,6 +88,27 @@ enum CastMapping {
     return seconds
   }
 
+  /// A receiver queue item id, from the `Double` the bridge carries.
+  ///
+  /// NOT `UInt(someDouble)`: Swift's numeric initializer **traps** (crashes the
+  /// app) on NaN, on infinity and on negatives, and every id on this API comes
+  /// from JS where all three are expressible. Kotlin's `Double.toInt()` is
+  /// total and folds those to 0 — which is `MediaQueueItem.INVALID_ITEM_ID` /
+  /// `kGCKMediaQueueInvalidItemID` — so this reproduces exactly that: a bogus
+  /// id becomes the invalid id and the SDK rejects the request with a typed
+  /// error, instead of the process dying.
+  static func queueItemID(_ value: Double) -> UInt {
+    guard value.isFinite, value > 0 else { return 0 }
+    return value >= Double(UInt32.max) ? UInt(UInt32.max) : UInt(value)
+  }
+
+  /// A non-negative array index, with the same no-trap rule as
+  /// ``queueItemID(_:)``.
+  static func index(_ value: Double) -> Int {
+    guard value.isFinite, value > 0 else { return 0 }
+    return value >= Double(Int32.max) ? Int(Int32.max) : Int(value)
+  }
+
   static func deviceInfo(_ device: GCKDevice) -> CastDeviceInfo {
     CastDeviceInfo(
       id: device.deviceID,

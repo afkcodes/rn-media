@@ -81,13 +81,28 @@ export interface EndSessionOptions {
    * `mediaStatus` position first and resume locally from it. `false`: just
    * disconnect, without transferring playback back to this device.
    *
-   * **Android ceiling, measured on hardware (cast framework 22.3.1):**
-   * `false` cannot leave the receiver *playing*. The framework stops
-   * receiver playback whenever its session ends, whatever teardown path is
-   * used — even though Cast receivers themselves support last-sender-leave
-   * continuation. What `false` still delivers: local playback is not
-   * resumed, and the receiver app is left to idle out rather than being
-   * explicitly stopped.
+   * **CEILING on BOTH platforms: `false` cannot leave the receiver
+   * *playing* when this phone is the only sender.**
+   *
+   * Android (cast framework 22.3.1), measured on hardware: every teardown
+   * path was tried — `endCurrentSession(false)` with the stop-receiver option
+   * on and off, and a raw `MediaRouter.unselect(UNSELECT_REASON_DISCONNECTED)`
+   * — and the framework stopped receiver playback on session end every time,
+   * even though the receiver itself demonstrably supports last-sender-leave
+   * continuation (a bare pychromecast sender's disconnect left the same queue
+   * playing).
+   *
+   * iOS says so in its own header:
+   * `-[GCKSessionManager endSessionAndStopCasting:]` documents that the flag
+   * *"only applies when multiple sender devices are connected"* and that
+   * *"if only one sender device is connected, the receiver app stops casting
+   * the media and ignores the `stopCasting` value, even if it's set to
+   * `NO`"* (GoogleCast 4.8.6, `GCKSessionManager.h`).
+   *
+   * What `false` still honestly delivers on both: local playback is not
+   * resumed, the receiver app is left to idle out rather than being
+   * explicitly stopped, and with *another* sender still attached the receiver
+   * does keep playing.
    *
    * @default true
    */

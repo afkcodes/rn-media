@@ -165,6 +165,139 @@ describe('createCast — events', () => {
       expect(seen[0]?.statusCode).toBe(311)
     })
 
+    it('the same failure with the status FIRST still emits once (regression)', () => {
+      // The two channels race and the SDK does not promise an order. With the
+      // callback first the latch used to hold; with the status first the
+      // media-error path emitted unconditionally, so one receiver failure
+      // produced two `error` events — and in `handoff-to-cast` that is two
+      // fallbacks to local for one failure.
+      const { native, cast } = setup()
+      const seen: CastError[] = []
+      cast.addListener('error', (e) => seen.push(e))
+      native.emitMediaStatus(
+        playingStatus({ playerState: 'idle', idleReason: 'error' })
+      )
+      native.emitMediaError({ detailedErrorCode: 311, reason: 'LOAD_FAILED' })
+      expect(seen).toHaveLength(1)
+      expect(seen[0]?.code).toBe('cast-receiver-fetch')
+    })
+
+    describe('the iOS-shaped stream (no SDK media-error callback)', () => {
+      // GoogleCast 4.8.6 has no media-error callback, so the iOS half
+      // synthesizes one from `playerState == .idle && idleReason == .error`.
+      // JS therefore sees a mediaStatus AND a detail-free media error for the
+      // same failure — these tests pin what the app observes.
+
+      it('an error that arrives ONLY via the idle status still fires', () => {
+        const { native, cast } = setup()
+        const seen: CastError[] = []
+        cast.addListener('error', (e) => seen.push(e))
+        native.emitMediaStatus(
+          playingStatus({ playerState: 'idle', idleReason: 'error' })
+        )
+        expect(seen).toHaveLength(1)
+        expect(seen[0]?.code).toBe('cast-receiver-fetch')
+        expect(seen[0]?.statusCode).toBeUndefined()
+      })
+
+      it('the native synthesis following the status does not double-emit', () => {
+        const { native, cast } = setup()
+        const seen: CastError[] = []
+        cast.addListener('error', (e) => seen.push(e))
+        // Exactly the iOS ordering: `didUpdate mediaStatus` emits the status,
+        // then `synthesizeMediaError` emits a detail-free media error.
+        native.emitMediaStatus(
+          playingStatus({ playerState: 'idle', idleReason: 'error' })
+        )
+        native.emitMediaError({})
+        expect(seen).toHaveLength(1)
+      })
+
+      it('an iOS error is indistinguishable from an Android one', () => {
+        const ios = setup()
+        const iosSeen: CastError[] = []
+        ios.cast.addListener('error', (e) => iosSeen.push(e))
+        ios.native.emitMediaStatus(
+          playingStatus({ playerState: 'idle', idleReason: 'error' })
+        )
+        ios.native.emitMediaError({})
+
+        const android = setup()
+        const androidSeen: CastError[] = []
+        android.cast.addListener('error', (e) => androidSeen.push(e))
+        android.native.emitMediaStatus(
+          playingStatus({ playerState: 'idle', idleReason: 'error' })
+        )
+        android.native.emitMediaError({
+          detailedErrorCode: 905,
+          reason: 'MEDIA_ERROR_MESSAGE',
+        })
+
+        expect(iosSeen).toHaveLength(1)
+        expect(androidSeen).toHaveLength(1)
+        // Same family and same actionable message on both — only Android's
+        // optional detail differs, and nothing may branch on it.
+        expect(iosSeen[0]?.code).toBe(androidSeen[0]?.code)
+        expect(iosSeen[0]?.message).toBe(androidSeen[0]?.message)
+      })
+
+      it('ordinary idles are never turned into errors, callback or not', () => {
+        const { native, cast } = setup()
+        const seen: CastError[] = []
+        cast.addListener('error', (e) => seen.push(e))
+        for (const idleReason of [
+          'none',
+          'finished',
+          'cancelled',
+          'interrupted',
+        ] as const) {
+          native.emitMediaStatus(
+            playingStatus({ playerState: 'idle', idleReason })
+          )
+        }
+        expect(seen).toEqual([])
+      })
+
+      it('the synthesized idle for a dead media session is not an error', () => {
+        // Both halves synthesize `idle/interrupted` when the receiver's media
+        // session disappears (`mediaStatus` goes null). That is a state, and
+        // must never reach the app as a receiver-fetch failure.
+        const { native, cast } = setup()
+        const seen: CastError[] = []
+        const statuses: unknown[] = []
+        cast.addListener('error', (e) => seen.push(e))
+        cast.addListener('mediaStatus', (s) => statuses.push(s))
+        native.emitMediaStatus(playingStatus({ playerState: 'playing' }))
+        native.emitMediaStatus(
+          playingStatus({
+            playerState: 'idle',
+            idleReason: 'interrupted',
+            position: 0,
+          })
+        )
+        expect(statuses).toHaveLength(2)
+        expect(seen).toEqual([])
+      })
+
+      it('a retry that fails again is reported again', () => {
+        const { native, cast } = setup()
+        const seen: CastError[] = []
+        cast.addListener('error', (e) => seen.push(e))
+        native.emitMediaStatus(
+          playingStatus({ playerState: 'idle', idleReason: 'error' })
+        )
+        native.emitMediaError({})
+        // A new load: loading → buffering → and it fails again.
+        native.emitMediaStatus(playingStatus({ playerState: 'loading' }))
+        native.emitMediaStatus(playingStatus({ playerState: 'buffering' }))
+        native.emitMediaStatus(
+          playingStatus({ playerState: 'idle', idleReason: 'error' })
+        )
+        native.emitMediaError({})
+        expect(seen).toHaveLength(2)
+      })
+    })
+
     it('the de-dupe latch resets once playback leaves idle', () => {
       const { native, cast } = setup()
       const seen: CastError[] = []

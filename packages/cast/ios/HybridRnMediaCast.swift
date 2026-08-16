@@ -29,6 +29,11 @@ final class HybridRnMediaCast: HybridRnMediaCastSpec, CastEmitter {
   /// Main-thread only.
   private var coordinator: CastCoordinator?
 
+  /// The receiver application id the shared `GCKCastContext` was created with.
+  /// Main-thread only. Kept so a later, differing `initialize` can say out
+  /// loud that iOS cannot honour it (see `initialize`).
+  private var activeReceiverApplicationId: String?
+
   /// Cache read by the synchronous `getCastState`. `.unavailable` until
   /// `initialize` succeeds — before init, casting genuinely is not available.
   private var cachedState: CastConnectionState = .unavailable
@@ -49,11 +54,27 @@ final class HybridRnMediaCast: HybridRnMediaCastSpec, CastEmitter {
     let promise = Promise<CastConnectionState>()
     runOnMain { [self] in
       if let existing = coordinator {
-        // Idempotent. The GCK shared instance cannot change its receiver app
-        // id after creation (unlike Android) — a differing id is a config
-        // error surfaced by the session, not silently ignored here.
+        // Idempotent. CEILING: the GCK shared instance cannot change its
+        // receiver app id after creation — GCKCastContext exposes only
+        // `+setSharedInstanceWithOptions:` / `+isSharedInstanceInitialized`
+        // (GCKCastContext.h, 4.8.6), there is no `setReceiverApplicationId`
+        // (Android has one) and no way to swap `GCKDiscoveryCriteria` on the
+        // live `GCKDiscoveryManager`. Ignoring a differing id in silence is
+        // exactly the failure mode this package refuses, so say so.
+        if let requested = receiverApplicationId, requested != activeReceiverApplicationId {
+          let active = activeReceiverApplicationId ?? kGCKDefaultMediaReceiverApplicationID
+          NSLog(
+            "%@",
+            "[RnMediaCast] initialize(receiverApplicationId: \"\(requested)\") was " +
+              "ignored: iOS fixes the receiver application id at the first initialize " +
+              "(currently \"\(active)\") and the Cast SDK offers no way to change it. " +
+              "Pass the id on the first call, or set it via the Expo plugin. Android " +
+              "honours a later change."
+          )
+        }
         let state = existing.currentConnectionState()
         withLock { cachedState = state }
+        existing.emitCurrentState()
         promise.resolve(withResult: state)
         return
       }
@@ -77,8 +98,13 @@ final class HybridRnMediaCast: HybridRnMediaCastSpec, CastEmitter {
       }
       let created = CastCoordinator(context: GCKCastContext.sharedInstance(), emitter: self)
       coordinator = created
+      activeReceiverApplicationId =
+        receiverApplicationId ?? kGCKDefaultMediaReceiverApplicationID
       let state = created.currentConnectionState()
       withLock { cachedState = state }
+      // The SDK may have resumed a session before JS got here, and nothing
+      // replays that to a late listener. See CastCoordinator.emitCurrentState.
+      created.emitCurrentState()
       promise.resolve(withResult: state)
     }
     return promise

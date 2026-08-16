@@ -1,6 +1,11 @@
 import { NitroModules } from 'react-native-nitro-modules'
 
-import { CastError, errorFromIdleReason, toCastError } from './errors'
+import {
+  CastError,
+  errorFromIdleReason,
+  receiverFetchError,
+  toCastError,
+} from './errors'
 import type {
   CastConnectionState,
   CastLoadOptions,
@@ -30,10 +35,20 @@ import type {
  */
 export function createCast(native: RnMediaCast): CastApi {
   /**
-   * De-dupes the two native surfaces a single receiver failure can arrive on
-   * (a `mediaStatus` with `idleReason: 'error'` and the SDK's out-of-band
-   * media-error callback): at most one `error` event per idle period.
-   * Reset by any status whose player state is not `idle`.
+   * De-dupes the two native surfaces a single receiver failure arrives on:
+   * a `mediaStatus` with `idleReason: 'error'` **and** a media-error callback.
+   * Both platforms now produce both — Android's callback is the SDK's own
+   * (`RemoteMediaClient.Callback.onMediaError`), iOS's is synthesized natively
+   * from the same idle status because `GCKRemoteMediaClientListener` has no
+   * media-error callback at all (GoogleCast 4.8.6, `GCKRemoteMediaClient.h`).
+   *
+   * Contract: **at most one `error` event per idle period, whichever channel
+   * arrives first**, reset by any status whose player state is not `idle` (so
+   * a retry that fails again is reported again). First-wins is deliberate —
+   * emitting twice for one failure would fall the handoff machine back to
+   * local twice; the loss is only Android's optional `reason`/`statusCode`
+   * detail when the status happens to win the race, and no caller may branch
+   * on that detail (see `receiverFetchError`).
    */
   let errorEmittedForCurrentIdle = false
 
@@ -48,15 +63,15 @@ export function createCast(native: RnMediaCast): CastApi {
     return error
   }
 
-  function mediaErrorToCastError(event: NativeCastMediaErrorEvent): CastError {
+  function mediaErrorToCastError(
+    event: NativeCastMediaErrorEvent
+  ): CastError | null {
+    if (errorEmittedForCurrentIdle) return null
     errorEmittedForCurrentIdle = true
-    return new CastError(
-      'cast-receiver-fetch',
-      `The receiver reported a media error${
-        event.reason != null ? ` (${event.reason})` : ''
-      }.`,
-      { statusCode: event.detailedErrorCode }
-    )
+    return receiverFetchError({
+      reason: event.reason,
+      statusCode: event.detailedErrorCode,
+    })
   }
 
   function addListener<K extends CastEventName>(
@@ -101,7 +116,8 @@ export function createCast(native: RnMediaCast): CastApi {
           if (error !== null) cb(error)
         })
         const errorId = native.addMediaErrorListener((e) => {
-          cb(mediaErrorToCastError(e))
+          const error = mediaErrorToCastError(e)
+          if (error !== null) cb(error)
         })
         return once(() => {
           native.removeMediaStatusListener(statusId)

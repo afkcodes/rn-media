@@ -355,6 +355,24 @@ internal class CastController(
   fun currentConnectionState(): CastConnectionState =
     CastMapping.connectionState(castContext.castState)
 
+  /**
+   * Broadcast the current state as a `castState` event.
+   *
+   * Called once when `initialize` settles. `CastContext.addCastStateListener`
+   * does NOT replay the current state to a new listener, and the framework
+   * *resumes an existing session before JS initializes* (device-found: the
+   * connected-transition simply never fires for a session that was already
+   * up). Without this broadcast, an app that subscribed before `initialize()`
+   * resolved would never learn it is already connected — and `<CastButton/>`,
+   * which hides itself while the state is `unavailable`, would stay hidden
+   * forever.
+   */
+  fun emitCurrentState() {
+    emitter.onCastState(
+      NativeCastStateEvent(currentConnectionState(), currentDeviceInfo())
+    )
+  }
+
   fun setReceiverApplicationId(receiverApplicationId: String) {
     castContext.setReceiverApplicationId(receiverApplicationId)
   }
@@ -616,7 +634,7 @@ internal class CastController(
     promise: Promise<Unit>,
   ) {
     val rmc = requireRmc(promise) ?: return
-    val startIndex = (options.startIndex ?: 0.0).toInt()
+    val startIndex = CastMapping.index(options.startIndex ?: 0.0)
     val repeatMode =
       CastMapping.toFrameworkRepeatMode(options.repeatMode ?: CastRepeatMode.OFF)
     val startPosition = options.startPosition ?: 0.0
@@ -683,7 +701,7 @@ internal class CastController(
     rmc
       .queueInsertItems(
         items.map(::queueItem).toTypedArray(),
-        beforeItemId?.toInt() ?: MediaQueueItem.INVALID_ITEM_ID,
+        beforeItemId?.let(CastMapping::queueItemId) ?: MediaQueueItem.INVALID_ITEM_ID,
         null
       )
       .bridge(promise, operation = "queueInsert")
@@ -692,7 +710,7 @@ internal class CastController(
   fun queueRemove(itemIds: DoubleArray, promise: Promise<Unit>) {
     val rmc = requireRmc(promise) ?: return
     rmc
-      .queueRemoveItems(IntArray(itemIds.size) { itemIds[it].toInt() }, null)
+      .queueRemoveItems(IntArray(itemIds.size) { CastMapping.queueItemId(itemIds[it]) }, null)
       .bridge(promise, operation = "queueRemove")
   }
 
@@ -700,8 +718,8 @@ internal class CastController(
     val rmc = requireRmc(promise) ?: return
     rmc
       .queueReorderItems(
-        IntArray(itemIds.size) { itemIds[it].toInt() },
-        beforeItemId?.toInt() ?: MediaQueueItem.INVALID_ITEM_ID,
+        IntArray(itemIds.size) { CastMapping.queueItemId(itemIds[it]) },
+        beforeItemId?.let(CastMapping::queueItemId) ?: MediaQueueItem.INVALID_ITEM_ID,
         null
       )
       .bridge(promise, operation = "queueReorder")
@@ -711,9 +729,13 @@ internal class CastController(
     val rmc = requireRmc(promise) ?: return
     val result =
       if (position != null) {
-        rmc.queueJumpToItem(itemId.toInt(), CastMapping.secondsToMillis(position), null)
+        rmc.queueJumpToItem(
+          CastMapping.queueItemId(itemId),
+          CastMapping.secondsToMillis(position),
+          null,
+        )
       } else {
-        rmc.queueJumpToItem(itemId.toInt(), null)
+        rmc.queueJumpToItem(CastMapping.queueItemId(itemId), null)
       }
     result.bridge(promise, operation = "queueJumpTo")
   }
@@ -738,8 +760,8 @@ internal class CastController(
   ) {
     val rmc = requireRmc(promise) ?: return
     val queue = rmc.mediaQueue
-    val start = startIndex.toInt().coerceAtLeast(0)
-    val end = (start + count.toInt()).coerceAtMost(queue.itemCount)
+    val start = CastMapping.index(startIndex)
+    val end = (start + CastMapping.index(count)).coerceAtMost(queue.itemCount)
     if (start >= end) {
       promise.resolve(emptyArray())
       return
