@@ -215,9 +215,30 @@ picker order, and `defineEqualizerPreset(id, name, gainsDb)` validates a
 user-designed one. Apply them through `equalizerPresetChain`, which computes the
 pre-amp from the *summed* magnitude response — octave-spaced bells overlap and
 add, so `Loudness` peaks at +8.8 dB from +7 dB sliders and attenuating by the
-largest slider would still clip. Bands at 0 dB are dropped, a flat preset
-compiles to an empty chain, and an `alimiter` is appended as the inter-sample
-safety net (`{ limiter: false }` opts out).
+largest slider would still clip. Bands at 0 dB are dropped and a flat preset
+compiles to an empty chain.
+
+**The limiter, and why it is on.** Every non-flat curve gets an `alimiter` on
+the tail — cut-only curves included, a single +0.1 dB band included
+(`{ limiter: false }` opts out). The pre-amp bounds `max |H(f)|`, which is a
+*frequency-domain* guarantee; clipping is a time-domain event, and the tight
+bound on a filter's sample-peak gain is the L1 norm of its impulse response,
+which is always larger. At 48 kHz: `Rock` after its −4.8 dB pre-amp still has
++4.9 dB of worst-case peak gain, and `Bass Reducer` — pure cuts, so no pre-amp
+is computed at all — has +5.7 dB. So "this curve cannot clip" is false for
+every curve that does anything, and the limiter is where the guarantee actually
+comes from.
+
+It is not a tone control. Its gain reduction is a running scalar that starts at
+1 and only moves when a sample exceeds the ceiling, so below full scale the
+output is sample-identical to the input, and ffmpeg's `level` option — which
+sounds like automatic levelling — is the constant `1 / limit`, i.e. exactly 1
+at the default ceiling of full scale. What it does cost is 5 ms of look-ahead
+that ffmpeg does not compensate by default: the chain emits 5 ms of silence
+when it is built and never flushes the last 5 ms of the stream. (The same
+`level` behaviour is a trap if you build a limiter by hand:
+`AudioFilters.limiter({ limit: 0.891 })` limits to −1 dBFS and then scales the
+result back up to 0 dBFS. Pass `autoLevel: false` with any ceiling below 1.)
 
 **Changing a value without rebuilding the chain.** `setAudioFilters` writes the
 whole `af` property, and mpv answers that by destroying and recreating every

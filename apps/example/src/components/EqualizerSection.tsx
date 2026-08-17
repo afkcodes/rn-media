@@ -193,8 +193,11 @@ Touch a bar and drag up or down: the band you touched is the band that
         running filters, so the audio must not glitch, and the `af` line above
         only catches up once you let go. The pre-amp that keeps the loudest band
         at unity is computed from the summed response — octave bells overlap and
-        add — so nothing here can clip. Saved curves and the live setting
-        persist through the app's own storage engine.
+        add — and the `alimiter` on the tail catches what a magnitude bound
+        cannot: the sample peaks a phase shift moves in time. It is on for any
+        curve that is not flat, and below full scale it changes no sample. Saved
+        curves and the live setting persist through the app's own storage
+        engine.
       </Detail>
       {eq.error === undefined ? null : (
         <Text style={styles.error}>

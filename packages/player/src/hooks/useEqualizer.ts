@@ -105,8 +105,14 @@ export interface UseEqualizerOptions {
   readonly extraFilters?: readonly AudioFilter[]
   /**
    * How the EQ curve is compiled — pre-amp on top of the automatic headroom,
-   * the opt-out limiter, and the bell width. See
+   * the bell width, and the tail limiter. See
    * {@link EqualizerPresetChainOptions}.
+   *
+   * Note the limiter is **on by default for every curve that is not flat**,
+   * cut-only curves included; `{ limiter: false }` removes it. It is
+   * sample-identical below full scale, so this is not a tone decision — see
+   * {@link EqualizerPresetChainOptions.limiter} for what it does and does not
+   * change.
    *
    * `editable` is not yours to set here: this hook always compiles an editable
    * chain, because that is what lets a slider move a band without rebuilding

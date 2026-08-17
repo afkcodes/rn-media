@@ -32,8 +32,11 @@
  *   is what stops a graphic EQ sounding phasey and hollow.
  *
  * A boost is still a boost, so apply presets with {@link equalizerPresetChain}
- * rather than bare: it computes the exact pre-amp that keeps the loudest band
- * at unity, so no preset can clip.
+ * rather than bare: it computes the exact pre-amp that brings the summed
+ * response back to unity, and appends the limiter that covers the rest — the
+ * peaks a phase shift moves in time, which no pre-amp can predict from the
+ * magnitude response. Between them nothing a preset does reaches the DAC above
+ * full scale.
  *
  * @packageDocumentation
  */
@@ -356,11 +359,35 @@ export interface EqualizerPresetChainOptions {
    */
   readonly preampDb?: number
   /**
-   * Append a brickwall limiter as the last stage. Defaults to `true`.
+   * Append a brickwall limiter (`alimiter`) as the last EQ stage. Defaults to
+   * `true`, and **is on for every curve that is not flat** — including a curve
+   * that only cuts, and including a single band at +0.1 dB.
    *
-   * The pre-amp handles steady-state level; the limiter catches the
-   * inter-sample peaks an EQ's phase shift can push past full scale even after
-   * correct attenuation. Turn it off only if something later already limits.
+   * That sounds like overkill and is not, because the pre-amp and the limiter
+   * bound different things:
+   *
+   * - The pre-amp is a **frequency-domain** bound. {@link peakResponseDb} is
+   *   `max |H(f)|`, so after attenuation no steady sine can leave the chain
+   *   above unity.
+   * - Clipping is a **time-domain** event, and the tight bound on a filter's
+   *   sample-peak gain is the L1 norm of its impulse response, which is
+   *   strictly larger. Measured over these curves at 48 kHz: `Rock` after its
+   *   −4.8 dB pre-amp still has +4.9 dB of worst-case peak gain, and
+   *   `Bass Reducer` — pure cuts, so **no pre-amp at all**, by construction —
+   *   has +5.7 dB. Even one band at +0.1 dB has +0.03 dB. A phase shift moves
+   *   energy in time, and modern masters arrive at 0 dBFS with nowhere to put
+   *   it.
+   *
+   * So the honest predicate for "this curve cannot clip" is `‖h‖₁ ≤ 1`, and
+   * that is false for every non-flat curve — which is exactly the condition
+   * this option already keys on. A flat curve compiles to no chain, so it gets
+   * no limiter either.
+   *
+   * The limiter is not a tone control: below full scale it is sample-identical
+   * (see {@link AudioFilters.limiter}, which also documents the one thing it
+   * *does* cost — 5 ms of uncompensated look-ahead). Turn it off only if
+   * something later in your chain already limits, or if you are handing the
+   * output somewhere with real headroom.
    */
   readonly limiter?: boolean
   /**
@@ -411,7 +438,12 @@ export interface EqualizerPresetChainOptions {
  * 2. One `equalizer` biquad per **non-zero** band. Bands sitting at 0 dB are
  *    omitted entirely — they would be arithmetic no-ops that still cost a
  *    filter instance, so `Bass Boost` compiles to five bands, not ten.
- * 3. `alimiter` — the safety net for inter-sample peaks (opt-out).
+ * 3. `alimiter` — the safety net for the sample peaks the pre-amp's
+ *    frequency-domain bound cannot catch. **On for every non-flat curve**,
+ *    cut-only curves included; opt out with
+ *    {@link EqualizerPresetChainOptions.limiter}, which explains why the
+ *    default is what it is and what it costs (5 ms of look-ahead; below full
+ *    scale it changes no sample).
  *
  * A flat preset compiles to an empty chain: no filters, no cost, no pointless
  * trip through the filter graph.
@@ -485,7 +517,9 @@ export function equalizerPresetChain(
       width: bandwidthOctaves,
       gain: band.gain,
     })
-    chain.push(editable ? { ...entry, label: equalizerBandLabel(index) } : entry)
+    chain.push(
+      editable ? { ...entry, label: equalizerBandLabel(index) } : entry
+    )
   }
   if ((editable || bands.length > 0) && options.limiter !== false) {
     const limiter = AudioFilters.limiter()

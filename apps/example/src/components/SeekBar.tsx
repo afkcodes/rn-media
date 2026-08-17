@@ -8,8 +8,8 @@
  * `onStartShouldSetPanResponder` claims the touch on *down*, so a tap is just a
  * drag with no movement.
  *
- * Two behaviours are worth calling out, since they are the difference between a
- * scrubber that feels right and one that fights the user:
+ * Three behaviours are worth calling out, since they are the difference between
+ * a scrubber that feels right and one that fights the user:
  *
  * 1. **The thumb is never moved by the player while a finger is on it.** The
  *    incoming `position` prop keeps ticking during a drag; it is ignored for as
@@ -19,6 +19,18 @@
  *    on release the target is held (`pending`) until the player's own position
  *    arrives near it — otherwise the thumb jumps back to where playback still
  *    is, then forward again when the seek lands.
+ * 3. **Everything inside the responder is `pointerEvents="none"`.** RN's
+ *    `locationX` is relative to the *touch target* — the deepest hit-testable
+ *    view under the finger — not to the view holding the responder, so
+ *    `pageX - locationX` is only the bar's origin when the bar is the only
+ *    thing that can be hit. It was not: the thumb is a hit-testable child, and
+ *    because every RN `View` is `clipChildren = false`
+ *    (`ReactViewGroup.kt:170`) and the track's overflow inset covers the part
+ *    of the thumb hanging outside it, a touch anywhere on the *visible thumb*
+ *    resolved to the thumb — whose origin is near the playhead, making the
+ *    computed fraction ~0 and sending playback to 0:00. Grabbing the thumb is
+ *    the most natural way to scrub, so that was the one gesture that could not
+ *    work. Same bug the fader bank had, same fix.
  *
  * The bar is intentionally *disabled rather than hidden* on live streams: this
  * app is the on-device test bed, and "the scrubber is greyed out and says live"
@@ -33,6 +45,7 @@ import {
   type LayoutChangeEvent,
 } from 'react-native'
 import { COLORS, SPACE, TYPE } from '../theme'
+import { barOriginX, clamp01, fractionAtX } from './seek-geometry'
 
 /** `m:ss`, or `--:--` when there is no number to show. */
 export function formatTime(seconds: number | undefined): string {
@@ -56,11 +69,6 @@ export interface SeekBarProps {
   readonly onSeek: (seconds: number) => void
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0
-  return value < 0 ? 0 : value > 1 ? 1 : value
-}
-
 function percent(fraction: number): `${number}%` {
   return `${clamp01(fraction) * 100}%`
 }
@@ -81,11 +89,13 @@ export function SeekBar({
   const [pending, setPending] = useState<number | undefined>(undefined)
 
   /**
-   * Track geometry, filled in by `onLayout` (width) and by the grant event
-   * (`pageX - locationX` is the bar's left edge in page coordinates — the one
-   * offset a `View` will not tell you without an async `measure`).
+   * Track geometry: `width` and the track's offset inside the responder come
+   * from `onLayout`, `originX` from the grant event. See `seek-geometry.ts` —
+   * the page-space origin is the one offset a `View` will not tell you without
+   * an async `measure`, and reconstructing it from a touch is only sound
+   * because the responder's children take no touches.
    */
-  const geometry = useRef({ width: 0, originX: 0 })
+  const geometry = useRef({ width: 0, originX: 0, trackX: 0 })
 
   /**
    * The responder is built once and outlives every render, so everything it
@@ -123,7 +133,12 @@ export function SeekBar({
 
         onPanResponderGrant: (event) => {
           const { pageX, locationX } = event.nativeEvent
-          geometry.current.originX = pageX - locationX
+          // Only correct because the hit area's children take no touches.
+          geometry.current.originX = barOriginX(
+            pageX,
+            locationX,
+            geometry.current.trackX
+          )
           setScrub(fractionAt(pageX))
         },
         onPanResponderMove: (event) => {
@@ -145,13 +160,15 @@ export function SeekBar({
   )
 
   function fractionAt(pageX: number): number {
-    const { width, originX } = geometry.current
-    if (width <= 0) return 0
-    return clamp01((pageX - originX) / width)
+    return fractionAtX(pageX, geometry.current)
   }
 
   function onLayout(event: LayoutChangeEvent): void {
-    geometry.current.width = event.nativeEvent.layout.width
+    const { width, x } = event.nativeEvent.layout
+    geometry.current.width = width
+    // The track's offset within the hit area, so the two are free to stop
+    // sharing a left edge without the mapping quietly going wrong.
+    geometry.current.trackX = x
   }
 
   const total = duration ?? 0
@@ -176,8 +193,11 @@ export function SeekBar({
         style={styles.hitArea}
         {...(seekable ? responder.panHandlers : {})}
       >
+        {/* Transparent to touches, so the hit area is the only target and
+            `locationX` means what the grant handler assumes it means. */}
         <View
           onLayout={onLayout}
+          pointerEvents="none"
           style={[styles.track, !seekable && styles.trackDisabled]}
         >
           <View style={[styles.buffered, { width: percent(bufferedFraction) }]} />
@@ -216,8 +236,8 @@ const BAR = 4
 const styles = StyleSheet.create({
   container: { alignSelf: 'stretch' },
   // Generous vertical padding: the touch target is 28pt tall, the bar is 4.
-  // No *horizontal* padding — the grant handler assumes this view and the
-  // track share a left edge.
+  // Horizontal padding is now safe — the track's own `layout.x` is folded into
+  // the origin (see `seek-geometry.ts`) — but there is none to add.
   hitArea: { paddingVertical: SPACE.md },
   track: {
     height: BAR,
