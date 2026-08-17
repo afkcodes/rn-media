@@ -226,6 +226,115 @@ Notes:
   platform branching is needed. On an older or overridden binary the call fails
   honestly with a `mpv` `PlayerError` carrying `errno: -11`.
 
+### `useEqualizer()` — the whole EQ screen, on one hook
+
+The pieces above are the primitives. This is them assembled: the curve, the
+preset bank, the persistence, and the one `af` write that puts it on the
+signal.
+
+```tsx
+import { useEqualizer } from '@rn-media/player'
+
+function EqualizerScreen({ player }: { player: Player | undefined }) {
+  const eq = useEqualizer(player)
+
+  return (
+    <>
+      {eq.presets.map(preset => (
+        <Chip
+          key={preset.id}
+          label={preset.name}
+          active={preset.id === eq.preset?.id}
+          onPress={() => eq.applyPreset(preset)}
+        />
+      ))}
+      {eq.bands.map((band, index) => (
+        <Slider
+          key={band.frequency}
+          value={band.gainDb}
+          minimumValue={eq.gainRangeDb.min}
+          maximumValue={eq.gainRangeDb.max}
+          onValueChange={db => eq.setBandGain(index, db)}
+        />
+      ))}
+      <Chip label="Reset" onPress={() => eq.reset()} />
+    </>
+  )
+}
+```
+
+The returned object is `{ enabled, bands, gainsDb, gainRangeDb, preset,
+presets, savedPresets, error, hydrated }` plus `setEnabled`, `setBandGain`,
+`setBandGains`, `applyPreset`, `reset`, `savePreset`, `deletePreset`.
+
+- **`preset` is derived, not remembered.** It is whichever preset the current
+  gains *are*, so dragging away from `Rock` and back onto it re-selects `Rock`,
+  and no sequence of edits can leave a chip highlighted on a curve that is not
+  playing. `undefined` is what a UI draws as "Custom".
+- **There is no `onBandChange`/`onPresetChange` event, on purpose.** The
+  returned object *is* the notification — every mutator re-renders, and the
+  value is a fresh immutable snapshot. An event carrying the same fact would be
+  a second source of truth to fall out of sync with.
+- **One `setAudioFilters` per *effective* change.** The chain is recompiled and
+  pushed only when the compiled `af` string would actually differ, so a
+  re-render on the same value writes nothing. Nothing ticks; there is no timer.
+- **It owns `setAudioFilters` while mounted.** That method replaces the whole
+  user chain, so the rest of *your* chain goes in `extraFilters` and is appended
+  after the EQ bands:
+
+  ```ts
+  useEqualizer(player, {
+    extraFilters: [AudioFilters.crossfeed({ strength: 0.3 })],
+    chain: { limiter: false }, // EqualizerPresetChainOptions
+  })
+  ```
+
+  `setLoudnessNormalization` needs no such care either way — it is a separately
+  managed, labelled entry that composes with whatever the user half holds.
+- **Unmounting does not clear the chain.** `af` survives track changes by
+  design, and an EQ screen closing is not a reason to stop equalising. Call
+  `setEnabled(false)` to take it off.
+- **Gains are clamped, lengths and non-finite values throw.** A slider at its
+  stop is not a bug; ten gains that are not ten gains is.
+
+#### Saved curves, and where they are kept
+
+`savePreset(name)` turns the current curve into a preset that joins
+`presets`; saving twice under the same name replaces it, which is what "Save
+as…" means everywhere else. `deletePreset(id)` removes one (built-in ids
+throw; an unknown id is an idempotent no-op).
+
+Persistence is **injected, and there is no storage dependency in this
+package** — the same structural two-method interface
+`@rn-media/media-session` takes, so one engine can serve both:
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage'
+
+const eq = useEqualizer(player, {
+  storage: AsyncStorage, // or any { getItem, setItem }
+  onStorageError: cause => console.warn(cause),
+})
+```
+
+Omit `storage` and the preset bank is in-memory for the session. With it, the
+saved curves *and* the live setting (`enabled` + `gainsDb`) are written on
+every effective change and read back on mount. A **synchronous** engine (MMKV)
+is read through synchronously, so the first `af` write is already the restored
+curve; an **asynchronous** one leaves `eq.hydrated` `false` until the record
+arrives and **nothing is written to mpv** in the meantime — either way the
+saved curve is applied once, never flat first and the real curve a tick later.
+The built-in presets are never persisted, so a release that retunes `Rock`
+takes effect instead of being pinned by an old record.
+
+The record is versioned and its reader is exported for anyone who wants to
+inspect or migrate it: `serializeEqualizerSettings`, `parseEqualizerSettings`
+(a typed `EqualizerRestoreResult` — `restored` | `empty` | `unsupportedVersion`
+| `corrupt`, never a throw), `EQUALIZER_SCHEMA_VERSION`,
+`DEFAULT_EQUALIZER_STORAGE_KEY`. A corrupt or unreadable record means "start
+from the defaults"; a *storage* failure is a broken dependency and reaches
+`onStorageError`.
+
 ### Visualizer (spectrum + waveform)
 
 ```tsx

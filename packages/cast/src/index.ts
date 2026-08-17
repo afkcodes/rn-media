@@ -14,6 +14,7 @@ export {
   reduceCastHandoff,
 } from './handoff-machine'
 export { wireCastHandoff } from './handoff'
+export { isCastingState, useCastState, useIsCasting } from './use-cast-state'
 
 export type { CanCastInput, CanCastVerdict } from './can-cast'
 export type { CastButtonProps } from './cast-button'

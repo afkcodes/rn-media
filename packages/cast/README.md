@@ -326,6 +326,42 @@ picker — `Cast.startDiscovery()` + `getCastDevices()` + `requestSession(id)`,
 or `Cast.requestSession()` for the SDK picker without the view. It just does
 not get the system output switcher.
 
+### `useCastState()` / `useIsCasting()` — the state, as React state
+
+The same subscription `<CastButton/>` uses, exported so your own UI can have
+it without wiring a listener:
+
+```tsx
+import { useCastState, useIsCasting } from '@rn-media/cast'
+
+function OutputBadge(): React.JSX.Element | null {
+  const state = useCastState() // 'unavailable' | 'idle' | 'connecting' | 'connected' | 'transferring'
+  const casting = useIsCasting() // 'connected' or 'transferring'
+
+  if (state === 'unavailable') return null
+  return <Text>{casting ? 'Casting' : state}</Text>
+}
+```
+
+- **Seeded synchronously.** The first value is a direct `Cast.getCastState()`
+  read, so the first paint is already right instead of flashing through
+  `'unavailable'`; the effect re-reads once on subscribe, because
+  `Cast.initialize()` may resolve between that render and the effect.
+- **`useIsCasting()` re-renders only when the answer flips.** The boolean — not
+  the state — is what it holds, so `idle → connecting` writes the same `false`
+  and React bails out. It is deliberately *not* `isCastingState(useCastState())`.
+- **`'transferring'` counts as casting.** That state is a receiver-to-receiver
+  stream transfer (the Android output switcher moving a session between
+  speakers): the phone is still not the output and the session is still alive,
+  so treating it as "not casting" would flicker a UI back to local controls
+  mid-transfer. `isCastingState(state)` is the same rule, exported for
+  non-React callers so the two cannot drift.
+- **No timer, no polling.** The `castState` event is the only thing that moves
+  either hook, and each caller's listener is dropped on unmount.
+
+`'unavailable'` is an honest answer, not an error: it is the state before
+`initialize()` resolves *and* forever on a device without Google Play services.
+
 ## Honest ceilings (read before shipping)
 
 - **Receiver codec ceiling** — receivers decode HE-/LC-AAC, MP3, FLAC (≤
