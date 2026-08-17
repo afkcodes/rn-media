@@ -92,6 +92,18 @@ export type {
 } from './equalizer-presets'
 
 export {
+  DEFAULT_EQUALIZER_STORAGE_KEY,
+  EQUALIZER_SCHEMA_VERSION,
+  parseEqualizerSettings,
+  serializeEqualizerSettings,
+} from './equalizer-storage'
+export type {
+  EqualizerRestoreResult,
+  EqualizerSettings,
+  EqualizerStorage,
+} from './equalizer-storage'
+
+export {
   AudioFilters,
   GRAPHIC_EQUALIZER_BANDS,
   assertValidAudioFilters,
@@ -232,5 +244,15 @@ export type {
   PrefetchIdle,
   PrefetchStatus,
 } from './hooks/usePrefetchStatus'
+export {
+  DEFAULT_EQUALIZER_GAIN_RANGE_DB,
+  useEqualizer,
+} from './hooks/useEqualizer'
+export type {
+  Equalizer,
+  EqualizerBand,
+  EqualizerGainRange,
+  UseEqualizerOptions,
+} from './hooks/useEqualizer'
 export { useVisualizer } from './hooks/useVisualizer'
 export type { UseVisualizerResult } from './hooks/useVisualizer'

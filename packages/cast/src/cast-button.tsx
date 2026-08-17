@@ -11,10 +11,9 @@ import {
   type HybridViewMethods,
 } from 'react-native-nitro-modules'
 
-import { Cast } from './cast'
 import { castButtonViewConfig } from './cast-button-config'
 import type { RnMediaCastButtonProps } from './specs/cast-button.nitro'
-import type { CastConnectionState } from './specs/cast.nitro'
+import { useCastState } from './use-cast-state'
 
 const NativeCastButton = getHostComponent<
   RnMediaCastButtonProps,
@@ -101,25 +100,6 @@ export function CastButton({
       tintColor={packColor(tintColor)}
     />
   )
-}
-
-/**
- * The live cast state, seeded synchronously so the first paint is already
- * right (no flash of a button on a device that has no cast at all).
- */
-function useCastState(): CastConnectionState {
-  const [state, setState] = React.useState<CastConnectionState>(() =>
-    Cast.getCastState()
-  )
-  React.useEffect(() => {
-    // Re-read on subscribe: `initialize()` may have resolved between the
-    // seeding render and this effect.
-    setState(Cast.getCastState())
-    return Cast.addListener('castState', (event) => {
-      setState(event.state)
-    })
-  }, [])
-  return state
 }
 
 /**

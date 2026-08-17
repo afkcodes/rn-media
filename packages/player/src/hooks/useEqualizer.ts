@@ -1,0 +1,777 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PlayerError } from '../errors'
+import { PlayerErrorException, toPlayerError } from '../errors'
+import type {
+  EqualizerPreset,
+  EqualizerPresetChainOptions,
+} from '../equalizer-presets'
+import {
+  EQUALIZER_BANDS,
+  EQUALIZER_BAND_COUNT,
+  EQUALIZER_PRESETS,
+  EQUALIZER_PRESET_LIST,
+  defineEqualizerPreset,
+  equalizerPresetChain,
+} from '../equalizer-presets'
+import type { EqualizerSettings, EqualizerStorage } from '../equalizer-storage'
+import {
+  DEFAULT_EQUALIZER_STORAGE_KEY,
+  parseEqualizerSettings,
+  serializeEqualizerSettings,
+} from '../equalizer-storage'
+import type { AudioFilter } from '../filters'
+import { compileAudioFilters } from '../filters'
+import type { Player } from '../player'
+
+/**
+ * One slider of the equaliser: the ISO octave centre it sits on, and where the
+ * user has it.
+ *
+ * A band is identified by its **index** — its position in
+ * {@link EQUALIZER_BANDS}, which is also the index every `gainsDb` array in
+ * this package is ordered by. (The entry-id rule that governs the *queue* does
+ * not apply here: the band set is a fixed-length, never-reordered array, so the
+ * index is the identity.)
+ */
+export interface EqualizerBand {
+  /** Centre frequency in Hz — the label to draw under the slider. */
+  readonly frequency: number
+  /** The band's gain in dB. Negative cuts, positive boosts, `0` is off. */
+  readonly gainDb: number
+}
+
+/** Inclusive slider bounds, in dB. */
+export interface EqualizerGainRange {
+  readonly min: number
+  readonly max: number
+}
+
+/**
+ * Default bounds for a band slider: ±12 dB.
+ *
+ * Not ffmpeg's limit (±900 dB) and not the built-in presets' self-imposed ceiling
+ * (±9 dB) — it is the range a consumer EQ can offer without the result being
+ * unusable. Past about ±12 dB a one-octave bell stops sounding like tone
+ * control and starts sounding like damage, and the pre-amp
+ * {@link equalizerPresetChain} computes has to give back everything the boost
+ * gained anyway. Override with `UseEqualizerOptions.gainRangeDb` if your UI
+ * wants a different feel.
+ */
+export const DEFAULT_EQUALIZER_GAIN_RANGE_DB: EqualizerGainRange =
+  Object.freeze({ min: -12, max: 12 })
+
+/** Ten zeroes — the flat curve, and what {@link Equalizer.reset} returns to. */
+const FLAT_GAINS: readonly number[] = Object.freeze(
+  Array.from({ length: EQUALIZER_BAND_COUNT }, () => 0)
+)
+
+/** Options for {@link useEqualizer}. */
+export interface UseEqualizerOptions {
+  /**
+   * The curve to start on — a built-in id (`'rock'`), or any
+   * {@link EqualizerPreset}. Defaults to flat, which compiles to **no filters
+   * at all**, so an equaliser nobody has touched costs nothing.
+   *
+   * Read once, on mount. A persisted curve (see {@link storage}) wins over it.
+   */
+  readonly initialPreset?: string | EqualizerPreset
+  /**
+   * Whether the EQ starts switched on. Defaults to `true` — with flat gains
+   * that is still an empty chain, and it means the first slider drag is
+   * audible without a second tap.
+   *
+   * Read once, on mount; a persisted value wins over it.
+   */
+  readonly initialEnabled?: boolean
+  /**
+   * The rest of *your* filter chain — crossfeed, a compressor, an `aformat`,
+   * anything from `AudioFilters`. They are appended after the EQ bands, so the
+   * signal is equalised first.
+   *
+   * @remarks
+   * **This exists because `Player.setAudioFilters` replaces the whole user
+   * chain.** While this hook is mounted it owns that call, so a filter set
+   * behind its back is wiped by the next slider drag. Declaring it here instead
+   * is the honest route: the hook rebuilds one chain from one source.
+   *
+   * `setLoudnessNormalization` is unaffected either way — that is a separately
+   * managed, labelled entry that composes with whatever the user half holds
+   * (see `Player.setAudioFilters`), and neither this hook nor your app has to
+   * think about it.
+   *
+   * May change between renders; the chain is rewritten only when it actually
+   * compiles to something different.
+   */
+  readonly extraFilters?: readonly AudioFilter[]
+  /**
+   * How the EQ curve is compiled — pre-amp on top of the automatic headroom,
+   * the opt-out limiter, and the bell width. See
+   * {@link EqualizerPresetChainOptions}.
+   */
+  readonly chain?: EqualizerPresetChainOptions
+  /**
+   * Slider bounds. Every gain that goes in through this hook is **clamped** to
+   * them. Defaults to {@link DEFAULT_EQUALIZER_GAIN_RANGE_DB}.
+   */
+  readonly gainRangeDb?: EqualizerGainRange
+  /**
+   * Where the user's equaliser is remembered — their saved curves *and*
+   * whatever they last had applied.
+   *
+   * Omit it and everything is in-memory for the session, which is the correct
+   * default for a library: an EQ that silently writes to a storage engine the
+   * app did not choose is a dependency, not a feature. See
+   * {@link EqualizerStorage}.
+   *
+   * Read once, on mount.
+   */
+  readonly storage?: EqualizerStorage
+  /** Storage key. Defaults to {@link DEFAULT_EQUALIZER_STORAGE_KEY}. */
+  readonly storageKey?: string
+  /**
+   * A read or write against {@link storage} failed — a broken dependency, not
+   * bad data (a corrupt *record* is handled silently, because that is an
+   * ordinary runtime condition and the answer to it is "start from the
+   * defaults").
+   *
+   * Unhandled, it is one `console.warn`. It is a callback rather than a
+   * returned field because it is not renderable state: nothing on an EQ screen
+   * changes because a write failed, and putting it in the snapshot would make
+   * every consumer destructure something it will never draw.
+   */
+  readonly onStorageError?: (cause: unknown) => void
+}
+
+/**
+ * The equaliser: its live state, and every operation an EQ screen performs on
+ * it.
+ *
+ * Stable identity — the object is rebuilt only when something in it actually
+ * changed — so passing it whole to a memoised `<EqualizerScreen>` costs no
+ * render on an unrelated player update.
+ */
+export interface Equalizer {
+  /** Whether the EQ is applied at all. `false` leaves your other filters running. */
+  readonly enabled: boolean
+  /**
+   * One entry per band of {@link EQUALIZER_BANDS}, low to high — the array to
+   * `.map()` into sliders.
+   */
+  readonly bands: readonly EqualizerBand[]
+  /**
+   * The same curve as {@link bands}, as the bare `gainsDb` array every other
+   * function in this package takes. Hand it to `defineEqualizerPreset`, store
+   * it, diff it.
+   */
+  readonly gainsDb: readonly number[]
+  /** The slider bounds every gain is clamped to. */
+  readonly gainRangeDb: EqualizerGainRange
+  /**
+   * The preset the current curve *is*, or `undefined` when it matches none —
+   * which is what a UI shows as "Custom".
+   *
+   * Derived by comparing the gains, not remembered from the last
+   * {@link applyPreset}: dragging a slider away from `Rock` and back onto it
+   * lands on `Rock` again, and no sequence of edits can leave the chip
+   * highlighted on a curve that is not playing.
+   */
+  readonly preset: EqualizerPreset | undefined
+  /**
+   * Everything selectable, in picker order: the built-ins
+   * ({@link EQUALIZER_PRESET_LIST}, `Flat` first then alphabetical) followed by
+   * the user's saved curves in save order.
+   */
+  readonly presets: readonly EqualizerPreset[]
+  /**
+   * Just the user's saved curves — the subset {@link deletePreset} accepts, so
+   * a picker can draw a delete affordance on exactly the right rows.
+   */
+  readonly savedPresets: readonly EqualizerPreset[]
+  /**
+   * Why the last apply failed, or `undefined` while the chain is healthy.
+   *
+   * The realistic cause is a libmpv built without the filters (`code: 'mpv'`,
+   * `errno: -11`): mpv rejects the whole chain, leaves the previous one
+   * playing, and this says so. The UI state here is still what the user asked
+   * for — read `player.getAudioFilters()` for what mpv actually has.
+   */
+  readonly error: PlayerError | undefined
+  /**
+   * Whether the persisted equaliser has been read back yet.
+   *
+   * Always `true` when no `storage` was given (there is nothing to wait for),
+   * and already `true` on the first render for a *synchronous* engine (MMKV),
+   * which is read through inside the mount effect.
+   *
+   * With an asynchronous engine (AsyncStorage) it is `false` until the record
+   * arrives, and **nothing is written to mpv** in the meantime — so a saved
+   * curve is applied once, rather than flat first and the real curve a
+   * microtask later.
+   */
+  readonly hydrated: boolean
+  /** Switch the EQ half of the chain on or off, keeping the curve. */
+  setEnabled(enabled: boolean): void
+  /**
+   * Move one band.
+   *
+   * @param index - Position in {@link EQUALIZER_BANDS} / {@link bands}.
+   * @param gainDb - New gain, **clamped** to {@link gainRangeDb} — a slider
+   * cannot throw halfway through a drag.
+   * @throws {@link PlayerErrorException} `invalid-state` if `index` is not a
+   * band, or `gainDb` is not a finite number. Both are programming errors, not
+   * user input.
+   */
+  setBandGain(index: number, gainDb: number): void
+  /**
+   * Replace the whole curve at once — restoring a profile, or applying a curve
+   * computed somewhere else.
+   *
+   * @param gainsDb - Exactly {@link EQUALIZER_BAND_COUNT} finite gains, low
+   * band first. Each is clamped to {@link gainRangeDb}.
+   * @throws {@link PlayerErrorException} `invalid-state` on the wrong length or
+   * a non-finite entry.
+   */
+  setBandGains(gainsDb: readonly number[]): void
+  /**
+   * Apply a preset — the chip tap.
+   *
+   * @param preset - A built-in id (`'rock'`), a saved preset's id, or any
+   * {@link EqualizerPreset} object (which need not be in {@link presets}).
+   * @throws {@link PlayerErrorException} `invalid-state` when a string names no
+   * known preset.
+   */
+  applyPreset(preset: string | EqualizerPreset): void
+  /**
+   * Flatten every band to 0 dB — the "Reset" button.
+   *
+   * Only the curve: {@link enabled} and the saved presets are untouched, and a
+   * flat curve compiles to an empty chain, so this genuinely removes the EQ
+   * from the signal path rather than leaving ten no-op biquads in it.
+   */
+  reset(): void
+  /**
+   * Save the current curve under a name, so it joins {@link presets}.
+   *
+   * Saving twice under the same name **replaces** — the name is the identity of
+   * a user curve, which is what "Save as…" means everywhere else.
+   *
+   * @param name - Human label. Non-empty.
+   * @returns The stored preset, so a caller can select it or show it
+   * immediately.
+   * @throws {@link PlayerErrorException} `invalid-state` on an empty name.
+   */
+  savePreset(name: string): EqualizerPreset
+  /**
+   * Forget a saved curve.
+   *
+   * Deleting the preset that is currently applied does not change the sound —
+   * the curve stays exactly where it is, it simply stops having a name.
+   *
+   * @param id - A {@link savedPresets} id. An unknown id is a no-op (deleting
+   * twice is not an error).
+   * @throws {@link PlayerErrorException} `invalid-state` for a built-in id —
+   * those ship with the library and cannot be removed.
+   */
+  deletePreset(id: string): void
+}
+
+/** The mutable half, kept in one object so an edit is one render. */
+interface EqualizerState {
+  readonly enabled: boolean
+  readonly gainsDb: readonly number[]
+  readonly savedPresets: readonly EqualizerPreset[]
+}
+
+/** Prefix that keeps a user curve's id out of the built-ins' namespace. */
+const SAVED_PRESET_PREFIX = 'custom:'
+
+/**
+ * A ten-band equaliser as one hook: the curve, the presets, the persistence,
+ * and the one `af` write that puts it on the signal.
+ *
+ * Before this, an EQ screen meant composing four exports and owning the state
+ * between them — `EQUALIZER_PRESET_LIST` for the chips,
+ * `equalizerPresetChain` to compile, `defineEqualizerPreset` for a user curve,
+ * `setAudioFilters` to apply, and a `useState` per slider. That is the library
+ * making the app do its arithmetic. This is the same machinery with the
+ * bookkeeping done:
+ *
+ * ```tsx
+ * const eq = useEqualizer(player)
+ *
+ * return (
+ *   <>
+ *     {eq.presets.map((p) => (
+ *       <Chip key={p.id} label={p.name} active={p.id === eq.preset?.id}
+ *             onPress={() => eq.applyPreset(p)} />
+ *     ))}
+ *     {eq.bands.map((band, index) => (
+ *       <Slider key={band.frequency} value={band.gainDb}
+ *               minimumValue={eq.gainRangeDb.min}
+ *               maximumValue={eq.gainRangeDb.max}
+ *               onValueChange={(db) => eq.setBandGain(index, db)} />
+ *     ))}
+ *   </>
+ * )
+ * ```
+ *
+ * @param player - The player, or `undefined` before it has been created. The
+ * hook holds its state either way, so a screen can render (and be edited)
+ * before the core exists; the chain is written as soon as one appears.
+ * @param options - See {@link UseEqualizerOptions}.
+ * @returns See {@link Equalizer}.
+ *
+ * @remarks
+ * **There is no `onBandChange`/`onPresetChange` event, on purpose.** The
+ * returned object *is* the notification: every mutator re-renders the
+ * component that holds the hook, and the value is a fresh immutable snapshot.
+ * An event carrying the same fact would be a second source of truth for
+ * consumers to fall out of sync with, and a subscription for the common case
+ * (one EQ screen) to pay for. Several components can call the hook
+ * independently — they will each have their own curve, which is the honest
+ * consequence of not keeping app state in the library; hoist it if you want
+ * one.
+ *
+ * **What is written, and when.** One `setAudioFilters` per *effective* change —
+ * the chain is recompiled and pushed only when the compiled result would
+ * differ, so a slider that re-renders on the same value writes nothing. The
+ * write is synchronous and cheap (mpv rebuilds the filter graph in place; it
+ * does not reload the file, reset the position or drop the audio device), but
+ * it is not free: {@link equalizerPresetChain} evaluates the summed magnitude
+ * response to compute the headroom pre-amp. For a continuous drag, prefer your
+ * slider's commit callback (`onSlidingComplete`) over its per-frame one.
+ *
+ * **No timers.** Nothing here ticks; every update is caused by a call you made
+ * or by the persisted record arriving.
+ *
+ * **Unmounting does not clear the chain.** `af` is a global mpv option that
+ * survives track changes, and an EQ screen closing is not a reason to stop
+ * equalising. Call `setEnabled(false)` — or `player.clearAudioFilters()` — to
+ * take it off.
+ *
+ * **Ownership.** While mounted, this hook owns `Player.setAudioFilters`. Put
+ * the rest of your chain in {@link UseEqualizerOptions.extraFilters} rather
+ * than calling that method behind it. Loudness normalization is a separately
+ * managed entry and needs no such care.
+ */
+export function useEqualizer(
+  player: Player | undefined,
+  options: UseEqualizerOptions = {}
+): Equalizer {
+  const gainRangeDb = options.gainRangeDb ?? DEFAULT_EQUALIZER_GAIN_RANGE_DB
+  const rangeRef = useRef(gainRangeDb)
+  rangeRef.current = gainRangeDb
+
+  // Captured once, for the same reason `usePlayer` captures its options: these
+  // describe how the hook starts, and re-reading them on every render would
+  // mean a fresh object literal re-seeding state forever.
+  const seedRef = useRef(options)
+
+  const [state, setState] = useState<EqualizerState>(() => {
+    const seed = seedRef.current
+    const initial =
+      seed.initialPreset === undefined
+        ? FLAT_GAINS
+        : resolvePreset(seed.initialPreset, []).gainsDb
+    return {
+      enabled: seed.initialEnabled ?? true,
+      gainsDb: clampGains(
+        initial,
+        seed.gainRangeDb ?? DEFAULT_EQUALIZER_GAIN_RANGE_DB
+      ),
+      savedPresets: [],
+    }
+  })
+  const [error, setError] = useState<PlayerError | undefined>(undefined)
+  // With no storage there is nothing to wait for, so the very first render is
+  // already hydrated and the chain can be written immediately.
+  const [hydrated, setHydrated] = useState(
+    () => seedRef.current.storage === undefined
+  )
+
+  // Read by the mutators, which are stable across renders and therefore cannot
+  // close over the live values.
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  // What was last written to storage, so an unchanged state (a re-render, or
+  // the record that was just restored) costs no storage round-trip.
+  const writtenRef = useRef<string | undefined>(undefined)
+
+  /* ---------------------------- restore ---------------------------------- */
+
+  useEffect(() => {
+    const { storage, storageKey, onStorageError } = seedRef.current
+    if (storage === undefined) return undefined
+    let cancelled = false
+
+    const adopt = (raw: string | null): void => {
+      if (cancelled) return
+      const result = parseEqualizerSettings(raw)
+      if (result.status === 'restored') {
+        const restored: EqualizerState = {
+          enabled: result.settings.enabled,
+          gainsDb: clampGains(result.settings.gainsDb, rangeRef.current),
+          savedPresets: result.settings.presets,
+        }
+        setState(restored)
+        // Mark what was just read as already written, so the restore does not
+        // immediately provoke a write of the record it came from.
+        writtenRef.current = serializeEqualizerSettings({
+          enabled: restored.enabled,
+          gainsDb: restored.gainsDb,
+          presets: restored.savedPresets,
+        })
+      }
+      // Every other status — empty, corrupt, a version this build cannot read
+      // — means the same thing to a UI: start from the defaults. The typed
+      // result exists for callers of `parseEqualizerSettings`; here it would
+      // only be a branch that does nothing.
+      setHydrated(true)
+    }
+
+    const fail = (cause: unknown): void => {
+      if (cancelled) return
+      reportStorageError(onStorageError, cause)
+      setHydrated(true)
+    }
+
+    try {
+      // Not `await`: a *synchronous* engine (MMKV, a plain Map) is read through
+      // synchronously, so hydration finishes inside this effect and the very
+      // first `af` write is already the restored curve. Awaiting would defer it
+      // a microtask for no reason and cost a render. The same shape
+      // `@rn-media/media-session`'s `withPersistence` uses, for the same reason.
+      const read = storage.getItem(storageKey ?? DEFAULT_EQUALIZER_STORAGE_KEY)
+      if (read instanceof Promise) read.then(adopt, fail)
+      else adopt(read)
+    } catch (cause) {
+      fail(cause)
+    }
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /* ------------------------------ persist -------------------------------- */
+
+  useEffect(() => {
+    const { storage, storageKey, onStorageError } = seedRef.current
+    if (storage === undefined || !hydrated) return
+    const settings: EqualizerSettings = {
+      enabled: state.enabled,
+      gainsDb: state.gainsDb,
+      presets: state.savedPresets,
+    }
+    const serialized = serializeEqualizerSettings(settings)
+    if (serialized === writtenRef.current) return
+    writtenRef.current = serialized
+    try {
+      const written = storage.setItem(
+        storageKey ?? DEFAULT_EQUALIZER_STORAGE_KEY,
+        serialized
+      )
+      // A synchronous engine (MMKV) has already finished here; an async one
+      // (AsyncStorage) reports through the same channel a throw would.
+      if (written instanceof Promise) {
+        written.catch((cause: unknown) => {
+          reportStorageError(onStorageError, cause)
+        })
+      }
+    } catch (cause) {
+      reportStorageError(onStorageError, cause)
+    }
+  }, [hydrated, state])
+
+  /* ------------------------------- apply --------------------------------- */
+
+  /**
+   * The whole `af` user half: the EQ bands (with their headroom pre-amp and
+   * limiter) followed by the app's own filters.
+   *
+   * Recomputed whenever a caller re-renders with fresh `chain`/`extraFilters`
+   * literals — deliberately, because keying this on a hand-rolled signature
+   * would be a dependency lie. The cost is the summed magnitude-response walk
+   * inside `equalizerPresetChain`: ~60 frequency steps × 10 bands, tens of
+   * microseconds, and *nothing* is written to mpv unless the compiled string
+   * actually differs (see the effect below).
+   */
+  const chain = useMemo<readonly AudioFilter[]>(() => {
+    const eq = state.enabled
+      ? equalizerPresetChain({ gainsDb: state.gainsDb }, options.chain ?? {})
+      : []
+    return Object.freeze([...eq, ...(options.extraFilters ?? [])])
+  }, [state.enabled, state.gainsDb, options.chain, options.extraFilters])
+
+  // What was last successfully handed to which player, as mpv's own `af`
+  // grammar. Comparing the compiled string — rather than the array identity —
+  // is what makes an equivalent chain rebuilt by an unrelated re-render free.
+  const appliedRef = useRef<
+    { readonly player: Player; readonly compiled: string } | undefined
+  >(undefined)
+
+  useEffect(() => {
+    if (player === undefined || player.destroyed || !hydrated) return
+    const compiled = compileAudioFilters(chain)
+    const applied = appliedRef.current
+    if (
+      applied !== undefined &&
+      applied.player === player &&
+      applied.compiled === compiled
+    ) {
+      return
+    }
+    try {
+      player.setAudioFilters(chain)
+      appliedRef.current = { player, compiled }
+      // Identity-stable when already clear, so a healthy re-apply is free.
+      setError((previous) => (previous === undefined ? previous : undefined))
+    } catch (thrown) {
+      // Not recorded as applied: mpv kept the previous chain, so the next
+      // change must be pushed even if it compiles to the same string.
+      appliedRef.current = undefined
+      setError(toPlayerError(thrown))
+    }
+  }, [player, hydrated, chain])
+
+  /* ----------------------------- projections ----------------------------- */
+
+  const bands = useMemo<readonly EqualizerBand[]>(
+    () =>
+      Object.freeze(
+        state.gainsDb.map((gainDb, index) => ({
+          frequency: EQUALIZER_BANDS[index] as number,
+          gainDb,
+        }))
+      ),
+    [state.gainsDb]
+  )
+
+  const presets = useMemo<readonly EqualizerPreset[]>(
+    () => Object.freeze([...EQUALIZER_PRESET_LIST, ...state.savedPresets]),
+    [state.savedPresets]
+  )
+
+  const preset = useMemo(
+    () =>
+      presets.find((candidate) => sameGains(candidate.gainsDb, state.gainsDb)),
+    [presets, state.gainsDb]
+  )
+
+  /* ------------------------------ mutators ------------------------------- */
+
+  // Every mutator is stable across renders: they read the live values through
+  // refs and go through `setState`, whose identity React guarantees. That is
+  // what lets the returned object keep its identity when nothing changed.
+
+  const setEnabled = useCallback((enabled: boolean) => {
+    setState((previous) =>
+      previous.enabled === enabled ? previous : { ...previous, enabled }
+    )
+  }, [])
+
+  const setBandGains = useCallback((gainsDb: readonly number[]) => {
+    const clamped = clampGains(gainsDb, rangeRef.current)
+    setState((previous) =>
+      sameGains(previous.gainsDb, clamped)
+        ? previous
+        : { ...previous, gainsDb: clamped }
+    )
+  }, [])
+
+  const setBandGain = useCallback((index: number, gainDb: number) => {
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= EQUALIZER_BAND_COUNT
+    ) {
+      throw invalid(
+        `setBandGain: index must be an integer in 0…${String(EQUALIZER_BAND_COUNT - 1)}, got ${String(index)}.`
+      )
+    }
+    if (typeof gainDb !== 'number' || !Number.isFinite(gainDb)) {
+      throw invalid(
+        `setBandGain: gainDb must be a finite number, got ${String(gainDb)}.`
+      )
+    }
+    const value = clamp(gainDb, rangeRef.current)
+    setState((previous) => {
+      if (previous.gainsDb[index] === value) return previous
+      const gainsDb = [...previous.gainsDb]
+      gainsDb[index] = value
+      return { ...previous, gainsDb: Object.freeze(gainsDb) }
+    })
+  }, [])
+
+  const applyPreset = useCallback(
+    (candidate: string | EqualizerPreset) => {
+      const resolved = resolvePreset(candidate, stateRef.current.savedPresets)
+      setBandGains(resolved.gainsDb)
+    },
+    [setBandGains]
+  )
+
+  const reset = useCallback(() => {
+    setBandGains(FLAT_GAINS)
+  }, [setBandGains])
+
+  const savePreset = useCallback((name: string): EqualizerPreset => {
+    if (typeof name !== 'string' || name.trim() === '') {
+      throw invalid('savePreset: name must be a non-empty string.')
+    }
+    const label = name.trim()
+    // `defineEqualizerPreset` is the one place that validates a curve against
+    // ffmpeg's ranges; going through it means a saved preset can never be
+    // something the filter factory would later reject.
+    const created = defineEqualizerPreset(
+      `${SAVED_PRESET_PREFIX}${label}`,
+      label,
+      stateRef.current.gainsDb
+    )
+    setState((previous) => ({
+      ...previous,
+      savedPresets: Object.freeze([
+        ...previous.savedPresets.filter((saved) => saved.id !== created.id),
+        created,
+      ]),
+    }))
+    return created
+  }, [])
+
+  const deletePreset = useCallback((id: string) => {
+    if (!id.startsWith(SAVED_PRESET_PREFIX)) {
+      throw invalid(
+        `deletePreset: '${id}' is a built-in preset; only curves saved with \`savePreset\` can be deleted.`
+      )
+    }
+    setState((previous) => {
+      const savedPresets = previous.savedPresets.filter(
+        (saved) => saved.id !== id
+      )
+      return savedPresets.length === previous.savedPresets.length
+        ? previous
+        : { ...previous, savedPresets: Object.freeze(savedPresets) }
+    })
+  }, [])
+
+  return useMemo<Equalizer>(
+    () => ({
+      enabled: state.enabled,
+      bands,
+      gainsDb: state.gainsDb,
+      gainRangeDb,
+      preset,
+      presets,
+      savedPresets: state.savedPresets,
+      error,
+      hydrated,
+      setEnabled,
+      setBandGain,
+      setBandGains,
+      applyPreset,
+      reset,
+      savePreset,
+      deletePreset,
+    }),
+    [
+      state.enabled,
+      state.gainsDb,
+      state.savedPresets,
+      bands,
+      gainRangeDb,
+      preset,
+      presets,
+      error,
+      hydrated,
+      setEnabled,
+      setBandGain,
+      setBandGains,
+      applyPreset,
+      reset,
+      savePreset,
+      deletePreset,
+    ]
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  helpers                                   */
+/* -------------------------------------------------------------------------- */
+
+function invalid(message: string): PlayerErrorException {
+  return new PlayerErrorException({
+    code: 'invalid-state',
+    message,
+    retryable: false,
+  })
+}
+
+/** A built-in id, a saved id, or the preset object itself. */
+function resolvePreset(
+  candidate: string | EqualizerPreset,
+  saved: readonly EqualizerPreset[]
+): EqualizerPreset {
+  if (typeof candidate !== 'string') return candidate
+  const builtIn = (
+    EQUALIZER_PRESETS as Record<string, EqualizerPreset | undefined>
+  )[candidate]
+  const found = builtIn ?? saved.find((preset) => preset.id === candidate)
+  if (found === undefined) {
+    throw invalid(
+      `'${candidate}' is not a known preset. Pass a built-in id (see EQUALIZER_PRESETS), a saved preset's id, or the preset object.`
+    )
+  }
+  return found
+}
+
+function clamp(value: number, range: EqualizerGainRange): number {
+  return Math.min(range.max, Math.max(range.min, value))
+}
+
+/**
+ * Validate the shape once and clamp every entry.
+ *
+ * Length and finiteness throw — those are programming errors that would reach
+ * an ffmpeg filter — while an out-of-range value clamps, because that is a
+ * slider at its stop, not a bug.
+ */
+function clampGains(
+  gainsDb: readonly number[],
+  range: EqualizerGainRange
+): readonly number[] {
+  if (!Array.isArray(gainsDb) || gainsDb.length !== EQUALIZER_BAND_COUNT) {
+    throw invalid(
+      `gainsDb must have exactly ${String(EQUALIZER_BAND_COUNT)} entries (one per band in EQUALIZER_BANDS), got ${Array.isArray(gainsDb) ? String(gainsDb.length) : typeof gainsDb}.`
+    )
+  }
+  return Object.freeze(
+    gainsDb.map((gain, index) => {
+      if (typeof gain !== 'number' || !Number.isFinite(gain)) {
+        throw invalid(
+          `gainsDb[${String(index)}] must be a finite number, got ${String(gain)}.`
+        )
+      }
+      return clamp(gain, range)
+    })
+  )
+}
+
+function sameGains(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((value, index) => value === b[index])
+}
+
+function reportStorageError(
+  onStorageError: ((cause: unknown) => void) | undefined,
+  cause: unknown
+): void {
+  if (onStorageError !== undefined) {
+    onStorageError(cause)
+    return
+  }
+  console.warn(
+    '[@rn-media/player] useEqualizer: the storage adapter failed. Pass `onStorageError` to handle it.',
+    cause
+  )
+}
