@@ -21,12 +21,37 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { CastButton } from '@rn-media/cast'
+import { CastButton, useCastState, useIsCasting } from '@rn-media/cast'
 import type { CastIntegration } from '../playback/cast'
 import type { CastSelfTestResult } from '../playback/cast-selftest'
 import type { Track } from '../data/tracks'
 import { COLORS, SPACE, TYPE } from '../theme'
 import { Chip, ChipRow, Detail, Dot, Section, Strip } from './ui'
+
+/**
+ * The framework's own connection state, straight from the library's hooks —
+ * **with no controller involved**, which is the whole point of showing it.
+ *
+ * It is deliberately a *second* fact next to the status line above, not a
+ * duplicate of it: `cast.phase` is our §3 handoff machine ("is the receiver
+ * playing our queue yet?"), while `useCastState()` is the platform's session
+ * state ("is there a session at all?"). They legitimately disagree for the
+ * length of a handoff — connected, and still playing on the phone — and having
+ * both on screen is how that window becomes observable on the test bed.
+ *
+ * This is also the entire integration cost of the two hooks: two calls, no
+ * subscription to wire, no state to keep, nothing to tear down. An app without
+ * a controller layer builds its cast UI on exactly this.
+ */
+function FrameworkState(): React.JSX.Element {
+  const state = useCastState()
+  const casting = useIsCasting()
+  return (
+    <Detail>
+      useCastState() = {state} · useIsCasting() = {casting ? 'true' : 'false'}
+    </Detail>
+  )
+}
 
 /** Phase → status-line copy + dot colour. The §3 machine, rendered. */
 function phaseLine(cast: CastIntegration): { text: string; color: string } {
@@ -105,6 +130,7 @@ export const CastSection = React.memo(function CastSection({
             the GCK dialog on iOS. The chips below are the same feature done
             headlessly, for apps that want their own picker.
           </Detail>
+          <FrameworkState />
         </View>
       </View>
 
