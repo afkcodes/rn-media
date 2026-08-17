@@ -8,6 +8,7 @@
  */
 import { restorePersisted, type MediaSessionStorage } from '@rn-media/media-session'
 import type { PersistedSession } from '@rn-media/media-session'
+import type { EqualizerStorage } from '@rn-media/player'
 import { createMMKV } from 'react-native-mmkv'
 import { TRACKS } from '../data/tracks'
 import { formatTime } from '../components/SeekBar'
@@ -29,6 +30,23 @@ export const sessionStorage: MediaSessionStorage = {
   getItem: (key) => mmkv.getString(key) ?? null,
   setItem: (key, value) => mmkv.set(key, value),
 }
+
+/**
+ * The same engine again, handed to `useEqualizer` so the user's curve and their
+ * saved presets survive a restart.
+ *
+ * Deliberately the *same object*, not a second one: `@rn-media/player`'s
+ * `EqualizerStorage` and `@rn-media/media-session`'s `MediaSessionStorage` are
+ * structurally identical two-method interfaces, which is exactly what lets one
+ * app-chosen engine serve both libraries. Neither package depends on it, and
+ * neither knows the other is using it — swap in AsyncStorage here and both
+ * follow.
+ *
+ * Being synchronous pays a second time here: `useEqualizer` reads a sync engine
+ * through *synchronously*, so the first `af` write on launch is already the
+ * restored curve rather than flat followed by the real one a tick later.
+ */
+export const equalizerStorage: EqualizerStorage = sessionStorage
 
 /** Everything this launch recovered, in the shape the controller needs it. */
 export interface RestoreOutcome {
