@@ -136,12 +136,20 @@ jobs:
       # `SCHEMA_VERSION` equal to `persistence.ts`'s. Plus `cast`'s framework-
       # constant mappings (`CastMappingTest`). No device, no emulator, no CMake
       # — these tasks do not touch the NDK.
+      #
+      # `testDebugUnitTest`, not `testReleaseUnitTest`: AGP 9 (which RN 0.87
+      # brings in — 9.2.1) only creates unit-test tasks for `testBuildType`,
+      # which defaults to `debug`, so `testReleaseUnitTest` no longer exists and
+      # naming it fails the build outright ("task not found in project"). No
+      # coverage is lost — these are pure-JVM tests over parsers and constant
+      # maps, unit tests never see R8, and the release variant only ever
+      # differed by shrinking.
       - name: Run Kotlin unit tests (media-session, cast)
         working-directory: apps/example/android
         run: >-
           ./gradlew
-          :rn-media_media-session:testReleaseUnitTest
-          :rn-media_cast:testReleaseUnitTest
+          :rn-media_media-session:testDebugUnitTest
+          :rn-media_cast:testDebugUnitTest
           -PreactNativeArchitectures=arm64-v8a
           --no-daemon --build-cache
 

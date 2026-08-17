@@ -1630,7 +1630,7 @@ choreography (discovery starts on first tap, never earlier).
 - **Nitro Views, not classic Fabric codegen.** `react-native-nitro-modules`
   0.36.5 ships `HybridView`/`getHostComponent` and nitrogen generates the
   ShadowNode, ViewManager and `.mm` component; the floor is RN 0.78 + new
-  arch (we are on 0.86.2, new-arch-only) and the cast module's CMakeLists
+  arch (we are on 0.87.0, new-arch-only) and the cast module's CMakeLists
   already carried the required `-DRN_SERIALIZABLE_STATE=1`. Choosing Fabric
   codegen instead would have meant a second, parallel codegen story inside
   one package for no capability gained.
@@ -1829,6 +1829,65 @@ fires with no session, and one that fires with no `pause` capability advertised.
 In both the app is told the timer fired at that same instant, and the state
 discrepancy follows from its own capability list — a second, redundant error
 would be noise, not honesty.
+
+### 29. React Native 0.87: the bump is an AGP 9 bump wearing an RN badge
+
+RN 0.87.0 (2026-08-11) was evaluated and taken on 2026-08-17, inside the
+currency rule's two-week window. The JavaScript half of the release is almost
+free for us; the Android toolchain half is the whole job.
+
+**AGP 8.12.0 → 9.2.1 is the actual change.** `@react-native/gradle-plugin`'s
+`gradle/libs.versions.toml` is the source of truth for it, and 0.87 is the first
+RN release that builds on AGP 9. It drags Gradle 9.3.1 → 9.4.1, Kotlin
+2.1.20 → 2.2.0, and compileSdk/buildTools 36 → 37, and it needs two opt-outs in
+`gradle.properties` (`android.builtInKotlin=false`, `android.newDsl=false`)
+without which AGP 9's own Kotlin plugin collides with the
+`org.jetbrains.kotlin.android` plugin our library modules already apply. AGP 10
+removes those opt-outs, so the new DSL migration is a scheduled debt, not a
+choice. JDK 17 remains the floor, so CI's `setup-java` is untouched.
+
+**AGP 9 deletes `testReleaseUnitTest`.** Unit-test tasks are now created only
+for `testBuildType` (default `debug`), so the CI step that named the release
+task failed with "task not found in project" — a *hard* failure, which is the
+good outcome; the dangerous version of this change would have been a silently
+skipped suite. Renamed to `testDebugUnitTest`, with no coverage lost: these are
+pure-JVM tests over parsers and constant maps, and unit tests never saw R8.
+`lintRelease` is unaffected and still runs.
+
+**Two source-level breaks, both from the Strict TypeScript API becoming the
+default.** `StatusBar`'s `backgroundColor` prop is gone (it was already a no-op
+under the edge-to-edge that Android 15+ forces at targetSdk 35+), and
+`AppState.currentState` is now honestly typed `null | undefined | string`
+rather than narrowed to `AppStateStatus` — the Flow source always said `?string`,
+so the old hand-maintained types were the lie. `useVisualizer`'s `isForeground`
+widened to match. We were otherwise clean because we already had no deep imports
+into `react-native/Libraries/*` and every iOS header import was already
+`<React/…>`-namespaced — which is what made 0.87's new headers XCFramework a
+non-event here.
+
+**The template's `edgeToEdgeEnabled=true` was deliberately not taken.** The flag
+is still read by the Gradle plugin in 0.87; flipping it is a layout change to
+the demo UI, not a 0.87 requirement, and it does not belong in a dependency bump.
+
+**The trap worth remembering is npm, not Gradle.** `npm install` alone produced
+a workspace with *two* React Natives: `@expo/cli` declares
+`peerOptional react-native@"*"`, the stale lockfile kept that satisfied with the
+old 0.86.2 copy at the root, and the example app got 0.87.0 nested under itself.
+`apps/example/android/settings.gradle` includes the **root**
+`node_modules/@react-native/gradle-plugin`, so the build would have compiled the
+entire app with the 0.86.2 plugin (AGP 8.12.0) while every `package.json` in the
+repo claimed 0.87.0 — green, and wrong. Regenerating the lockfile collapses it
+back to a single hoisted 0.87.0. A React Native bump in this monorepo is not
+done until `node_modules/react-native` and `apps/example/node_modules` agree,
+because the Gradle build reads the hoisted copy and the Podfile resolves from
+the app.
+
+Expo is the one consumer that stays behind on purpose: SDK 57 targets RN 0.86,
+so `expo-root-project`'s catalog still hands a prebuild app compileSdk 36 /
+Kotlin 2.1.20 (§16). That is fine and needs no shim — our modules read the
+*root* project's ext, the per-package `gradle.properties` values are only the
+standalone fallback, and media3 1.11's `minCompileSdk=36` is the real floor a
+consumer must clear. compileSdk 37 is what we build against, not what we demand.
 
 ## Platform truths we build around (learned, verified)
 

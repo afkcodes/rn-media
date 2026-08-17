@@ -133,7 +133,13 @@ function App(): React.JSX.Element {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
+      {/*
+        No `backgroundColor`: React Native 0.87 removed the prop (it was a
+        no-op under the edge-to-edge display that Android 15+ enforces for
+        targetSdk 35+). The status bar takes the window background instead,
+        which `styles.screen` already paints with the same COLORS.background.
+      */}
+      <StatusBar barStyle="light-content" />
       <ScrollView
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}

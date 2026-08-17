@@ -10,7 +10,7 @@
 #
 #   2. Template-pinned dependencies are NOT dependencies. A whole class of
 #      packages here is version-locked to the React Native release we target
-#      (currently 0.86.0) or to the Nitro version nitrogen generated our C++
+#      (currently 0.87.0) or to the Nitro version nitrogen generated our C++
 #      against — see ARCHITECTURE §2 (Nitro pure-C++ HybridObject; New
 #      Architecture only; peer floor react-native >= 0.82). Bumping one of them
 #      in isolation does not fail at install time; it fails at transform time,
@@ -77,10 +77,11 @@ updates:
       # app can tolerate; a library that compiles against a newer AGP than the
       # app breaks the app, not us. Raised during RN upgrades.
       - dependency-name: 'com.android.tools.build:gradle'
-      # Kotlin 2.1.20 is what RN 0.86's version catalog hands an Expo prebuild
-      # app (ARCHITECTURE §16) and what media3 1.11 expects. Kotlin's ABI is
-      # not forgiving across minors when nitrogen-generated Kotlin is in the
-      # same compilation.
+      # Kotlin is chosen by the RN release: we build at 2.2.0 (RN 0.87's
+      # template + gradle-plugin catalog), while an Expo prebuild app on SDK 57
+      # is still handed 2.1.20 by RN 0.86's catalog (ARCHITECTURE §16, §28) —
+      # both satisfy media3 1.11. Kotlin's ABI is not forgiving across minors
+      # when nitrogen-generated Kotlin is in the same compilation.
       - dependency-name: 'org.jetbrains.kotlin:*'
 
   # ── Bundler (CocoaPods toolchain for the example app) ───────────────────
@@ -102,7 +103,7 @@ updates:
           - 'patch'
     ignore:
       # These two upper bounds are copied verbatim from
-      # @react-native-community/template@0.86.0's Gemfile. They are RN's
+      # @react-native-community/template@0.87.0's Gemfile. They are RN's
       # deliberate exclusions of versions that break CocoaPods, not stale pins
       # of ours. Relaxing them re-admits exactly what RN excluded — and iOS
       # only compiles on CI here (the dev machine is Linux), so we would be
@@ -141,7 +142,7 @@ updates:
           - 'minor'
           - 'patch'
     ignore:
-      # --- React, pinned by the RN 0.86 template ---------------------------
+      # --- React, pinned by the RN 0.87 template ---------------------------
       # react and react-dom must be byte-identical to each other, and the
       # version is chosen by the RN release, not by us. react-dom is only here
       # for @testing-library/react — the one DOM test environment we have — so
@@ -179,7 +180,7 @@ updates:
 
       # --- Babel majors -----------------------------------------------------
       # 7.x minor/patch is welcome (it flows through the grouped PR above).
-      # Babel 8 is not: @react-native/babel-preset@0.86.0 depends on
+      # Babel 8 is not: @react-native/babel-preset@0.87.0 depends on
       # "@babel/core": "^7.25.2" and Metro's transformer chain sits on the
       # same major, so a Babel 8 install means two majors in one graph and a
       # bundler that fails at transform time. Lifts when RN's preset lifts.
