@@ -45,6 +45,8 @@ import {
   type Player,
 } from '@rn-media/player'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
+import type { ColumnRect } from './fader-geometry'
+import { bandAtX, gainAtY } from './fader-geometry'
 import { equalizerStorage } from '../playback/persistence'
 import { Chip, ChipRow, Detail, Section } from './ui'
 
@@ -89,14 +91,27 @@ export function EqualizerSection({
     },
   })
 
-  // What mpv says the chain is. Read *after* the hook's own apply effect —
-  // effects run in declaration order and `useEqualizer` is called above this
-  // one — so this is the post-write truth, not a mirror of what was tapped.
+  // What mpv says the chain is — `player.getAudioFilters()`, its own property,
+  // not a mirror of what was tapped.
+  //
+  // Read on a settle rather than on every change, for two reasons. It is a
+  // synchronous native call and a drag produces one per frame; and while a
+  // finger is down the hook is deliberately *not* writing that property (it
+  // pushes the gains into the running filters instead), so reading it mid-drag
+  // would only show the pre-drag string. Waiting out the hook's own commit
+  // delay is what makes this line show what mpv finally settled on.
   const [applied, setApplied] = React.useState('')
   React.useEffect(() => {
-    setApplied(
-      player === undefined || !eq.hydrated ? '' : player.getAudioFilters()
-    )
+    if (player === undefined || !eq.hydrated) {
+      setApplied('')
+      return undefined
+    }
+    const timer = setTimeout(() => {
+      if (!player.destroyed) setApplied(player.getAudioFilters())
+    }, 350)
+    return () => {
+      clearTimeout(timer)
+    }
   }, [player, eq])
 
   const ready = player !== undefined
@@ -173,10 +188,13 @@ export function EqualizerSection({
 
       <Detail selectable>af = {applied === '' ? '(none)' : applied}</Detail>
       <Detail>
-        Drag across the bars to shape the curve. The pre-amp that keeps the
-        loudest band at unity is computed from the summed response — octave
-        bells overlap and add — so nothing here can clip. Saved curves and the
-        live setting persist through the app's own storage engine.
+Touch a bar and drag up or down: the band you touched is the band that
+        moves, for the whole stroke. Dragging is live — the gains go into the
+        running filters, so the audio must not glitch, and the `af` line above
+        only catches up once you let go. The pre-amp that keeps the loudest band
+        at unity is computed from the summed response — octave bells overlap and
+        add — so nothing here can clip. Saved curves and the live setting
+        persist through the app's own storage engine.
       </Detail>
       {eq.error === undefined ? null : (
         <Text style={styles.error}>
@@ -187,6 +205,9 @@ export function EqualizerSection({
   )
 }
 
+/** Track height in px. The gain mapping is over exactly this — see below. */
+const TRACK_HEIGHT = 96
+
 /**
  * Ten vertical faders under one gesture.
  *
@@ -195,10 +216,28 @@ export function EqualizerSection({
  * `PanResponder` — the same idiom `SeekBar` uses, including the two flags that
  * stop the enclosing `ScrollView` stealing a sloppy drag mid-gesture.
  *
- * One responder for all ten bands, not ten: the x coordinate picks the band and
- * the y coordinate picks the gain, so dragging *across* the bank draws a whole
- * curve in one stroke. That is both the cheapest thing to implement and the
- * fastest thing to use.
+ * Three things here are deliberate, and the first version of this file got two
+ * of them wrong badly enough that the owner reported the faders as broken:
+ *
+ * 1. **The band is chosen on touch-down and then held for the stroke.** A fader
+ *    you can set is worth more than a curve you can sketch: with the band
+ *    locked, a vertical drag adjusts exactly the bar you put your finger on,
+ *    and a bit of horizontal drift cannot silently start moving its neighbour.
+ * 2. **Everything inside the touchable row is `pointerEvents="none"`.** RN's
+ *    `locationX/locationY` are relative to the *touch target*, which is the
+ *    deepest hit-testable view under the finger — a track, or a fill — not the
+ *    view holding the responder. Reading `pageX - locationX` without this gives
+ *    the origin of whichever bar was touched, so every touch resolved to band 0
+ *    and the whole bank looked dead. Making the children transparent to touches
+ *    leaves the row as the only target, which is what makes the coordinates
+ *    mean what they say.
+ * 3. **The responder view is the track row alone**, so `TRACK_HEIGHT` is the
+ *    full height of the gain mapping. The old bank measured the whole section
+ *    (tracks *plus* the two label rows) and mapped ±12 dB over that, so the
+ *    bottom of a visible bar was about −7 dB and no fader ever reached its
+ *    stop.
+ *
+ * The arithmetic itself is in `fader-geometry.ts`, under test.
  */
 function BandBank({
   equalizer,
@@ -207,7 +246,9 @@ function BandBank({
   equalizer: Equalizer
   disabled: boolean
 }): React.JSX.Element {
-  const geometry = React.useRef({ width: 0, height: 0, originX: 0, originY: 0 })
+  const geometry = React.useRef({ height: TRACK_HEIGHT, originY: 0 })
+  const columns = React.useRef<ColumnRect[]>([])
+  const activeBand = React.useRef(0)
 
   // The responder is built once and outlives every render, so the live hook
   // object is reached through a ref rather than captured.
@@ -215,7 +256,6 @@ function BandBank({
   React.useEffect(() => {
     latest.current = equalizer
   })
-
   const responder = React.useMemo(
     () =>
       PanResponder.create({
@@ -223,79 +263,97 @@ function BandBank({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         // Without these two the vertical component of a drag hands the gesture
-        // to the enclosing scroller and the curve stops following the finger.
+        // to the enclosing scroller and the fader stops following the finger.
         onPanResponderTerminationRequest: () => false,
         onShouldBlockNativeResponder: () => true,
         onPanResponderGrant: (event) => {
-          const { pageX, pageY, locationX, locationY } = event.nativeEvent
-          geometry.current.originX = pageX - locationX
+          const { pageY, locationX, locationY } = event.nativeEvent
+          // Only correct because the row's children take no touches: see (2).
           geometry.current.originY = pageY - locationY
-          adjust(pageX, pageY)
+          activeBand.current = bandAtX(columns.current, locationX)
+          adjust(pageY)
         },
         onPanResponderMove: (event) => {
-          adjust(event.nativeEvent.pageX, event.nativeEvent.pageY)
+          adjust(event.nativeEvent.pageY)
         },
       }),
     []
   )
 
-  function adjust(pageX: number, pageY: number): void {
+  function adjust(pageY: number): void {
     const eq = latest.current
-    const { width, height, originX, originY } = geometry.current
-    if (width <= 0 || height <= 0) return
-    const column = Math.floor(((pageX - originX) / width) * eq.bands.length)
-    const index = Math.min(eq.bands.length - 1, Math.max(0, column))
-    const fraction = Math.min(1, Math.max(0, (pageY - originY) / height))
-    const { min, max } = eq.gainRangeDb
-    // Top of the bank is maximum boost, bottom is maximum cut. The hook clamps
-    // anyway; rounding to 0.1 dB just keeps the read-back line legible.
-    eq.setBandGain(index, Number((max - fraction * (max - min)).toFixed(1)))
+    const { height, originY } = geometry.current
+    eq.setBandGain(
+      activeBand.current,
+      gainAtY(pageY - originY, height, eq.gainRangeDb)
+    )
   }
 
-  function onLayout(event: LayoutChangeEvent): void {
-    geometry.current.width = event.nativeEvent.layout.width
+  function onRowLayout(event: LayoutChangeEvent): void {
     geometry.current.height = event.nativeEvent.layout.height
+  }
+
+  function onColumnLayout(index: number, event: LayoutChangeEvent): void {
+    const { x, width } = event.nativeEvent.layout
+    columns.current[index] = { x, width }
   }
 
   const { min, max } = equalizer.gainRangeDb
   const zero = (0 - min) / (max - min)
 
   return (
-    <View
-      accessibilityRole="adjustable"
-      accessibilityLabel="Equaliser bands"
-      accessibilityState={{ disabled }}
-      style={[styles.bank, disabled && styles.dim]}
-      onLayout={onLayout}
-      {...(disabled ? {} : responder.panHandlers)}
-    >
-      {equalizer.bands.map((band) => {
-        // 0 dB sits on the zero rule; the fill grows up for a boost and down
-        // for a cut, which is what makes a curve readable at a glance.
-        const fraction = (band.gainDb - min) / (max - min)
-        return (
-          <View key={band.frequency} style={styles.column}>
-            <View style={styles.track}>
-              <View style={[styles.zeroRule, { bottom: percent(zero) }]} />
-              <View
-                style={[
-                  styles.fill,
-                  {
-                    bottom: percent(Math.min(fraction, zero)),
-                    height: percent(Math.abs(fraction - zero)),
-                  },
-                  band.gainDb < 0 && styles.fillCut,
-                ]}
-              />
+    <View style={disabled ? styles.dim : undefined}>
+      <View
+        accessibilityRole="adjustable"
+        accessibilityLabel="Equaliser bands"
+        accessibilityState={{ disabled }}
+        style={styles.bank}
+        onLayout={onRowLayout}
+        {...(disabled ? {} : responder.panHandlers)}
+      >
+        {equalizer.bands.map((band, index) => {
+          // 0 dB sits on the zero rule; the fill grows up for a boost and down
+          // for a cut, which is what makes a curve readable at a glance.
+          const fraction = (band.gainDb - min) / (max - min)
+          return (
+            <View
+              key={band.frequency}
+              style={styles.column}
+              pointerEvents="none"
+              onLayout={(event) => {
+                onColumnLayout(index, event)
+              }}
+            >
+              <View style={styles.track}>
+                <View style={[styles.zeroRule, { bottom: percent(zero) }]} />
+                <View
+                  style={[
+                    styles.fill,
+                    {
+                      bottom: percent(Math.min(fraction, zero)),
+                      height: percent(Math.abs(fraction - zero)),
+                    },
+                    band.gainDb < 0 && styles.fillCut,
+                  ]}
+                />
+              </View>
             </View>
+          )
+        })}
+      </View>
+
+      {/* Outside the responder, so the gain mapping is over the tracks only. */}
+      <View style={styles.legend}>
+        {equalizer.bands.map((band) => (
+          <View key={band.frequency} style={styles.column}>
             <Text style={styles.bandLabel}>{formatBand(band.frequency)}</Text>
             <Text style={styles.bandGain}>
               {band.gainDb > 0 ? '+' : ''}
               {band.gainDb.toFixed(1)}
             </Text>
           </View>
-        )
-      })}
+        ))}
+      </View>
     </View>
   )
 }
@@ -319,10 +377,18 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: SPACE.xs,
   },
+  // The labels live in their own row so the touchable one is exactly the
+  // tracks — the gain mapping's height is that row's, and nothing else.
+  legend: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: SPACE.xs,
+    marginTop: 2,
+  },
   column: { flex: 1, alignItems: 'center', gap: 2 },
   track: {
     alignSelf: 'stretch',
-    height: 96,
+    height: TRACK_HEIGHT,
     borderRadius: RADIUS.sm,
     backgroundColor: COLORS.surface,
     overflow: 'hidden',

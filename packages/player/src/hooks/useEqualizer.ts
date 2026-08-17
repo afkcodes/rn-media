@@ -20,7 +20,7 @@ import {
   serializeEqualizerSettings,
 } from '../equalizer-storage'
 import type { AudioFilter } from '../filters'
-import { compileAudioFilters } from '../filters'
+import { compileAudioFilters, diffAudioFilterParams } from '../filters'
 import type { Player } from '../player'
 
 /**
@@ -107,8 +107,12 @@ export interface UseEqualizerOptions {
    * How the EQ curve is compiled — pre-amp on top of the automatic headroom,
    * the opt-out limiter, and the bell width. See
    * {@link EqualizerPresetChainOptions}.
+   *
+   * `editable` is not yours to set here: this hook always compiles an editable
+   * chain, because that is what lets a slider move a band without rebuilding
+   * the filter graph (see the remarks on {@link useEqualizer}).
    */
-  readonly chain?: EqualizerPresetChainOptions
+  readonly chain?: Omit<EqualizerPresetChainOptions, 'editable'>
   /**
    * Slider bounds. Every gain that goes in through this hook is **clamped** to
    * them. Defaults to {@link DEFAULT_EQUALIZER_GAIN_RANGE_DB}.
@@ -286,6 +290,23 @@ interface EqualizerState {
 const SAVED_PRESET_PREFIX = 'custom:'
 
 /**
+ * How long after the last in-place gain change the chain is committed to mpv's
+ * `af` property, in milliseconds.
+ *
+ * The one timer in this hook, and it buys correctness rather than smoothness.
+ * `af-command` changes a *running* filter; mpv's `af` string still says what
+ * the filter was built with, and anything that rebuilds the chain from that
+ * string — the next track, an audio-device switch, a loudness-normalization
+ * toggle — would put the old gains back. So once the finger stops, the chain is
+ * written once and the property becomes true again.
+ *
+ * 250 ms is comfortably longer than the gap between two frames of a drag (so a
+ * gesture commits once, not per frame) and short enough that no realistic track
+ * change lands inside the window.
+ */
+const COMMIT_DELAY_MS = 250
+
+/**
  * A ten-band equaliser as one hook: the curve, the presets, the persistence,
  * and the one `af` write that puts it on the signal.
  *
@@ -332,17 +353,37 @@ const SAVED_PRESET_PREFIX = 'custom:'
  * consequence of not keeping app state in the library; hoist it if you want
  * one.
  *
- * **What is written, and when.** One `setAudioFilters` per *effective* change —
- * the chain is recompiled and pushed only when the compiled result would
- * differ, so a slider that re-renders on the same value writes nothing. The
- * write is synchronous and cheap (mpv rebuilds the filter graph in place; it
- * does not reload the file, reset the position or drop the audio device), but
- * it is not free: {@link equalizerPresetChain} evaluates the summed magnitude
- * response to compute the headroom pre-amp. For a continuous drag, prefer your
- * slider's commit callback (`onSlidingComplete`) over its per-frame one.
+ * **What is written, and when — drag it, it is built for that.** Nothing is
+ * written unless the compiled chain would actually differ, and *how* it is
+ * written depends on what changed:
  *
- * **No timers.** Nothing here ticks; every update is caused by a call you made
- * or by the persisted record arriving.
+ * - **Only gains changed** (the slider case): each moved band is pushed into
+ *   the running filter with `Player.setAudioFilterParam` — mpv's `af-command`,
+ *   which updates the biquad's coefficients and leaves its state alone. No
+ *   chain rebuild, no blocked JS thread (the command is async), no click. The
+ *   curve is compiled `editable` precisely so this path is available: ten
+ *   labelled bands whose *shape* never depends on their values.
+ * - **The graph changed** (EQ toggled, `extraFilters` or `chain` options
+ *   changed, or the curve left/returned to flat): one `setAudioFilters`, which
+ *   rebuilds the entries that differ. That is the expensive path, and it is now
+ *   reached once per gesture at most.
+ * - **{@link COMMIT_DELAY_MS} after the last in-place change**: one
+ *   `setAudioFilters` that makes mpv's `af` property agree with the running
+ *   chain again, so the curve survives the next track, device switch or
+ *   normalization toggle. Until it lands, `player.getAudioFilters()` still
+ *   shows the pre-drag string — that read-back is mpv's property, and the whole
+ *   point of the fast path is not to write it.
+ *
+ * An `af-command` that mpv refuses (nothing playing, an older engine, a filter
+ * that will not take the parameter at runtime) switches this hook to
+ * commit-only for the rest of the player's life: the curve then lands once the
+ * gesture settles rather than following the finger. That is the honest
+ * degradation — the alternative, rewriting the chain per frame, is what makes
+ * playback stutter, and it is never the right answer.
+ *
+ * **One timer, and only for the commit above.** Nothing else here ticks; every
+ * update is caused by a call you made or by the persisted record arriving. The
+ * pending commit is flushed on unmount.
  *
  * **Unmounting does not clear the chain.** `af` is a global mpv option that
  * survives track changes, and an EQ screen closing is not a reason to stop
@@ -499,41 +540,184 @@ export function useEqualizer(
    */
   const chain = useMemo<readonly AudioFilter[]>(() => {
     const eq = state.enabled
-      ? equalizerPresetChain({ gainsDb: state.gainsDb }, options.chain ?? {})
+      ? equalizerPresetChain(
+          { gainsDb: state.gainsDb },
+          // `editable` is what makes a drag possible: every entry is labelled
+          // and the shape stops depending on the gains, so moving a band is an
+          // `af-command` rather than a chain rebuild. See the effect below.
+          { ...(options.chain ?? {}), editable: true }
+        )
       : []
     return Object.freeze([...eq, ...(options.extraFilters ?? [])])
   }, [state.enabled, state.gainsDb, options.chain, options.extraFilters])
 
-  // What was last successfully handed to which player, as mpv's own `af`
-  // grammar. Comparing the compiled string — rather than the array identity —
-  // is what makes an equivalent chain rebuilt by an unrelated re-render free.
+  /**
+   * What the player is actually producing: the chain, and its compiled `af`
+   * grammar. Comparing the compiled string — rather than the array identity —
+   * is what makes an equivalent chain rebuilt by an unrelated re-render free.
+   *
+   * Not the same as "what mpv's `af` property says": in-place gain changes
+   * deliberately leave the property behind until {@link COMMIT_DELAY_MS} later.
+   * {@link committedRef} is that second fact.
+   */
   const appliedRef = useRef<
-    { readonly player: Player; readonly compiled: string } | undefined
+    | {
+        readonly player: Player
+        readonly chain: readonly AudioFilter[]
+        readonly compiled: string
+      }
+    | undefined
   >(undefined)
+  /** The last chain actually written to the `af` property, for that player. */
+  const committedRef = useRef<string | undefined>(undefined)
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  )
+  /** In-flight `af-command`s — see the write path for why they are counted. */
+  const inFlightRef = useRef(0)
+  /** A chain was written while commands were in flight; write it again. */
+  const staleRef = useRef(false)
+  /** Whether `af-command` works on this player. One failure answers it. */
+  const inPlaceRef = useRef(true)
+
+  /** Write the whole chain. The rebuild path — correct, and never smooth. */
+  const write = useCallback(
+    (target: Player, next: readonly AudioFilter[], compiled: string): void => {
+      if (commitTimerRef.current !== undefined) {
+        clearTimeout(commitTimerRef.current)
+        commitTimerRef.current = undefined
+      }
+      try {
+        target.setAudioFilters(next)
+        appliedRef.current = { player: target, chain: next, compiled }
+        committedRef.current = compiled
+        // A command issued before this write may still be in mpv's queue, and
+        // libmpv gives no ordering guarantee between an async command and a
+        // property write that takes the core lock. Rather than reason about
+        // it, note it and write again once the queue has drained.
+        if (inFlightRef.current > 0) staleRef.current = true
+        // Identity-stable when already clear, so a healthy re-apply is free.
+        setError((previous) => (previous === undefined ? previous : undefined))
+      } catch (thrown) {
+        // Not recorded as applied: mpv kept the previous chain, so the next
+        // change must be pushed even if it compiles to the same string.
+        appliedRef.current = undefined
+        committedRef.current = undefined
+        setError(toPlayerError(thrown))
+      }
+    },
+    []
+  )
+
+  /** Write the applied chain to `af` if the property has fallen behind it. */
+  const commit = useCallback(
+    (target: Player): void => {
+      const applied = appliedRef.current
+      if (
+        target.destroyed ||
+        applied === undefined ||
+        applied.player !== target ||
+        applied.compiled === committedRef.current
+      ) {
+        return
+      }
+      write(target, applied.chain, applied.compiled)
+    },
+    [write]
+  )
+
+  /** Arm (or re-arm) the write that makes mpv's `af` property true again. */
+  const scheduleCommit = useCallback(
+    (target: Player): void => {
+      if (commitTimerRef.current !== undefined) {
+        clearTimeout(commitTimerRef.current)
+      }
+      commitTimerRef.current = setTimeout(() => {
+        commitTimerRef.current = undefined
+        commit(target)
+      }, COMMIT_DELAY_MS)
+    },
+    [commit]
+  )
 
   useEffect(() => {
     if (player === undefined || player.destroyed || !hydrated) return
     const compiled = compileAudioFilters(chain)
     const applied = appliedRef.current
-    if (
-      applied !== undefined &&
-      applied.player === player &&
-      applied.compiled === compiled
-    ) {
+    const same = applied !== undefined && applied.player === player
+    if (same && applied.compiled === compiled) return
+    // A different player is a different engine: ask it again.
+    if (!same) inPlaceRef.current = true
+
+    // The fast path: same graph, different numbers. Push them into the running
+    // filters instead of rebuilding the chain around them.
+    const changes = same
+      ? diffAudioFilterParams(applied.chain, chain)
+      : undefined
+    if (changes === undefined || changes.length === 0) {
+      write(player, chain, compiled)
       return
     }
-    try {
-      player.setAudioFilters(chain)
-      appliedRef.current = { player, compiled }
-      // Identity-stable when already clear, so a healthy re-apply is free.
-      setError((previous) => (previous === undefined ? previous : undefined))
-    } catch (thrown) {
-      // Not recorded as applied: mpv kept the previous chain, so the next
-      // change must be pushed even if it compiles to the same string.
-      appliedRef.current = undefined
-      setError(toPlayerError(thrown))
+
+    appliedRef.current = { player, chain, compiled }
+    // An engine that cannot take the commands is not a reason to go back to
+    // rewriting the chain per frame — that is the thing that ruins playback.
+    // It is a reason to stop pretending the change is live and let the commit
+    // land it once the gesture settles.
+    if (!inPlaceRef.current) {
+      scheduleCommit(player)
+      return
     }
-  }, [player, hydrated, chain])
+
+    inFlightRef.current += 1
+    void (async () => {
+      let failed = false
+      try {
+        for (const change of changes) {
+          await player.setAudioFilterParam(
+            change.filter,
+            change.param,
+            change.value
+          )
+        }
+      } catch {
+        failed = true
+      }
+      // Decremented before either branch below, so that a rewrite issued from
+      // here is not mistaken for one racing an in-flight command.
+      inFlightRef.current -= 1
+      const current = appliedRef.current
+      if (player.destroyed || current?.player !== player) return
+      if (failed) {
+        // Not swallowed, and not retried: every failure mode is a property of
+        // this player (no audio chain, an engine whose filters take nothing at
+        // runtime), not of this one change. Stop using the fast path and let
+        // the commit below carry the curve, which is correct — just not live.
+        inPlaceRef.current = false
+        scheduleCommit(player)
+      } else if (inFlightRef.current === 0 && staleRef.current) {
+        staleRef.current = false
+        write(player, current.chain, current.compiled)
+      }
+    })()
+
+    scheduleCommit(player)
+  }, [player, hydrated, chain, write, commit, scheduleCommit])
+
+  // Unmount is the last chance to make mpv's `af` property true again: an EQ
+  // screen closed mid-drag must not leave the chain one rebuild away from
+  // reverting. Mount-lifetime, not per-change — the effect above owns the
+  // ordinary path.
+  useEffect(() => {
+    return () => {
+      if (commitTimerRef.current !== undefined) {
+        clearTimeout(commitTimerRef.current)
+        commitTimerRef.current = undefined
+      }
+      const applied = appliedRef.current
+      if (applied !== undefined) commit(applied.player)
+    }
+  }, [commit])
 
   /* ----------------------------- projections ----------------------------- */
 

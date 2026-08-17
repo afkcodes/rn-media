@@ -10,7 +10,11 @@ import { toPlayerEvents } from './events'
 import type { CommonMetadata } from './common-metadata'
 import { toCommonMetadata } from './common-metadata'
 import type { AudioFilter } from './filters'
-import { AudioFilters, compileAudioFilters } from './filters'
+import {
+  AudioFilters,
+  compileAudioFilters,
+  isAudioFilterName,
+} from './filters'
 import type { HttpHeaders } from './headers'
 import { HTTP_HEADER_FIELDS_OPTION, compileHttpHeaderFields } from './headers'
 import { createMpvClient } from './native-client'
@@ -3222,9 +3226,20 @@ export class Player {
    * `PlayerOptions.onLog`). That is the honest signal, and it is also the
    * supported way to probe support: try the chain, catch, fall back.
    *
-   * Applying filters mid-playback rebuilds mpv's filter chain in place; it does
-   * not reload the file, reset the position, or drop the audio device. The
-   * chain also survives track changes — `af` is a global option, not a
+   * **This is a chain rebuild, not a parameter poke — do not call it from a
+   * slider.** Applying filters mid-playback does not reload the file, reset the
+   * position or drop the audio device, but mpv does rebuild the graph: entries
+   * whose arguments are byte-identical are kept and every entry that differs is
+   * destroyed and recreated, losing whatever it had buffered
+   * (mpv 0.41.0 `filters/f_output_chain.c:535-593`), and if that shortens the
+   * chain's measured delay by 0.2 s or more mpv issues an exact refresh seek to
+   * resynchronise (`player/audio.c:107-125`). One write is a settings change
+   * and inaudible; sixty writes a second is a stutter. To move a number on a
+   * *running* filter — an EQ band under a finger — use
+   * {@link setAudioFilterParam}. The write is also synchronous: it blocks the
+   * calling thread until mpv's core has applied it.
+   *
+   * The chain survives track changes — `af` is a global option, not a
    * per-entry one.
    *
    * **Coexists with {@link setLoudnessNormalization}, by construction.** This
@@ -3280,6 +3295,145 @@ export class Player {
    */
   clearAudioFilters(): void {
     this.setAudioFilters([])
+  }
+
+  /**
+   * Change one sub-option of a **running** filter, without rebuilding the
+   * chain (mpv's `af-command`).
+   *
+   * This is the call a slider makes. {@link setAudioFilters} replaces the `af`
+   * property, and mpv answers that by destroying and recreating every entry
+   * whose arguments changed — correct for a settings change, ruinous sixty
+   * times a second. `af-command` instead reaches into the live filter and
+   * updates it: for an EQ band that means new biquad coefficients with the
+   * filter's own state left intact, so a gain sweeps rather than clicks.
+   *
+   * @param filter - The entry to command. Both halves of its address are
+   * needed, which is why this takes the filter rather than a label: the
+   * {@link AudioFilter.label} finds the *mpv* entry, and
+   * {@link AudioFilter.name} finds the libavfilter filter inside it (see the
+   * remarks — passing mpv's `all` default instead reports failure on a command
+   * that worked). Build a chain that carries labels with
+   * `equalizerPresetChain(preset, { editable: true })`, or set
+   * {@link AudioFilter.label} yourself.
+   * @param param - The sub-option to change, spelled as the filter's
+   * `AVOption` table spells it (`g` or `gain` on `equalizer`).
+   * @param value - The new value. A number is stringified; strings are passed
+   * through, which is how `volume` takes `'-6dB'`.
+   * @throws {@link PlayerErrorException} with code `invalid-state` for an entry
+   * with no label, a label or parameter mpv could not parse, or the reserved
+   * {@link LOUDNESS_NORMALIZATION_LABEL}; with code `mpv` when the command
+   * itself fails.
+   *
+   * @remarks
+   * **Why the filter name is sent as mpv's `<target>`.** `af-command` takes
+   * `<label> <command> <argument> [<target>]`, and `<target>` — which selects
+   * filters *inside* the entry's libavfilter graph — defaults to `all`
+   * (mpv 0.41.0 `player/command.c:7523-7531`). `all` is the wrong default here
+   * and, worse, a silently wrong one: mpv wraps every `af` entry in its own
+   * graph with an `abuffer` source and an `abuffersink` sink around the real
+   * filter, and `avfilter_graph_send_command` overwrites its result on *every*
+   * matching filter and returns the last one
+   * (FFmpeg n8.1.2 `libavfilter/avfiltergraph.c:1470-1481`). The sink answers
+   * `ENOSYS` (`libavfilter/avfilter.c:610-629`), so the gain lands on the
+   * running filter and mpv still reports the command as failed. Naming the
+   * filter narrows the loop to the one that implements the command, so success
+   * means success.
+   *
+   * **When it really fails.** mpv's `af-command` returns failure — a rejected
+   * Promise with `code: 'mpv'` — when there is no audio chain to command
+   * (nothing loaded, or playback stopped: `player/command.c:6716-6730`), when
+   * no entry carries that label (`filters/f_output_chain.c:445-465`), or when
+   * libavfilter refuses the parameter. That last one is the honest signal that
+   * a filter does not support runtime changes: `ff_filter_process_command`
+   * looks the option up with `AV_OPT_FLAG_RUNTIME_PARAM` and returns `ENOSYS`
+   * without it (FFmpeg n8.1.2 `libavfilter/avfilter.c:905-916`). See
+   * {@link AUDIO_FILTER_RUNTIME_PARAMS} for the ones this library ships
+   * bindings for and the citations behind them.
+   *
+   * **Treat a failure as "fall back to a chain write", not as fatal** — that
+   * is what `useEqualizer` does. Every failure mode above is one a full
+   * {@link setAudioFilters} handles correctly, only less smoothly.
+   *
+   * **The `af` property is deliberately not rewritten.** That is the whole
+   * point — rewriting it is the rebuild being avoided — but it has two
+   * consequences worth knowing. {@link getAudioFilters}, which reads mpv's
+   * property, keeps showing the value the entry was *created* with. And if
+   * anything later rebuilds the chain from that property (a new file, an audio
+   * device change, the next `setAudioFilters`), the running value is lost. This
+   * library's own bookkeeping does not have that problem: a successful call
+   * updates the user half it remembers, so a later
+   * {@link setLoudnessNormalization} or {@link setAudioFilters} composes from
+   * the new value rather than reverting it. For everything else, write the
+   * chain once the gesture is over — the pattern `useEqualizer` implements.
+   *
+   * The command is asynchronous (`mpv_command_async`), so unlike
+   * {@link setAudioFilters} it never blocks the JS thread.
+   *
+   * @example
+   * ```ts
+   * // While the finger is down: 6 dB on the 1 kHz band of an editable chain.
+   * const chain = equalizerPresetChain(curve, { editable: true })
+   * await player.setAudioFilterParam(chain[6], 'g', 6)
+   * ```
+   */
+  async setAudioFilterParam(
+    filter: AudioFilter,
+    param: string,
+    value: string | number
+  ): Promise<void> {
+    this.#assertAlive('setAudioFilterParam')
+    const label = filter.label
+    if (label === undefined || label === '') {
+      throw invalidArgument(
+        `setAudioFilterParam: the '${filter.name}' entry has no label, and mpv's af-command addresses entries by label. ` +
+          'Give it an `AudioFilter.label`, or compile the chain with `equalizerPresetChain(preset, { editable: true })`.'
+      )
+    }
+    if (label === LOUDNESS_NORMALIZATION_LABEL) {
+      throw invalidArgument(
+        `The filter label '${LOUDNESS_NORMALIZATION_LABEL}' is reserved for \`setLoudnessNormalization\`; ` +
+          'change the managed loudness-normalization entry through that method, which keeps its bookkeeping honest.'
+      )
+    }
+    if (!isAudioFilterName(label)) {
+      throw invalidArgument(
+        `setAudioFilterParam: label must be one of mpv's filter-label characters ([a-zA-Z0-9_-]), got ${JSON.stringify(label)}.`
+      )
+    }
+    if (!isAudioFilterName(param)) {
+      throw invalidArgument(
+        `setAudioFilterParam: param must be one of libavfilter's option-name characters ([a-zA-Z0-9_-]), got ${JSON.stringify(param)}.`
+      )
+    }
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw invalidArgument(
+        `setAudioFilterParam: value must be finite, got ${String(value)}.`
+      )
+    }
+    if (!isAudioFilterName(filter.name)) {
+      throw invalidArgument(
+        `setAudioFilterParam: name must be one of mpv's filter-name characters ([a-zA-Z0-9_-]), got ${JSON.stringify(filter.name)}.`
+      )
+    }
+    const text = typeof value === 'number' ? String(value) : value
+    // `af-command <label> <command> <argument> [<target>]` — mpv 0.41.0
+    // DOCS/man/input.rst ("Same as vf-command, but for audio filters"). The
+    // fourth argument is not optional in practice; see the remarks above for
+    // why mpv's `all` default turns a successful command into a failed one.
+    await this.command(['af-command', label, param, text, filter.name])
+    // Only after mpv accepted it: the remembered user half must never claim a
+    // value the running chain does not have.
+    this.#userAudioFilters = this.#userAudioFilters.map((filter) =>
+      filter.label === label
+        ? {
+            ...filter,
+            options: filter.options.map(([key, existing]) =>
+              key === param ? ([key, text] as const) : ([key, existing] as const)
+            ),
+          }
+        : filter
+    )
   }
 
   /**

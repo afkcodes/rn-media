@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { PlayerErrorException } from '../errors'
 import type { AudioFilter } from '../filters'
 import {
+  AUDIO_FILTER_RUNTIME_PARAMS,
   AudioFilters,
   GRAPHIC_EQUALIZER_BANDS,
   assertValidAudioFilters,
   compileAudioFilters,
+  diffAudioFilterParams,
   escapeAfParam,
 } from '../filters'
 import { Player } from '../player'
@@ -578,5 +580,227 @@ describe('Player audio filters', () => {
     expectPlayerError(() => player.setAudioFilters([]), 'disposed')
     expectPlayerError(() => player.clearAudioFilters(), 'disposed')
     expectPlayerError(() => player.getAudioFilters(), 'disposed')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// In-place parameter changes
+// ---------------------------------------------------------------------------
+
+/** Two labelled band entries, the shape an editable EQ chain has. */
+function band(frequency: number, gain: number): AudioFilter {
+  return {
+    ...AudioFilters.equalizer({ frequency, widthType: 'o', width: 1, gain }),
+    label: `rnmedia_eq_${String(frequency)}`,
+  }
+}
+
+describe('AUDIO_FILTER_RUNTIME_PARAMS', () => {
+  it('lists exactly the options this library can push into a running filter', () => {
+    // Both read off FFmpeg n8.1.2: af_biquads.c:1522-1533 (FLAGS carries
+    // AV_OPT_FLAG_RUNTIME_PARAM) and af_volume.c:66-68 (A|F|T).
+    expect(AUDIO_FILTER_RUNTIME_PARAMS['equalizer']).toEqual([
+      'f',
+      't',
+      'w',
+      'g',
+    ])
+    expect(AUDIO_FILTER_RUNTIME_PARAMS['volume']).toEqual(['volume'])
+    // Nothing else claims runtime support, however tempting: alimiter has no
+    // process_command at all, so a chain that changes it must be rewritten.
+    expect(AUDIO_FILTER_RUNTIME_PARAMS['alimiter']).toBeUndefined()
+  })
+})
+
+describe('diffAudioFilterParams', () => {
+  it('finds nothing to do for an identical chain', () => {
+    const chain = [band(31, 3), band(62, -2)]
+    expect(diffAudioFilterParams(chain, chain)).toEqual([])
+  })
+
+  it('turns a gain change into one af-command per moved band', () => {
+    expect(
+      diffAudioFilterParams(
+        [band(31, 3), band(62, -2)],
+        [band(31, 6), band(62, -2)]
+      )
+    ).toEqual([{ filter: band(31, 6), param: 'g', value: '6' }])
+  })
+
+  it('handles the pre-amp, whose value is an expression string', () => {
+    const preamp = (gainDb: number): AudioFilter => ({
+      ...AudioFilters.volume({ gainDb }),
+      label: 'rnmedia_eq_preamp',
+    })
+    expect(diffAudioFilterParams([preamp(-3)], [preamp(-4.5)])).toEqual([
+      { filter: preamp(-4.5), param: 'volume', value: '-4.5dB' },
+    ])
+  })
+
+  it('refuses when the chain grew or shrank — that is a new graph', () => {
+    expect(
+      diffAudioFilterParams([band(31, 3)], [band(31, 3), band(62, 1)])
+    ).toBeUndefined()
+    expect(diffAudioFilterParams([band(31, 3)], [])).toBeUndefined()
+  })
+
+  it('refuses when an entry is a different filter, or in a different place', () => {
+    expect(
+      diffAudioFilterParams([band(31, 3)], [AudioFilters.limiter()])
+    ).toBeUndefined()
+    expect(
+      diffAudioFilterParams(
+        [band(31, 3), band(62, 1)],
+        [band(62, 1), band(31, 3)]
+      )
+    ).toBeUndefined()
+  })
+
+  it('refuses when the changed entry carries no label — mpv could not address it', () => {
+    const unlabelled = (gain: number): AudioFilter =>
+      AudioFilters.equalizer({ frequency: 31, widthType: 'o', width: 1, gain })
+    expect(
+      diffAudioFilterParams([unlabelled(3)], [unlabelled(6)])
+    ).toBeUndefined()
+  })
+
+  it('refuses a value libavfilter would not take at runtime', () => {
+    // alimiter implements no process_command: changing it is a rebuild.
+    const limiter = (release: number): AudioFilter => ({
+      ...AudioFilters.limiter({ release }),
+      label: 'rnmedia_eq_limiter',
+    })
+    expect(diffAudioFilterParams([limiter(50)], [limiter(80)])).toBeUndefined()
+  })
+
+  it('refuses when a label was added, removed or renamed', () => {
+    const labelled = { ...band(31, 3), label: 'other' }
+    expect(diffAudioFilterParams([band(31, 3)], [labelled])).toBeUndefined()
+  })
+
+  it('refuses when an entry was disabled with mpv’s `!` marker', () => {
+    expect(
+      diffAudioFilterParams([band(31, 3)], [{ ...band(31, 3), enabled: false }])
+    ).toBeUndefined()
+  })
+})
+
+describe('Player.setAudioFilterParam', () => {
+  let client: FakeMpvClient
+
+  const createPlayer = async (): Promise<Player> =>
+    Player.create({ createClient: () => client })
+
+  beforeEach(() => {
+    client = new FakeMpvClient()
+  })
+
+  it('issues mpv’s af-command and does not touch the `af` property', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([band(31, 3)])
+    const written = client.written.get(MpvProperty.audioFilters)
+
+    await player.setAudioFilterParam(band(31, 6), 'g', 6)
+
+    // The fourth argument is mpv's `<target>`. It is not optional in practice:
+    // mpv's `all` default also reaches the graph's abuffersink, whose ENOSYS
+    // becomes the command's result, so a command that worked reports failure.
+    expect(client.commands.at(-1)).toEqual([
+      'af-command',
+      'rnmedia_eq_31',
+      'g',
+      '6',
+      'equalizer',
+    ])
+    // The whole point: the property still says what the filter was built with.
+    expect(client.written.get(MpvProperty.audioFilters)).toBe(written)
+  })
+
+  it('passes a string value through, which is how `volume` takes dB', async () => {
+    const player = await createPlayer()
+    await player.setAudioFilterParam(
+      { ...AudioFilters.volume({ gainDb: -6 }), label: 'rnmedia_eq_preamp' },
+      'volume',
+      '-6dB'
+    )
+    expect(client.commands.at(-1)).toEqual([
+      'af-command',
+      'rnmedia_eq_preamp',
+      'volume',
+      '-6dB',
+      'volume',
+    ])
+  })
+
+  it('keeps the remembered user half in step, so nothing later reverts it', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([band(31, 3), band(62, -2)])
+    await player.setAudioFilterParam(band(31, 6), 'g', 6)
+
+    // Toggling normalization recomposes the whole property from the user half.
+    // Without the mirror update it would put `g=3` back on a running `g=6`.
+    player.setLoudnessNormalization(true)
+    expect(client.written.get(MpvProperty.audioFilters)).toContain(
+      '@rnmedia_eq_31:equalizer=f=31:t=o:w=1:g=6'
+    )
+  })
+
+  it('leaves the mirror alone when mpv rejected the command', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([band(31, 3)])
+    client.commandRejection = '[mpv:-11] af-command'
+
+    await expect(
+      player.setAudioFilterParam(band(31, 6), 'g', 6)
+    ).rejects.toBeInstanceOf(PlayerErrorException)
+
+    player.setLoudnessNormalization(true)
+    expect(client.written.get(MpvProperty.audioFilters)).toContain('g=3')
+  })
+
+  it('refuses the reserved loudness-normalization label', async () => {
+    const player = await createPlayer()
+    await expect(
+      player.setAudioFilterParam(
+        { ...AudioFilters.loudnorm(), label: 'rnmedia_loudnorm' },
+        'I',
+        -20
+      )
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    expect(client.commands).toHaveLength(0)
+  })
+
+  it('refuses an entry with no label — mpv could not address it', async () => {
+    const player = await createPlayer()
+    await expect(
+      player.setAudioFilterParam(
+        AudioFilters.equalizer({ frequency: 31, gain: 3 }),
+        'g',
+        6
+      )
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    expect(client.commands).toHaveLength(0)
+  })
+
+  it('validates the label, the parameter and the value before mpv sees them', async () => {
+    const player = await createPlayer()
+    await expect(
+      player.setAudioFilterParam({ ...band(31, 3), label: 'has space' }, 'g', 1)
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    await expect(
+      player.setAudioFilterParam(band(31, 3), 'g=6', 1)
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    await expect(
+      player.setAudioFilterParam(band(31, 3), 'g', Number.NaN)
+    ).rejects.toMatchObject({ playerError: { code: 'invalid-state' } })
+    expect(client.commands).toHaveLength(0)
+  })
+
+  it('refuses after destroy()', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    await expect(
+      player.setAudioFilterParam(band(31, 3), 'g', 1)
+    ).rejects.toMatchObject({ playerError: { code: 'disposed' } })
   })
 })

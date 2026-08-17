@@ -306,6 +306,44 @@ export function peakResponseDb(
   return peak
 }
 
+/**
+ * mpv filter label of the pre-amp entry of an **editable** chain
+ * ({@link EqualizerPresetChainOptions.editable}).
+ */
+export const EQUALIZER_PREAMP_LABEL = 'rnmedia_eq_preamp'
+
+/**
+ * mpv filter label of the tail limiter of an **editable** chain
+ * ({@link EqualizerPresetChainOptions.editable}).
+ */
+export const EQUALIZER_LIMITER_LABEL = 'rnmedia_eq_limiter'
+
+/**
+ * mpv filter label of one band of an **editable** chain
+ * ({@link EqualizerPresetChainOptions.editable}) — `rnmedia_eq_1000` for the
+ * 1 kHz band.
+ *
+ * The label is how `Player.setAudioFilterParam` addresses a single band while
+ * it runs. It is derived from the band's centre frequency rather than its
+ * index because that is what makes a `getAudioFilters()` read-back legible on
+ * a device; the band set is fixed and frozen, so the two are equivalent.
+ *
+ * @param index - Position in {@link EQUALIZER_BANDS}.
+ * @throws {@link PlayerErrorException} with code `invalid-state` when `index`
+ * is not a band.
+ */
+export function equalizerBandLabel(index: number): string {
+  const frequency = EQUALIZER_BANDS[index]
+  if (frequency === undefined) {
+    throw new PlayerErrorException({
+      code: 'invalid-state',
+      message: `equalizerBandLabel: index must be an integer in 0…${String(EQUALIZER_BAND_COUNT - 1)}, got ${String(index)}.`,
+      retryable: false,
+    })
+  }
+  return `rnmedia_eq_${String(frequency)}`
+}
+
 /** Options for {@link equalizerPresetChain}. */
 export interface EqualizerPresetChainOptions {
   /**
@@ -331,6 +369,34 @@ export interface EqualizerPresetChainOptions {
    * Narrower is more surgical and more audible as "EQ"; wider is smoother.
    */
   readonly bandwidthOctaves?: number
+  /**
+   * Compile a chain whose **gains can be changed while it plays**. Defaults to
+   * `false`. This is what a slider bank wants; `useEqualizer` turns it on.
+   *
+   * Rewriting `af` is how a chain is normally changed, and it is the wrong tool
+   * for a drag: mpv destroys and recreates every entry whose arguments differ
+   * (`filters/f_output_chain.c:554-561`), so dozens of writes a second means
+   * dozens of filter rebuilds a second. `Player.setAudioFilterParam` avoids
+   * that by pushing one number into the running filter — but it can only do so
+   * when the entry carries a **label**, and only when the rest of the chain has
+   * not moved.
+   *
+   * So this option changes two things, both in service of that:
+   *
+   * - **Every entry is labelled** — {@link EQUALIZER_PREAMP_LABEL},
+   *   {@link equalizerBandLabel} per band, {@link EQUALIZER_LIMITER_LABEL}.
+   * - **The shape stops depending on the gains.** All ten bands are emitted
+   *   even at 0 dB, and the pre-amp is emitted even at 0 dB, so moving a band
+   *   through zero does not add or remove an entry. (A band at 0 dB is an exact
+   *   identity biquad — `A = 1` makes the RBJ numerator and denominator equal —
+   *   so the ten always-present bands change nothing but the CPU bill, which is
+   *   ten biquads.)
+   *
+   * What does **not** change: a completely flat curve still compiles to an
+   * empty chain. An equaliser nobody has touched costs nothing either way, and
+   * the flat ↔ touched transition is the one rebuild a drag can still cause.
+   */
+  readonly editable?: boolean
 }
 
 /**
@@ -349,6 +415,10 @@ export interface EqualizerPresetChainOptions {
  *
  * A flat preset compiles to an empty chain: no filters, no cost, no pointless
  * trip through the filter graph.
+ *
+ * With {@link EqualizerPresetChainOptions.editable} the same three stages come
+ * out **labelled**, and with all ten bands present, so a slider can move one of
+ * them through `Player.setAudioFilterParam` without the chain being rebuilt.
  *
  * @param preset - A built-in from {@link EQUALIZER_PRESETS}, a custom one from
  * {@link defineEqualizerPreset}, or any `{ gainsDb }` you have to hand.
@@ -394,22 +464,34 @@ export function equalizerPresetChain(
   const headroomDb = -Math.max(0, peakResponseDb(gainsDb, bandwidthOctaves))
   const totalPreampDb = Number((headroomDb + preampDb).toFixed(1))
 
+  const editable = options.editable === true
   const chain: AudioFilter[] = []
-  if (totalPreampDb !== 0) {
-    chain.push(AudioFilters.volume({ gainDb: totalPreampDb }))
+  if (totalPreampDb !== 0 || editable) {
+    const volume = AudioFilters.volume({ gainDb: totalPreampDb })
+    chain.push(editable ? { ...volume, label: EQUALIZER_PREAMP_LABEL } : volume)
   }
-  for (const band of bands) {
+  // Editable chains emit every band, so that moving one through 0 dB is a
+  // different *value*, not a different chain. See `editable`.
+  const emitted = editable
+    ? gainsDb.map((gain, index) => ({
+        gain,
+        frequency: EQUALIZER_BANDS[index] as number,
+      }))
+    : bands
+  for (const [index, band] of emitted.entries()) {
+    const entry = AudioFilters.equalizer({
+      frequency: band.frequency,
+      widthType: 'o',
+      width: bandwidthOctaves,
+      gain: band.gain,
+    })
+    chain.push(editable ? { ...entry, label: equalizerBandLabel(index) } : entry)
+  }
+  if ((editable || bands.length > 0) && options.limiter !== false) {
+    const limiter = AudioFilters.limiter()
     chain.push(
-      AudioFilters.equalizer({
-        frequency: band.frequency,
-        widthType: 'o',
-        width: bandwidthOctaves,
-        gain: band.gain,
-      })
+      editable ? { ...limiter, label: EQUALIZER_LIMITER_LABEL } : limiter
     )
-  }
-  if (bands.length > 0 && options.limiter !== false) {
-    chain.push(AudioFilters.limiter())
   }
   return chain
 }

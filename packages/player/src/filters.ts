@@ -122,6 +122,18 @@ export function escapeAfParam(value: string): string {
 /** mpv parses a filter name with `bstrspn(pstr, NAMECH)` — same alphabet. */
 const FILTER_NAME = /^[a-zA-Z0-9_-]+$/
 
+/**
+ * Whether a string is spellable as a filter name, label or option key.
+ *
+ * Package-internal: the one place that owns mpv's `NAMECH` alphabet, so a
+ * caller that has to check a name before building a filter (`af-command`'s
+ * label and parameter) cannot drift from what {@link assertValidAudioFilters}
+ * enforces.
+ */
+export function isAudioFilterName(value: string): boolean {
+  return typeof value === 'string' && FILTER_NAME.test(value)
+}
+
 function invalid(message: string): never {
   throw new PlayerErrorException({
     code: 'invalid-state',
@@ -251,6 +263,135 @@ export function compileAudioFilters(filters: readonly AudioFilter[]): string {
       return `${label}${disabled}${filter.name}${options}`
     })
     .join(',')
+}
+
+// ---------------------------------------------------------------------------
+// Runtime (in-place) parameters
+// ---------------------------------------------------------------------------
+
+/**
+ * The sub-options that can be changed on a **running** filter, per filter name.
+ *
+ * Writing the `af` property replaces the chain: mpv keeps only the entries whose
+ * arguments are byte-identical (`filters/f_output_chain.c:554-561`,
+ * `m_obj_settings_equal`) and destroys and recreates every entry that changed,
+ * dropping whatever that entry had buffered. That is correct for a settings
+ * change and ruinous for a slider — see {@link Player.setAudioFilterParam},
+ * which sends mpv's `af-command` instead and mutates the live filter.
+ *
+ * An entry belongs in this table only when the underlying libavfilter filter
+ * both implements `process_command` **and** flags the option
+ * `AV_OPT_FLAG_RUNTIME_PARAM`; anything else is refused at runtime by
+ * `ff_filter_process_command` (`libavfilter/avfilter.c:905-916` — it looks the
+ * option up with that flag and returns `ENOSYS` when it is absent). Both entries
+ * below are read off FFmpeg n8.1.2, the tree our engine binaries are built from:
+ *
+ * - `equalizer` — `libavfilter/af_biquads.c:1522-1533`. `frequency`/`f`,
+ *   `width_type`/`t`, `width`/`w` and `gain`/`g` all carry `FLAGS`, which is
+ *   `…|AV_OPT_FLAG_RUNTIME_PARAM` (`:1444`), and the filter's `process_command`
+ *   (`:1410-1420`) recomputes the biquad coefficients with
+ *   `config_filter(outlink, 0)` — **`reset = 0`**, so the filter's two-sample
+ *   state survives (`:1028-1031` silences the state only when `reset` is set).
+ *   A gain change is therefore a coefficient update on a running filter, not a
+ *   restart.
+ * - `volume` — `libavfilter/af_volume.c:66-68` (`A|F|T`, `T` being
+ *   `AV_OPT_FLAG_RUNTIME_PARAM`, `:64`) and its own `process_command`
+ *   (`:307-321`), which re-parses the gain expression and, in the default
+ *   `eval=once` mode (`:74-75`), applies it immediately.
+ *
+ * Short option names are used because that is what {@link AudioFilters} emits;
+ * libavfilter accepts either spelling.
+ */
+export const AUDIO_FILTER_RUNTIME_PARAMS: Readonly<
+  Record<string, readonly string[]>
+> = Object.freeze({
+  equalizer: Object.freeze(['f', 't', 'w', 'g']),
+  volume: Object.freeze(['volume']),
+})
+
+/** One `af-command`: which labelled entry, which sub-option, its new value. */
+export interface AudioFilterParamChange {
+  /**
+   * The entry to command, as it should end up — the whole filter rather than
+   * just its label, because `af-command` needs both halves of its address:
+   * the label to find the mpv entry, and the filter name to find the
+   * libavfilter filter inside it (see {@link Player.setAudioFilterParam}).
+   */
+  readonly filter: AudioFilter
+  /** The sub-option key, as {@link AudioFilters} spells it (`g`, `volume`). */
+  readonly param: string
+  /** The new value, already in the filter's own grammar (`-4.5`, `-6dB`). */
+  readonly value: string
+}
+
+/**
+ * Work out whether one chain can be turned into another **in place**.
+ *
+ * The question a slider asks sixty times a second: *is this change a new filter
+ * graph, or the same graph with a different number in it?* Only the second can
+ * be applied with {@link Player.setAudioFilterParam}; the first needs the whole
+ * `af` property rewritten, which recreates the changed entries.
+ *
+ * Two chains are the same graph when they have the same entries, in the same
+ * order, with the same names, labels, enabled flags and sub-option keys — and
+ * every differing *value* sits on a labelled entry and is listed in
+ * {@link AUDIO_FILTER_RUNTIME_PARAMS} for that filter. A label is required
+ * because `af-command` addresses entries by label
+ * (`player/command.c:6716-6738` → `filters/f_output_chain.c:445-465`).
+ *
+ * @param from - The chain mpv is currently running.
+ * @param to - The chain wanted.
+ * @returns The commands that get from one to the other — `[]` when they are
+ * identical — or `undefined` when the chain has to be rewritten instead.
+ *
+ * @example
+ * ```ts
+ * const changes = diffAudioFilterParams(current, next)
+ * if (changes === undefined) {
+ *   player.setAudioFilters(next)
+ * } else {
+ *   for (const change of changes) {
+ *     await player.setAudioFilterParam(change.filter, change.param, change.value)
+ *   }
+ * }
+ * ```
+ */
+export function diffAudioFilterParams(
+  from: readonly AudioFilter[],
+  to: readonly AudioFilter[]
+): readonly AudioFilterParamChange[] | undefined {
+  if (from.length !== to.length) return undefined
+  const changes: AudioFilterParamChange[] = []
+  for (const [index, before] of from.entries()) {
+    const after = to[index] as AudioFilter
+    if (
+      before.name !== after.name ||
+      before.label !== after.label ||
+      (before.enabled === false) !== (after.enabled === false) ||
+      before.options.length !== after.options.length
+    ) {
+      return undefined
+    }
+    const runtime = AUDIO_FILTER_RUNTIME_PARAMS[after.name] ?? []
+    for (const [optionIndex, [key, value]] of before.options.entries()) {
+      const [nextKey, nextValue] = after.options[
+        optionIndex
+      ] as AudioFilterOption
+      if (key !== nextKey) return undefined
+      if (value === nextValue) continue
+      // A value can only be pushed into a running filter when mpv can address
+      // the entry (label) and libavfilter accepts the option at runtime.
+      if (
+        after.label === undefined ||
+        after.label === '' ||
+        !runtime.includes(key)
+      ) {
+        return undefined
+      }
+      changes.push({ filter: after, param: key, value: nextValue })
+    }
+  }
+  return changes
 }
 
 // ---------------------------------------------------------------------------

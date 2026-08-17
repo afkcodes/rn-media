@@ -79,9 +79,12 @@ export { escapeSubparam, utf8Length } from './subparam'
 export {
   EQUALIZER_BANDS,
   EQUALIZER_BAND_COUNT,
+  EQUALIZER_LIMITER_LABEL,
+  EQUALIZER_PREAMP_LABEL,
   EQUALIZER_PRESETS,
   EQUALIZER_PRESET_LIST,
   defineEqualizerPreset,
+  equalizerBandLabel,
   equalizerPresetChain,
   peakResponseDb,
 } from './equalizer-presets'
@@ -104,15 +107,18 @@ export type {
 } from './equalizer-storage'
 
 export {
+  AUDIO_FILTER_RUNTIME_PARAMS,
   AudioFilters,
   GRAPHIC_EQUALIZER_BANDS,
   assertValidAudioFilters,
   compileAudioFilters,
+  diffAudioFilterParams,
   escapeAfParam,
 } from './filters'
 export type {
   AudioFilter,
   AudioFilterOption,
+  AudioFilterParamChange,
   BiquadWidthType,
   CompressorOptions,
   CrossfeedOptions,
