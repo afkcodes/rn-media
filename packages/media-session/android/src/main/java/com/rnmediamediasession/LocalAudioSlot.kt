@@ -5,7 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
-import android.util.Log
+import com.margelo.nitro.rnmediamediasession.SessionErrorCode
 
 /**
  * A silent local audio output, held only while an app has opted in through
@@ -94,13 +94,17 @@ internal class LocalAudioSlot {
         .onFailure {
           // Never fatal: the remote session still works, it is only the
           // screen-off volume keys that stay exposed to the platform's
-          // heuristic. Say so once rather than throwing into a JS call.
-          Log.w(
-            RnMediaMediaSessionService.TAG,
+          // heuristic. Reported once rather than thrown into a JS call —
+          // `setRemotePlayback` is republished on every remote volume change,
+          // so an un-deduplicated report would arrive per notch.
+          SessionErrors.report(
+            SessionErrorCode.LOCALAUDIOSLOTUNAVAILABLE,
             "holdLocalAudioSlot: could not open the silent output; hardware " +
               "volume keys may stop reaching the remote device once a system " +
-              "sound plays (see RemotePlayback.holdLocalAudioSlot)",
-            it,
+              "sound plays (see RemotePlayback.holdLocalAudioSlot). " +
+              "(${it.javaClass.simpleName}: ${it.message})",
+            dedupeKey = "local-audio-slot",
+            cause = it,
           )
         }
         .getOrNull()

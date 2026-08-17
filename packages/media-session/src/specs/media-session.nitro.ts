@@ -192,6 +192,135 @@ export type MediaRepeatMode = 'off' | 'one' | 'all'
 export type RemoteVolumeControl = 'absolute' | 'relative' | 'fixed'
 
 /**
+ * Something the session could not do, on a channel the app can actually read.
+ *
+ * ## Why this exists
+ * Every member below used to be a `Log.e`/`Log.w`/`NSLog` and nothing else: the
+ * platform refused something, the session carried on in a degraded state, and
+ * the only way to find out was to have a cable attached at the moment it
+ * happened. That is CLAUDE.md principle 6's "no swallowed errors" applied to
+ * the half of this package that runs where no JavaScript call is waiting —
+ * a media3 service callback, an `MPRemoteCommandCenter` target, a download
+ * completion. There is no promise to reject, so the failure needs a channel of
+ * its own, and this is it (fan-in, like every other remote event:
+ * {@link MediaSessionHandlers.onSessionError}).
+ *
+ * ## What it is not
+ * Not the taxonomy for a *call* the app made — a bad argument, a double `init`
+ * — those still throw `MediaSessionError` synchronously, because there is a
+ * caller standing right there to catch it. This union is only for failures with
+ * no caller.
+ *
+ * ## Platforms
+ * Each member documents which platforms can emit it and when. Three are emitted
+ * by both; four are emitted by Android alone, and every one of those four
+ * belongs to a feature that is *already* Android-only for a documented platform
+ * reason (playback resumption, `holdLocalAudioSlot`, drawable-named icons) —
+ * they do not add an asymmetry, they report on one that exists. There is no
+ * member iOS alone can emit, and that is stated rather than papered over.
+ *
+ * NOTE: member names follow the enumerator rule on {@link MediaPlaybackStatus} —
+ * distinct case-insensitively, no Swift keywords.
+ */
+export type SessionErrorCode =
+  /**
+   * **The OS will not keep this app alive to play audio in the background.**
+   * Playback that is running keeps running for now; the process is no longer
+   * protected, and on Android there is no notification.
+   *
+   * - **Android**, at the moment playback starts: `startForegroundService`
+   *   threw (`ForegroundServiceStartNotAllowedException` on API 31+), or media3
+   *   reported the same refusal through `MediaSessionService.Listener`. Both
+   *   mean playback began while the app was in the background with no
+   *   exemption. Emitted per refused attempt — the next `playing` broadcast
+   *   tries again, because the app may by then be in the foreground.
+   * - **iOS**, once, at {@link RnMediaMediaSession.initialize}: the consuming
+   *   app's `Info.plist` does not list `audio` in `UIBackgroundModes`, so the
+   *   process is suspended the moment it leaves the foreground and the lock
+   *   screen goes with it. A library cannot merge `Info.plist` keys (see
+   *   `HybridRnMediaMediaSession`'s platform contract), so the omission was
+   *   previously invisible until someone locked the phone.
+   */
+  | 'backgroundPlaybackUnavailable'
+  /**
+   * **Android only**: a playback resumption started and did not finish, so the
+   * play the user pressed on the System UI card (or a Bluetooth reconnect, or a
+   * headset button) produced nothing. The message carries which half failed —
+   * the runtime never started, or it started and `MediaService.init(...)` never
+   * followed — because the two have different fixes.
+   *
+   * Delivery is best-effort by nature: an abandoned revival is, by definition, a
+   * moment when no session is initialized. When the process died there is no
+   * JavaScript to tell and only the log remains; when the runtime is alive but
+   * the session was torn down (`stopService()` then a resumption card), the
+   * reason is held and delivered to the **next** `initialize`, which is the
+   * first instant a handler exists. See `RnMediaMediaSessionService.abandonRevival`.
+   *
+   * No iOS twin, and not for lack of one being written: iOS cannot restart a
+   * terminated app for playback at all (see {@link IosMediaSessionConfig}).
+   */
+  | 'playbackResumptionFailed'
+  /**
+   * **Android only**: `android.playbackResumption` is on, but something it
+   * needs is missing, so the feature is inert — the System UI will never offer
+   * a resumption card, or there will be nothing for it to resume.
+   *
+   * Two sites: the app declares no `MediaButtonReceiver` in its manifest (media3
+   * reads that declaration as the app's promise that it can resume), or writing
+   * the native mirror failed, which is the only thing a JS-less service can
+   * read. Both used to be a `Log.w` on a path an app author never watches.
+   */
+  | 'playbackResumptionUnavailable'
+  /**
+   * The artwork an app named could not be turned into an image, so the surfaces
+   * show the track with no cover. Cosmetic, and reported per URI rather than
+   * per attempt.
+   *
+   * - **Android**: the media3 `BitmapLoader`'s future failed (unreachable host,
+   *   404, a `content://` the app cannot read, undecodable bytes).
+   * - **iOS**: `ArtworkCache` could not build a `UIImage` — an unparseable URI,
+   *   a transport error, a non-200 response, or data `UIImage(data:)` refused.
+   */
+  | 'artworkFailed'
+  /**
+   * `setMediaItem` describes an item that is not the current queue entry, so
+   * the merge documented on `MediaServiceApi.setMediaItem` did not happen: the
+   * queue entry wins and everything the item carried — usually the duration, and
+   * with it the scrubber — is dropped.
+   *
+   * Emitted by **both** platforms, from the same rule and with the same
+   * de-duplication (`BroadcastPlayer.warnOnce` / `HybridRnMediaMediaSession.warnOnce`):
+   * once per distinct mismatch, because it is sticky until the app fixes its
+   * broadcast.
+   */
+  | 'metadataMismatch'
+  /**
+   * **Android only**: a drawable *name* the app configured did not resolve in
+   * its own resources, so the platform drew a fallback icon instead — media3's
+   * generic small icon for `android.notificationIcon`, a generic overflow icon
+   * for a `MediaCustomAction.icon`.
+   *
+   * The purest silent no-op in this package: a typo in a string is answered by a
+   * different-looking notification and nothing else. Reported once per distinct
+   * name.
+   *
+   * iOS has neither surface — `MPNowPlayingInfoCenter` has no small icon and
+   * custom actions cannot exist there at all (see {@link MediaCustomAction}) —
+   * so there is nothing to resolve and nothing to report.
+   */
+  | 'iconNotFound'
+  /**
+   * **Android only**: `RemotePlayback.holdLocalAudioSlot` was requested and the
+   * silent output could not be opened, so the opt-in is doing nothing — with
+   * the screen off, a system sound can still take the hardware volume keys away
+   * from the remote device (b/275185436, see `LocalAudioSlot`).
+   *
+   * Everything else about the remote session is unaffected. iOS cannot take the
+   * hardware buttons over at all, so it has no such opt-in to fail.
+   */
+  | 'localAudioSlotUnavailable'
+
+/**
  * Which shape of sleep timer is armed. See
  * {@link RnMediaMediaSession.getSleepTimer}.
  */
@@ -1000,6 +1129,20 @@ export interface MediaSessionHandlers {
    * the runtime-ready signal fires — never double-initializes.
    */
   onRevivalRequested: () => void
+  /**
+   * The session could not do something, and no JS call was waiting to be told.
+   *
+   * The one *outbound* member of this struct that is not a user gesture. Both
+   * platforms call it; {@link SessionErrorCode} documents which codes each can
+   * produce and when. Fire-and-forget like the rest — native logs the same line
+   * it always logged and then hands it over, so an app that ignores the channel
+   * loses nothing it had before.
+   *
+   * @param code the closed taxonomy. The TS layer attaches the severity.
+   * @param message a complete sentence naming what failed and, where there is
+   * one, the fix. Never a bare exception `toString()`.
+   */
+  onSessionError: (code: SessionErrorCode, message: string) => void
 }
 
 /* -------------------------------------------------------------------------- */

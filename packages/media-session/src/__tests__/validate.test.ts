@@ -14,13 +14,19 @@ import {
   normalizeConfig,
   normalizePlaybackState,
   normalizeRemotePlayback,
+  SESSION_ERROR_SEVERITY,
   stepRemoteVolume,
+  toSessionError,
   validateAnchor,
   validateMediaItem,
   validateQueue,
   validateSleepTimerSeconds,
 } from '../validate'
-import type { PlaybackState, RemotePlayback } from '../types'
+import type {
+  PlaybackState,
+  RemotePlayback,
+  SessionErrorCode,
+} from '../types'
 import { playbackState } from './fakes'
 
 /** `unknown` in, so the tests can pass the garbage a plain-JS caller would. */
@@ -752,5 +758,59 @@ describe('stepRemoteVolume', () => {
   it('honours a coarser or finer step count', () => {
     expect(stepRemoteVolume(0, 4, 1)).toBeCloseTo(0.25, 10)
     expect(stepRemoteVolume(0, 100, 1)).toBeCloseTo(0.01, 10)
+  })
+})
+
+describe('session error severity', () => {
+  /**
+   * The whole union, written out by hand.
+   *
+   * A `Object.keys(SESSION_ERROR_SEVERITY)` assertion would be circular — it
+   * would prove the table equals itself. This list is the second opinion, and
+   * the `SessionErrorCode[]` annotation is what makes a member added to the
+   * spec and forgotten here (or here and not in the spec) a typecheck failure.
+   * The Kotlin twin of this check is `SessionErrorCodeSyncTest`, which reads the
+   * table out of `validate.ts` and compares it with the generated enum.
+   */
+  const ALL: SessionErrorCode[] = [
+    'backgroundPlaybackUnavailable',
+    'playbackResumptionFailed',
+    'playbackResumptionUnavailable',
+    'artworkFailed',
+    'metadataMismatch',
+    'iconNotFound',
+    'localAudioSlotUnavailable',
+  ]
+
+  it('grades every code, and grades nothing that is not a code', () => {
+    expect(Object.keys(SESSION_ERROR_SEVERITY).sort()).toEqual([...ALL].sort())
+  })
+
+  it('reserves fatal for the two failures that end background playback', () => {
+    const fatal = ALL.filter((code) => SESSION_ERROR_SEVERITY[code] === 'fatal')
+    expect(fatal).toEqual([
+      'backgroundPlaybackUnavailable',
+      'playbackResumptionFailed',
+    ])
+  })
+
+  it('carries the native message through untouched', () => {
+    const message = 'Refused to start the media foreground service: …'
+    expect(toSessionError('backgroundPlaybackUnavailable', message)).toEqual({
+      code: 'backgroundPlaybackUnavailable',
+      severity: 'fatal',
+      message,
+    })
+  })
+
+  it('still delivers a code this bundle has never heard of, as degraded', () => {
+    // An OTA'd bundle under an older/newer binary. The message is native's, so
+    // the app can still act on it; only the grading is a guess.
+    const error = toSessionError(
+      'somethingNewNative' as SessionErrorCode,
+      'from a newer native build'
+    )
+    expect(error.severity).toBe('degraded')
+    expect(error.message).toBe('from a newer native build')
   })
 })

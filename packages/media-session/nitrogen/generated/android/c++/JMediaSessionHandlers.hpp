@@ -12,11 +12,14 @@
 
 #include "JFunc_void.hpp"
 #include "JFunc_void_MediaRepeatMode.hpp"
+#include "JFunc_void_SessionErrorCode_std__string.hpp"
 #include "JFunc_void_bool.hpp"
 #include "JFunc_void_double.hpp"
 #include "JFunc_void_std__string_std__string.hpp"
 #include "JMediaRepeatMode.hpp"
+#include "JSessionErrorCode.hpp"
 #include "MediaRepeatMode.hpp"
+#include "SessionErrorCode.hpp"
 #include <NitroModules/JNICallable.hpp>
 #include <functional>
 #include <string>
@@ -78,6 +81,8 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<JFunc_void::javaobject> onPlaybackResumption = this->getFieldValue(fieldOnPlaybackResumption);
       static const auto fieldOnRevivalRequested = clazz->getField<JFunc_void::javaobject>("onRevivalRequested");
       jni::local_ref<JFunc_void::javaobject> onRevivalRequested = this->getFieldValue(fieldOnRevivalRequested);
+      static const auto fieldOnSessionError = clazz->getField<JFunc_void_SessionErrorCode_std__string::javaobject>("onSessionError");
+      jni::local_ref<JFunc_void_SessionErrorCode_std__string::javaobject> onSessionError = this->getFieldValue(fieldOnSessionError);
       return MediaSessionHandlers(
         [&]() -> std::function<void()> {
           if (play->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
@@ -249,6 +254,15 @@ namespace margelo::nitro::rnmediamediasession {
             auto onRevivalRequestedRef = jni::make_global(onRevivalRequested);
             return JNICallable<JFunc_void, void()>(std::move(onRevivalRequestedRef));
           }
+        }(),
+        [&]() -> std::function<void(SessionErrorCode /* code */, const std::string& /* message */)> {
+          if (onSessionError->isInstanceOf(JFunc_void_SessionErrorCode_std__string_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_SessionErrorCode_std__string_cxx::javaobject>(onSessionError);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto onSessionErrorRef = jni::make_global(onSessionError);
+            return JNICallable<JFunc_void_SessionErrorCode_std__string, void(SessionErrorCode, std::string)>(std::move(onSessionErrorRef));
+          }
         }()
       );
     }
@@ -259,7 +273,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JMediaSessionHandlers::javaobject> fromCpp(const MediaSessionHandlers& value) {
-      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_MediaRepeatMode::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>);
+      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_MediaRepeatMode::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_SessionErrorCode_std__string::javaobject>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -282,7 +296,8 @@ namespace margelo::nitro::rnmediamediasession {
         JFunc_void_std__string_std__string_cxx::fromCpp(value.customAction),
         JFunc_void_cxx::fromCpp(value.onSleepTimer),
         JFunc_void_cxx::fromCpp(value.onPlaybackResumption),
-        JFunc_void_cxx::fromCpp(value.onRevivalRequested)
+        JFunc_void_cxx::fromCpp(value.onRevivalRequested),
+        JFunc_void_SessionErrorCode_std__string_cxx::fromCpp(value.onSessionError)
       );
     }
   };

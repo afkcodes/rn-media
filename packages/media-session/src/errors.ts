@@ -1,3 +1,5 @@
+import type { SessionError } from './types'
+
 /**
  * Why a `media-session` call was rejected.
  *
@@ -24,4 +26,27 @@ export class MediaSessionError extends Error {
 
 export function invalidArgument(message: string): MediaSessionError {
   return new MediaSessionError('invalidArgument', message)
+}
+
+/**
+ * Where a {@link SessionError} goes when the app has nowhere for it.
+ *
+ * The floor under `MediaHandler.onSessionError`, and the reason that method can
+ * be optional without re-creating the swallowed-error bug it exists to fix: a
+ * handler that does not implement it, or a `CompositeMediaHandler` wrapping one
+ * that does not, still puts the failure somewhere a developer will see it.
+ *
+ * Deliberately **not** routed through `MediaServiceConfig.onHandlerError`: that
+ * channel means "your handler threw", its first parameter is typed
+ * `keyof MediaHandler`, and a session error is neither. Same reasoning as
+ * `android.onRevivalRequested`'s console fallback in `media-service.ts`.
+ *
+ * `console.error` for both severities. A `'degraded'` code is still a defect in
+ * the app's configuration or the network, and `console.warn` in React Native is
+ * a yellow box in dev and indistinguishable from noise in production.
+ */
+export function logSessionError(error: SessionError): void {
+  console.error(
+    `[media-session] ${error.severity} · ${error.code}: ${error.message}`
+  )
 }
