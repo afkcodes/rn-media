@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { BaseMediaHandler, CompositeMediaHandler } from '../handler'
 import type { MediaHandler } from '../types'
@@ -117,5 +117,54 @@ describe('repeat and shuffle on the handler bases (B2)', () => {
 
     expect(() => composite.onSetRepeatMode('off')).not.toThrow()
     expect(() => composite.onSetShuffle(true)).not.toThrow()
+  })
+})
+
+describe('session errors', () => {
+  const error = {
+    code: 'artworkFailed',
+    severity: 'degraded',
+    message: 'no bytes came back',
+  } as const
+
+  it('BaseMediaHandler logs rather than swallowing — the one non-no-op default', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      new BaseMediaHandler().onSessionError(error)
+
+      expect(consoleError).toHaveBeenCalledWith(
+        '[media-session] degraded · artworkFailed: no bytes came back'
+      )
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('CompositeMediaHandler forwards to an inner handler that implements it', () => {
+    const inner = new RecordingHandler()
+
+    new CompositeMediaHandler(inner).onSessionError(error)
+
+    expect(inner.sessionErrors).toEqual([error])
+  })
+
+  it('CompositeMediaHandler logs instead of dropping it on an inner that does not', () => {
+    // The trap this closes: the decorator *has* the method, so the service's own
+    // console floor steps back — and a plain `?.()` would then swallow the error
+    // on the way to an inner handler that never implemented the channel.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const inner = new BaseMediaHandler()
+      delete (inner as Partial<MediaHandler>).onSessionError
+
+      expect(() =>
+        new CompositeMediaHandler(inner).onSessionError(error)
+      ).not.toThrow()
+      expect(consoleError).toHaveBeenCalledWith(
+        '[media-session] degraded · artworkFailed: no bytes came back'
+      )
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })

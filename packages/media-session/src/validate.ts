@@ -11,12 +11,15 @@ import type {
   NativeRemotePlayback,
   PositionAnchor,
   RemoteVolumeControl,
+  SessionErrorCode,
 } from './specs/media-session.nitro'
 import type {
   MediaItem,
   MediaServiceConfig,
   PlaybackState,
   RemotePlayback,
+  SessionError,
+  SessionErrorSeverity,
 } from './types'
 
 /**
@@ -653,6 +656,57 @@ function validateNotificationColor(value: unknown): number {
     )
   }
   return value
+}
+
+/**
+ * The one place a {@link SessionErrorCode} is graded.
+ *
+ * In TypeScript rather than on the bridge, deliberately: severity is a property
+ * of the *code*, not of the occurrence, so shipping it across the bridge would
+ * be a second copy that a Kotlin edit could silently desynchronise from a Swift
+ * one — the exact defect ARCHITECTURE §27 is named after. Native says what
+ * happened; this table says how much it cost, once, for both platforms.
+ *
+ * `Record<SessionErrorCode, …>` and not `Partial<…>`: adding a member to the
+ * union without grading it is then a typecheck failure rather than a silent
+ * `undefined`.
+ */
+export const SESSION_ERROR_SEVERITY: Readonly<
+  Record<SessionErrorCode, SessionErrorSeverity>
+> = {
+  // The OS will not keep the app alive to play: the audio the user started is
+  // unprotected (and on Android has no notification). Nothing degrades back.
+  backgroundPlaybackUnavailable: 'fatal',
+  // The user pressed play on a resumption card and nothing happened.
+  playbackResumptionFailed: 'fatal',
+  // The feature is inert, but nothing the user asked for has failed yet.
+  playbackResumptionUnavailable: 'degraded',
+  artworkFailed: 'degraded',
+  metadataMismatch: 'degraded',
+  iconNotFound: 'degraded',
+  localAudioSlotUnavailable: 'degraded',
+}
+
+/**
+ * Build the {@link SessionError} the app sees from what the bridge delivered.
+ *
+ * The unknown-code arm is not theatre: the enum is generated for both sides from
+ * one spec, so a mismatch cannot happen within a build — but a JavaScript bundle
+ * can be swapped under a fixed binary (an OTA update), and a native code this
+ * bundle has never heard of must still reach the app. It is graded `'degraded'`
+ * rather than `'fatal'` because guessing loudly is worse than guessing quietly,
+ * and the message — which is written by the native side, not derived from the
+ * code — still says exactly what happened.
+ */
+export function toSessionError(
+  code: SessionErrorCode,
+  message: string
+): SessionError {
+  return {
+    code,
+    severity: SESSION_ERROR_SEVERITY[code] ?? 'degraded',
+    message,
+  }
 }
 
 export function normalizeConfig(

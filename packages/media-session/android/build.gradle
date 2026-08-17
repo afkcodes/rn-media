@@ -173,6 +173,18 @@ dependencies {
   // guaranteed `NoSuchMethodError`.
   api "androidx.media3:media3-session:${getExtOrDefault('media3Version')}"
 
+  // `DataSourceBitmapLoader`, for `ReportingBitmapLoader` — the decorator that
+  // makes a failed artwork load visible to JavaScript instead of producing a
+  // cover-less notification and nothing else.
+  //
+  // Not a new artifact in the app: `media3-session` already declares this at
+  // **runtime** scope (its POM, 1.11.0), so it ships either way — media3's own
+  // default bitmap loader is a `DataSourceBitmapLoader`. All this line does is
+  // move it onto the compile classpath so the class can be named. Same version
+  // property as `media3-session`, because two media3 versions in one app is a
+  // guaranteed `NoSuchMethodError`.
+  implementation "androidx.media3:media3-datasource:${getExtOrDefault('media3Version')}"
+
   // ---- local JVM unit tests only (see `testOptions` above) ----------------
   testImplementation "junit:junit:4.13.2"
   // A *real* `org.json`. The mockable `android.jar` ships stubs of these exact

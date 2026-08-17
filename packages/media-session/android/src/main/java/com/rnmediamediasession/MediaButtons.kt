@@ -12,8 +12,10 @@ import androidx.media3.session.SessionCommand
 import com.google.common.collect.ImmutableList
 import com.margelo.nitro.rnmediamediasession.MediaCapability
 import com.margelo.nitro.rnmediamediasession.MediaControl
+import com.margelo.nitro.rnmediamediasession.MediaCustomAction
 import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
 import com.margelo.nitro.rnmediamediasession.RemoteVolumeControl
+import com.margelo.nitro.rnmediamediasession.SessionErrorCode
 
 /**
  * Translation of the broadcast `capabilities` / `controls` / `customActions`
@@ -206,10 +208,7 @@ internal object MediaButtons {
           // up with an invisible or crashing notification action below API 33.
           // A real resource is therefore never optional here; a platform
           // drawable that is guaranteed to exist is the last resort.
-          .setCustomIconResId(
-            action.icon?.let { drawableResId(context, it) }?.takeIf { it != 0 }
-              ?: android.R.drawable.ic_menu_more
-          )
+          .setCustomIconResId(customActionIcon(context, action))
           // Custom actions never take a collapsed slot: those three are for
           // transport controls, and Android 13+ derives the collapsed row from
           // the session itself. Overflow is where the platform expects them.
@@ -219,6 +218,30 @@ internal object MediaButtons {
     }
 
     return buttons.build()
+  }
+
+  /**
+   * The icon for one custom action, and a report when the app named one that is
+   * not there.
+   *
+   * This runs on every `setMediaButtonPreferences`, i.e. on every broadcast, so
+   * the report is de-duplicated per name — a name that does not resolve does not
+   * start resolving, and the app needs to hear it once.
+   */
+  private fun customActionIcon(context: Context, action: MediaCustomAction): Int {
+    val name = action.icon
+    val resolved = name?.let { drawableResId(context, it) } ?: 0
+    if (resolved != 0) return resolved
+    if (name != null) {
+      SessionErrors.report(
+        SessionErrorCode.ICONNOTFOUND,
+        "The custom action \"${action.name}\" names the icon \"$name\", which does not " +
+          "resolve to a drawable or mipmap in this app's resources. A generic overflow " +
+          "icon is being drawn instead.",
+        dedupeKey = "icon:$name",
+      )
+    }
+    return android.R.drawable.ic_menu_more
   }
 
   /**

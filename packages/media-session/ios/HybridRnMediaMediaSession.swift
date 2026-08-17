@@ -76,6 +76,17 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
   /// Last value passed to ``warnOnce(_:)``; see it for why only one is kept.
   private var warnedMismatch: String?
 
+  /**
+   * The last artwork URI reported as unloadable. Main queue only.
+   *
+   * `publishNowPlayingInfo` re-requests the cover on every broadcast that names
+   * it, and a failure — unlike a success — is not cached, so without this a
+   * dead URL would produce one report per broadcast. The Android twin is
+   * `SessionErrorReporter`'s `dedupeKey`; one URI is enough here because a
+   * change of cover is what makes the previous failure old news.
+   */
+  private var reportedArtworkFailure: String?
+
   private var nowPlayingCenter: MPNowPlayingInfoCenter { .default() }
 
   /**
@@ -124,6 +135,8 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       // first `setPlaybackState` broadcast. Advertising commands the app has
       // not claimed would show dead buttons on the lock screen.
       self.binding?.apply([])
+      self.reportedArtworkFailure = nil
+      self.checkBackgroundAudioMode()
       promise.resolve(withResult: ())
     }
     return promise
@@ -260,10 +273,68 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       // start from a clean "nothing published yet".
       self.trackArtwork(nil)
       self.warnedMismatch = nil
+      self.reportedArtworkFailure = nil
       self.nowPlayingCenter.nowPlayingInfo = nil
       promise.resolve(withResult: ())
     }
     return promise
+  }
+
+  // MARK: - Session errors
+
+  /**
+   * Tell JavaScript about something that failed with **no call waiting to be
+   * rejected**. Main queue only.
+   *
+   * The iOS half of the channel `SessionErrors` is on Android, and it exists for
+   * the same reason: an artwork download that completes long after the
+   * broadcast that asked for it, and a metadata mismatch discovered while
+   * rendering, have no promise to fail. Both used to be an `NSLog` at best
+   * (CLAUDE.md principle 6, ARCHITECTURE §28).
+   *
+   * The log line goes out **before** the callback and regardless of whether
+   * there is one: with the handlers gone (after `stopService`, or before
+   * `initialize`) the console is still better than nothing, and it keeps the
+   * device-side evidence identical to what shipped before this channel existed.
+   *
+   * `%@` with the whole message as the single argument: it is built by
+   * interpolation and must never be read as a format string itself.
+   */
+  private func report(_ code: SessionErrorCode, _ message: String) {
+    NSLog("%@", "[media-session] \(message)")
+    handlers?.onSessionError(code, message)
+  }
+
+  /**
+   * Is this app allowed to keep running to play audio at all? Main queue only,
+   * once per ``initialize(config:handlers:)``.
+   *
+   * The honest iOS counterpart of Android's refused foreground service, and the
+   * one thing on this platform that decides whether background playback can work
+   * at all: without `audio` in the app's `UIBackgroundModes`, iOS suspends the
+   * process as soon as it leaves the foreground — the audio stops, the lock
+   * screen goes with it, and no amount of correct `MPNowPlayingInfoCenter` use
+   * changes that. A library cannot merge `Info.plist` keys the way an Android
+   * library merges a manifest (see this class's platform contract), so the app
+   * (or this package's Expo config plugin, `withBackgroundAudio`) has to do it —
+   * and until now getting it wrong was invisible from here.
+   *
+   * Read from the main bundle's Info.plist, which is the same dictionary the
+   * system reads; there is no API that asks the OS "am I permitted to run in the
+   * background for audio", and there is nothing to ask, because the key *is* the
+   * permission.
+   */
+  private func checkBackgroundAudioMode() {
+    let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String]
+    guard modes?.contains("audio") != true else { return }
+    report(
+      .backgroundplaybackunavailable,
+      "This app's Info.plist does not list \"audio\" in UIBackgroundModes, so iOS will "
+        + "suspend the process as soon as it leaves the foreground: playback stops and the "
+        + "lock screen controls go with it. Add UIBackgroundModes -> audio (the Expo plugin "
+        + "in this package does it for you), or ignore this if the app is deliberately "
+        + "foreground-only."
+    )
   }
 
   // MARK: - Sleep timer
@@ -391,11 +462,14 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
   private func warnOnce(_ mismatch: String?) {
     guard let mismatch, mismatch != warnedMismatch else { return }
     warnedMismatch = mismatch
-    // `%@` with the whole message as the single argument: the message is built
-    // by interpolation and must never be read as a format string itself.
-    NSLog(
-      "%@",
-      "[media-session] setMediaItem does not describe the current queue entry "
+    // Reported as well as logged, with the wording the Kotlin twin uses
+    // (`BroadcastPlayer.warnOnce`) — the same defect deserves the same sentence
+    // on both platforms. The de-duplication stays here rather than in the
+    // reporter: this field holds the *value* that changed, and a flip-flop
+    // between two mismatches is worth hearing twice.
+    report(
+      .metadatamismatch,
+      "setMediaItem does not describe the current queue entry "
         + "(\(mismatch)); the queue entry wins and the item's fields — including its "
         + "duration — are ignored. Broadcast the matching queueIndex, or an item whose "
         + "id matches it."
@@ -713,15 +787,33 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
   /// Main queue only.
   private func loadArtwork(_ uri: String) {
     let generation = artworkGeneration
-    artworkCache.load(uri) { [weak self] image in
-      guard image != nil else { return }
+    artworkCache.load(uri) { [weak self] image, failure in
       DispatchQueue.main.async {
         guard let self, self.artworkGeneration == generation else { return }
+        guard image != nil else {
+          // The failure this whole channel is about: before it, a cover that
+          // 404'd, timed out, or arrived as bytes `UIImage` could not decode
+          // produced a bare lock screen and *silence* — the completion's
+          // `guard image != nil else { return }` was the swallow.
+          self.reportArtworkFailure(uri, failure)
+          return
+        }
         // Re-publish rather than patching `nowPlayingInfo` in place: patching
         // would leave the previously-posted `elapsed` untouched while the
         // system keeps extrapolating from it, and a full re-post re-anchors.
         self.publishNowPlayingInfo()
       }
     }
+  }
+
+  /// Main queue only. See ``reportedArtworkFailure`` for the de-duplication.
+  private func reportArtworkFailure(_ uri: String, _ failure: String?) {
+    guard uri != reportedArtworkFailure else { return }
+    reportedArtworkFailure = uri
+    report(
+      .artworkfailed,
+      "Could not load the artwork at \(uri): \(failure ?? "no image came back"). "
+        + "The lock screen and Control Center will show this item without a cover."
+    )
   }
 }

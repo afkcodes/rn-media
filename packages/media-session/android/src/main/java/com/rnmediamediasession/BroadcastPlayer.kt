@@ -4,7 +4,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.DeviceInfo
@@ -22,6 +21,7 @@ import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
 import com.margelo.nitro.rnmediamediasession.MediaRepeatMode
 import com.margelo.nitro.rnmediamediasession.MediaSessionHandlers
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
+import com.margelo.nitro.rnmediamediasession.SessionErrorCode
 
 /**
  * The facade `Player`.
@@ -451,8 +451,12 @@ internal class BroadcastPlayer(
   private fun warnOnce(mismatch: String?) {
     if (mismatch == null || mismatch == warnedMismatch) return
     warnedMismatch = mismatch
-    Log.w(
-      RnMediaMediaSessionService.TAG,
+    // Reported as well as logged, with the same wording the iOS twin uses. The
+    // de-duplication stays here rather than in `SessionErrors`: this field is
+    // the *value* that changed, and a flip-flop between two mismatches is worth
+    // hearing twice.
+    SessionErrors.report(
+      SessionErrorCode.METADATAMISMATCH,
       "setMediaItem does not describe the current queue entry ($mismatch); the queue " +
         "entry wins and the item's fields — including its duration — are ignored. " +
         "Broadcast the matching queueIndex, or an item whose id matches it.",

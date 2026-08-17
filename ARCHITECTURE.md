@@ -1781,7 +1781,56 @@ its citation, and each is stated on the member a caller will actually reach —
 because the failure mode this whole exercise is about is discovering a no-op at
 runtime.
 
-### 28. React Native 0.87: the bump is an AGP 9 bump wearing an RN badge
+### 28. Failures with no caller get a channel, not a log line
+
+Principle 6 says no swallowed errors. The half of this package that runs where
+**no JS call is waiting** — a media3 service callback, an `MPRemoteCommandCenter`
+target, an artwork future — had no way to honour it: there is no promise to
+reject, so every failure ended at `Log.e`/`NSLog`. §27 found the worst of them
+(a refused foreground service: playback continues with no notification and an
+unprotected process, and JS is never told) and deliberately left it, because the
+obvious patch would have created an Android-only member and traded an invisible
+asymmetry for a visible one.
+
+`MediaHandler.onSessionError(error)` is the designed version. **The channel is
+cross-platform and the type enumerates what both platforms can produce**: three
+codes have emitters on both sides, and two of those took engineering rather than
+prose. iOS gained a `UIBackgroundModes: audio` check — the honest twin of a
+refused FGS, since either way the OS will not keep this app alive to play — and
+Android gained a `BitmapLoader` decorator, so a failed cover is as visible there
+as it already was on iOS. Replacing media3's loader is safe because
+`MediaSession.BuilderBase.ensureBitmapLoaderIsSizeLimited` (1.11.0, read from
+the AAR) applies the same size-limiting and caching wrappers to an app-supplied
+loader as to its own default; the object graph is media3's plus one decorator.
+The four Android-only codes each belong to a feature that is *already*
+Android-only under a documented ceiling (resumption ×2, `holdLocalAudioSlot`,
+drawable-named icons). There is no iOS-only code, and that is stated in the
+TSDoc and the README rather than hidden.
+
+Three properties are load-bearing:
+
+- **Severity is graded once, in TypeScript** (`SESSION_ERROR_SEVERITY`), because
+  a Kotlin copy and a Swift copy is precisely the drift §27 is about. A JVM test
+  reads that table out of `validate.ts` and compares it to the generated enum —
+  the `SchemaVersionSyncTest` technique.
+- **The floor is explicit.** No handler, an implementor written before the method
+  existed, or a decorator over one: all three reach `console.error`. An optional
+  *error* channel that can be silently absent would be a worse bug than the ones
+  it reports.
+- **Best-effort delivery is admitted rather than faked.** An abandoned playback
+  resumption happens, by definition, when no session exists, so the reason is
+  held and flushed to the next `initialize` — the stop-then-resumption-card case,
+  where the runtime is alive. After a true process death it stays a log line,
+  because replaying it into a later launch would attribute a stale error to the
+  wrong run.
+
+Two sites stay log-only by ruling rather than by omission: a sleep timer that
+fires with no session, and one that fires with no `pause` capability advertised.
+In both the app is told the timer fired at that same instant, and the state
+discrepancy follows from its own capability list — a second, redundant error
+would be noise, not honesty.
+
+### 29. React Native 0.87: the bump is an AGP 9 bump wearing an RN badge
 
 RN 0.87.0 (2026-08-11) was evaluated and taken on 2026-08-17, inside the
 currency rule's two-week window. The JavaScript half of the release is almost

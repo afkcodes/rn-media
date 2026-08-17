@@ -28,6 +28,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.margelo.nitro.rnmediamediasession.AndroidMediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
+import com.margelo.nitro.rnmediamediasession.SessionErrorCode
 import org.json.JSONObject
 
 /**
@@ -165,14 +166,25 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     // name cannot be. Instead the channel is pre-created above with the app's
     // name; media3's `Util.ensureNotificationChannel` is documented to return
     // early when the channel already exists, so its default name is never used.
-    config?.notificationIcon
-      ?.let { MediaButtons.drawableResId(this, it) }
-      ?.takeIf { it != 0 }
-      // Left at media3's own `media3_notification_small_icon` when the app did
-      // not name one, or named one that does not resolve: an unset/invalid
-      // small icon makes `Notification` throw, which would take the
-      // foreground-service start down with it.
-      ?.let(defaults::setSmallIcon)
+    val icon = config?.notificationIcon
+    val iconResId = icon?.let { MediaButtons.drawableResId(this, it) } ?: 0
+    if (icon != null && iconResId == 0) {
+      // The silent no-op this channel exists for: a typo in a drawable *name*
+      // was answered by a different-looking notification and nothing else.
+      SessionErrors.report(
+        SessionErrorCode.ICONNOTFOUND,
+        "android.notificationIcon names \"$icon\", which does not resolve to a drawable or " +
+          "mipmap in this app's resources. media3's generic small icon is being used " +
+          "instead. The name is the resource file name without its extension " +
+          "(res/drawable/ic_notification.xml -> \"ic_notification\").",
+        dedupeKey = "icon:$icon",
+      )
+    }
+    // Left at media3's own `media3_notification_small_icon` when the app did
+    // not name one, or named one that does not resolve: an unset/invalid
+    // small icon makes `Notification` throw, which would take the
+    // foreground-service start down with it.
+    if (iconResId != 0) defaults.setSmallIcon(iconResId)
     setMediaNotificationProvider(tinted(defaults, config?.notificationColor))
     applyForegroundServiceTimeout(config?.stopForegroundTimeoutMs)
 
@@ -180,13 +192,17 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       override fun onForegroundServiceStartNotAllowedException() {
         // Android 12+ refused to promote us. media3 has already given up on the
         // notification; playback (if the app really did start it) is now a
-        // background process the OS may kill at any moment.
-        Log.e(
-          TAG,
+        // background process the OS may kill at any moment. The second of the
+        // two refusal sites — the other is `MediaSessionController.startService`,
+        // where *our* start is refused rather than media3's promotion — and both
+        // carry the same code, because the consequence for the app is the same.
+        SessionErrors.report(
+          SessionErrorCode.BACKGROUNDPLAYBACKUNAVAILABLE,
           "The system refused to start the media foreground service. Playback was " +
             "started while the app was in the background without an exemption " +
             "(Android 12+ restriction). Start playback from the foreground, or in " +
-            "response to a media button."
+            "response to a media button.",
+          severe = true,
         )
       }
     })
@@ -251,6 +267,9 @@ class RnMediaMediaSessionService : MediaLibraryService() {
 
   private fun openSession(player: BroadcastPlayer) {
     val built = MediaLibrarySession.Builder(this, player, LibrarySessionCallback())
+      // media3's own default loader with a failure report attached — see
+      // `ReportingBitmapLoader` for why supplying one changes nothing else.
+      .setBitmapLoader(ReportingBitmapLoader.mediaSessionDefault(this))
       .apply { sessionActivityIntent()?.let(::setSessionActivity) }
       .build()
     session = built
@@ -451,7 +470,15 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     if (revival == null) return
     revival = null
     main.removeCallbacks(watchdog)
-    Log.w(TAG, "Playback resumption abandoned: $reason. Stopping the media service.")
+    // Reported, not merely logged — and the delivery is deliberately
+    // best-effort, because this is the one code whose failure mode is precisely
+    // "there is no session to report to". `reportResumptionFailure` holds it for
+    // the next `initialize` when the runtime is alive but stopped, and lets it
+    // stand as a log line when the process has no JavaScript at all. See
+    // `SessionErrors.reportResumptionFailure`.
+    SessionErrors.reportResumptionFailure(
+      "Playback resumption abandoned: $reason. Stopping the media service."
+    )
     MediaSessionController.discardRevival()
     releaseAndStop()
   }
