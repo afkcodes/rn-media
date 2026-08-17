@@ -250,6 +250,31 @@ describe('equalizerPresetChain', () => {
     ).toBe('equalizer')
   })
 
+  /**
+   * The case the limiter exists for, and the one that looks like it does not
+   * need it. A cut-only curve gets no pre-amp at all (`-max(0, peak)` is 0),
+   * yet its phase shift still has +5.7 dB of worst-case sample-peak gain — the
+   * pre-amp bounds `max |H(f)|`, and clipping is not a frequency-domain event.
+   * See `EqualizerPresetChainOptions.limiter`.
+   */
+  it('limits a cut-only preset, which gets no pre-amp to protect it', () => {
+    const chain = equalizerPresetChain(EQUALIZER_PRESETS.bassReducer)
+    expect(chain.some((f) => f.name === 'volume')).toBe(false)
+    expect(chain.at(-1)?.name).toBe('alimiter')
+  })
+
+  /**
+   * The limiter is emitted bare, so ffmpeg's own defaults apply: `limit=1`,
+   * and therefore `level = 1 / limit = 1` (`af_alimiter.c:140,289`). That is
+   * what makes the entry sample-identical below full scale — pinned here
+   * because adding a sub-option would silently change what a caller hears.
+   */
+  it('emits the limiter with no sub-options, so it cannot change the level', () => {
+    const limiter = equalizerPresetChain(EQUALIZER_PRESETS.rock).at(-1)
+    expect(limiter?.name).toBe('alimiter')
+    expect(limiter?.options).toEqual([])
+  })
+
   it('applies preampDb on top of the automatic headroom', () => {
     const chain = equalizerPresetChain(EQUALIZER_PRESETS.bassBoost, {
       preampDb: -3,

@@ -598,7 +598,20 @@ export interface LimiterOptions {
   readonly autoRelease?: boolean
   /** Auto-release strength, 0–1 (`asc_level`). */
   readonly autoReleaseLevel?: number
-  /** Auto level-in normalisation (`level`). ffmpeg default `true`. */
+  /**
+   * Make-up gain back to full scale (`level`). ffmpeg default `true`.
+   *
+   * **This is what makes `limit` a ceiling you cannot hear.** The name suggests
+   * automatic levelling of the programme; it is not. It is one constant:
+   * `level = 1 / limit`, applied to every output sample
+   * (`af_alimiter.c:140,289`). So at the default `limit` of `1` it multiplies
+   * by exactly 1 and does nothing at all — it can neither raise quiet material
+   * nor touch loud material. It only bites when you lower the ceiling: with
+   * `{ limit: 0.891 }` (−1 dBFS) the limiter holds peaks at −1 dBFS and then
+   * scales the whole signal back up by 1.122, so the output peaks at 0 dBFS
+   * again. Pass `autoLevel: false` alongside any `limit` below 1 if you wanted
+   * the headroom you asked for.
+   */
   readonly autoLevel?: boolean
 }
 
@@ -895,6 +908,26 @@ export const AudioFilters = {
    *
    * The honest tail of any chain that boosts: EQ gain plus ReplayGain can push
    * peaks past full scale, and this is what stops that becoming clipping.
+   *
+   * @remarks
+   * What it costs when it is *not* working, which is most of the time — worth
+   * knowing, because {@link equalizerPresetChain} appends one by default:
+   *
+   * - **Below full scale it is sample-identical.** The gain reduction is a
+   *   single running scalar that starts at 1 and is only ever moved by a
+   *   sample whose magnitude exceeds `limit`; nothing else in the path scales
+   *   (`af_alimiter.c:102,180,236,239,269-275,289`). No colouration, no
+   *   compression of programme material, no level change.
+   * - **It delays the signal by `attack`, and does not compensate.** The
+   *   look-ahead buffer is `attack × sampleRate` samples — 240 samples, 5.0 ms
+   *   at 48 kHz on the default 5 ms attack — and ffmpeg's `latency` option,
+   *   which trims the primed silence and flushes the tail, defaults to off and
+   *   is not exposed here (`af_alimiter.c:376-379`). So a chain that has just
+   *   been built emits 5 ms of silence first, and the last 5 ms of the stream
+   *   is never flushed. Inaudible for playback; it is still the one thing that
+   *   is not transparent.
+   * - It runs in `double` (`FILTER_SINGLE_SAMPLEFMT(AV_SAMPLE_FMT_DBL)`), so
+   *   libavfilter inserts `aresample` around it. Lossless, not free.
    */
   limiter(options: LimiterOptions = {}): AudioFilter {
     const out: AudioFilterOption[] = []

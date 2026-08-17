@@ -583,6 +583,37 @@ costs **0 AudioTrack underruns and 0 flushes** with the position advancing
 3001 ms; the same gesture on the broken-target build cost 32 640 underrun frames
 and 198 865 flushed frames.
 
+**The tail limiter stays on, because the pre-amp bounds the wrong thing**
+(2026-08-17, reviewed after the EQ fix). `equalizerPresetChain` appends
+`alimiter` to every non-flat curve, which reads like belt-and-braces next to a
+pre-amp that already computes exact headroom — until you notice the two bound
+different quantities. `peakResponseDb` is `max |H(f)|`: a *frequency-domain*
+guarantee that no steady sine leaves above unity. Clipping is a time-domain
+event, and the tight bound on a filter's sample-peak gain is `‖h‖₁`, which is
+strictly larger. Measured over our own curves at 48 kHz (RBJ coefficients per
+`af_biquads.c:826-828,850-857`, impulse response summed): `Rock` after its
+−4.8 dB pre-amp still has **+4.9 dB** of worst-case peak gain, `Loudness` after
+−8.8 dB has +5.2 dB, and `Bass Reducer` — pure cuts, so `-max(0, peak)` is
+**0 dB and no pre-amp entry is emitted at all** — has +5.7 dB. Even a single
+band at +0.1 dB has +0.03 dB. So the honest predicate for "this curve cannot
+clip" is false for every curve that does anything, and making the limiter
+conditional on it would compile to exactly today's `bands.length > 0`; the
+tempting *wrong* predicate (post-pre-amp `max |H(f)|`, which is ≈0 dB by
+construction) would remove the limiter everywhere and restore the clipping.
+**Verified against `af_alimiter.c` n8.1.2 rather than assumed**, because "a
+limiter with auto-level" sounds like it touches the programme and it does not:
+`level` is not automatic levelling but the single constant `1 / limit`
+(`:140,289`), so at our default ceiling of 1 it multiplies by exactly 1 —
+it cannot raise quiet material; and the gain reduction is a running scalar that
+starts at 1 and is only ever moved by a sample above the ceiling (`:102,180,236,
+239,269-275`), so below full scale the output is sample-identical to the input.
+The one real cost is honest and now documented: `latency` defaults to off
+(`:376-379`), so the 5 ms look-ahead is uncompensated — the chain emits 5 ms of
+silence when it is built and never flushes the last 5 ms of the stream. The
+same `level` semantics are a live trap for hand-built chains
+(`limiter({ limit: 0.891 })` limits to −1 dBFS and then scales back to 0), so
+`LimiterOptions.autoLevel` says so in as many words.
+
 **Loudness normalization is a *managed entry* of this same chain, not a second
 mechanism** (2026-08-13). `Player.setLoudnessNormalization(enabled, options?)`
 owns exactly one labelled entry — `@rnmedia_loudnorm:loudnorm=…` — appended
@@ -1945,6 +1976,23 @@ consumer must clear. compileSdk 37 is what we build against, not what we demand.
   a bug that only appears with the screen off.
 - **An unhandled JS exception destroys the whole runtime** (default
   ReactHostDelegate rethrows). All handler dispatch is wrapped.
+- **`locationX`/`locationY` are relative to the *touch target*, not to the view
+  whose `PanResponder` received the event.** The target is the deepest
+  hit-testable view under the finger (`TouchesHelper.kt:61-65`), so
+  `pageX - locationX` — the only way to learn a `View`'s page origin without an
+  async `measure` — yields the *child's* origin unless the responder is the only
+  thing that can be hit. Two traps compound it: every RN `View` is
+  `clipChildren = false` (`ReactViewGroup.kt:170`), and a parent's overflow
+  inset extends hit-testing to children drawn outside its bounds
+  (`TouchTargetHelper.kt:189-210`), so a 4 px-tall track happily hands the touch
+  to a 14 px thumb hanging off it. The rule for every gesture surface in this
+  repo: **`pointerEvents="none"` on everything inside the responder**, and fold
+  the drawn element's own `onLayout` offset back in rather than assuming it
+  shares an edge with the hit area. This has now been the same bug three times
+  — twice in the EQ fader bank (`c1918ac`) and once in the seek bar, where
+  grabbing the thumb resolved to the thumb's origin and seeked to 0:00. Both
+  live under test as `fader-geometry.ts` / `seek-geometry.ts`, because the
+  mistake is arithmetic and arithmetic does not need a device.
 - **iOS replaces pause with STOP for anything marked live**, whatever the app
   advertises. Setting `MPNowPlayingInfoPropertyIsLiveStream` — which
   `publishNowPlayingInfo` does for every item with no duration, not just an

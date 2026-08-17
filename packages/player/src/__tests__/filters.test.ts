@@ -203,6 +203,26 @@ describe('validation', () => {
     expectPlayerError(() => AudioFilters.limiter({ limit: 2 }), 'invalid-state')
   })
 
+  /**
+   * `alimiter`'s `level` is not automatic levelling of the programme — it is
+   * the constant `1 / limit` applied to every output sample
+   * (`af_alimiter.c:140,289`). At the default ceiling of 1 it is exactly 1, so
+   * a bare `alimiter` cannot change anyone's level; lower the ceiling without
+   * `autoLevel: false` and the signal is scaled straight back up to full
+   * scale, which is the opposite of the headroom you asked for.
+   */
+  it('emits no level option by default, and passes one through on request', () => {
+    expect(compileAudioFilters([AudioFilters.limiter()])).toBe('alimiter')
+    expect(
+      compileAudioFilters([
+        AudioFilters.limiter({ limit: 0.891, autoLevel: false }),
+      ])
+    ).toBe('alimiter=limit=%5%0.891:level=0')
+    expect(
+      compileAudioFilters([AudioFilters.limiter({ autoLevel: true })])
+    ).toBe('alimiter=level=1')
+  })
+
   it('rejects non-finite numbers', () => {
     expectPlayerError(
       () => AudioFilters.equalizer({ frequency: Number.NaN, gain: 0 }),
