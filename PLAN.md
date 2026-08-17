@@ -444,6 +444,31 @@ discontinuity filter + example 2 Hz sleep-timer poll (minor perf leftovers).
 npm publish (owner-gated, in that order; facts on record: bare `rn-media`
 squatted, `react-native-mpv` free, `@afkcodes` guaranteed).
 
+**Documentation site — AFTER the gate, deliberately** (owner asked 2026-08-17,
+sequencing agreed). It is warranted: four packages with real surface, a ~2,000
+line ARCHITECTURE, and a `docs/` tree (comparison, engine, design/cast, specs,
+audits) that is already most of a site's content. The strongest argument is
+that its **API reference must be GENERATED from our TSDoc** rather than
+hand-written — that permanently kills the "is this list still complete and
+accurate?" problem that every hand-maintained API table has, and our TSDoc is
+unusually thorough, so the generator is nearly free.
+
+Not before the gate, for four reasons in order of weight: the API is still
+moving (the ergonomics pass, and the open `string | TrackSource` question);
+**the name is undecided**, and a site's domain, title and every import line in
+every example depend on it; a stale site is worse than a good README, and it
+rots in the place users trust most — which cuts against this project's whole
+"a claim must be true and cited" culture; and days spent on a site are days
+not spent on the two scoreboard rows a competitor actually has and we do not
+(downloads, Android Auto).
+
+Sequence: README redo (what GitHub *and* npm show, and where evaluation
+actually happens) → ergonomics pass + the source-object decision → iOS device
+testing → naming → npm publish → site, with generated API docs. Tooling
+undecided; Docusaurus is the RN-ecosystem default (RNTP and react-native-video
+both use it) and has versioning built in, VitePress is lighter — decide when
+the name is.
+
 ## 8.5 Music-app feature coverage (added 2026-08-09, "Spotify-class" audit)
 
 Covered in v1: gapless playlist/queue, metadata→system UI, custom actions+icons
