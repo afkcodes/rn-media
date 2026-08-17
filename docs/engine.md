@@ -35,8 +35,9 @@ iconv *off* on iOS would have been the cheap parity, and it was reversed.
 ### Features upstream will not ship
 
 Two source patches, byte-identical between the forks: the PCM tap behind the
-[visualizer](../README.md#see-the-sound), and the prefetch hook behind
-[resolver-at-prefetch-time](../README.md#resolve-sources-at-the-last-moment).
+[visualizer](../packages/player/README.md#visualizer-spectrum--waveform), and the
+prefetch hook behind
+[resolver-at-prefetch-time](../packages/player/README.md#dynamic-source-resolution-signed-urls-transcode-sessions).
 Both are proven present in the *shipped* artifact by strings only the patched
 code emits, and the release script refuses to package a binary that lacks one.
 
