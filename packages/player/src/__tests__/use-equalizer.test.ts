@@ -68,11 +68,15 @@ describe('useEqualizer — the curve', () => {
     })
 
     expect(result.current.gainsDb).toEqual(EQUALIZER_PRESETS.rock.gainsDb)
-    // The pre-amp comes first, then one biquad per non-zero band, then the
-    // inter-sample limiter.
-    expect(af()).toMatch(/^volume=/)
-    expect(af()).toContain('equalizer=')
-    expect(af()).toContain('alimiter')
+    // The pre-amp comes first, then one biquad per band — *every* band, even
+    // the ones at 0 dB, because the hook compiles an editable chain whose
+    // shape does not move when a gain does — then the inter-sample limiter.
+    // Every entry is labelled, which is how `af-command` addresses it.
+    expect(af()).toMatch(/^@rnmedia_eq_preamp:volume=/)
+    expect(af()).toContain('@rnmedia_eq_31:equalizer=')
+    expect(af()).toContain('@rnmedia_eq_250:equalizer=f=250:t=o:w=1:g=0')
+    expect(af()).toContain('@rnmedia_eq_limiter:alimiter')
+    expect(af().split(',')).toHaveLength(12)
   })
 
   it('accepts a preset object as well as an id', () => {
@@ -519,5 +523,232 @@ describe('useEqualizer — persistence', () => {
     await waitFor(() => {
       expect(onStorageError).toHaveBeenCalled()
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Dragging — the in-place path
+// ---------------------------------------------------------------------------
+
+/** Every `af-command` issued so far. */
+function commands(): string[][] {
+  return client.commands.filter((args) => args[0] === 'af-command')
+}
+
+/** How many times the whole chain has been written to the `af` property. */
+function writes(): number {
+  return client.propertyWrites.filter(
+    (name) => name === MpvProperty.audioFilters
+  ).length
+}
+
+describe('useEqualizer — moving a band', () => {
+  it('pushes the new gain into the running filter instead of rewriting `af`', async () => {
+    const { result } = mount()
+    // Flat → touched is the one shape change: it is a rebuild, once.
+    act(() => {
+      result.current.setBandGain(0, 3)
+    })
+    const chain = af()
+    const before = writes()
+
+    await act(async () => {
+      result.current.setBandGain(0, 6)
+    })
+
+    // mpv's property is deliberately untouched — that is what makes it cheap.
+    expect(af()).toBe(chain)
+    expect(writes()).toBe(before)
+    expect(commands()).toEqual([
+      // The headroom pre-amp moves with the curve, and `volume` takes its gain
+      // at runtime too, so it rides along instead of forcing a rebuild. The
+      // fourth argument is mpv's `<target>`: the filter's own name, because
+      // mpv's `all` default reports a working command as failed.
+      ['af-command', 'rnmedia_eq_preamp', 'volume', '-6dB', 'volume'],
+      ['af-command', 'rnmedia_eq_31', 'g', '6', 'equalizer'],
+    ])
+  })
+
+  it('costs one command per moved band, whatever the drag does', async () => {
+    const { result } = mount()
+    act(() => {
+      result.current.setBandGain(4, 1)
+    })
+    const before = writes()
+
+    // Eleven frames of a finger, each its own render — which is what broke
+    // playback before this. (Several moves inside one render coalesce, because
+    // the chain is compiled from state, not from the calls.)
+    for (let step = 2; step <= 12; step += 1) {
+      await act(async () => {
+        result.current.setBandGain(4, step)
+      })
+    }
+
+    expect(writes()).toBe(before)
+    expect(commands()).toHaveLength(2 * 11)
+    expect(commands().at(-1)).toEqual([
+      'af-command',
+      'rnmedia_eq_500',
+      'g',
+      '12',
+      'equalizer',
+    ])
+  })
+
+  it('rebuilds the chain when the graph itself changes', async () => {
+    const { result, rerender } = mount()
+    act(() => {
+      result.current.applyPreset('rock')
+    })
+
+    // Switching the EQ off, and back on, is a different chain — not a value.
+    const beforeToggle = writes()
+    await act(async () => {
+      result.current.setEnabled(false)
+    })
+    expect(writes()).toBe(beforeToggle + 1)
+    expect(af()).toBe('')
+
+    // So is the app's own half of the chain changing.
+    await act(async () => {
+      result.current.setEnabled(true)
+    })
+    const beforeExtra = writes()
+    await act(async () => {
+      rerender({ extraFilters: [AudioFilters.crossfeed({ strength: 0.6 })] })
+    })
+    expect(writes()).toBe(beforeExtra + 1)
+    expect(af()).toContain('crossfeed=strength=')
+
+    // And so is returning to flat, which takes the EQ out of the path.
+    const beforeFlat = writes()
+    await act(async () => {
+      result.current.reset()
+    })
+    expect(writes()).toBe(beforeFlat + 1)
+    expect(af()).toBe('crossfeed=strength=%3%0.6')
+  })
+
+  it('commits the chain to `af` once the drag settles', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result } = mount()
+      act(() => {
+        result.current.setBandGain(0, 3)
+      })
+      const before = writes()
+      await act(async () => {
+        result.current.setBandGain(0, 6)
+        result.current.setBandGain(0, 9)
+      })
+      // Still nothing written: the finger is still moving.
+      expect(writes()).toBe(before)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+
+      // One write, and mpv's property now agrees with what is playing — so a
+      // track change, a device switch or a normalization toggle cannot revert
+      // the curve to where the drag started.
+      expect(writes()).toBe(before + 1)
+      expect(af()).toContain('@rnmedia_eq_31:equalizer=f=31:t=o:w=1:g=9')
+      expect(af()).toContain('@rnmedia_eq_preamp:volume=volume=-9dB')
+
+      // Nothing more, ever, without another change.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(writes()).toBe(before + 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('flushes a pending commit when the screen unmounts mid-drag', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result, unmount } = mount()
+      act(() => {
+        result.current.setBandGain(0, 3)
+      })
+      await act(async () => {
+        result.current.setBandGain(0, 9)
+      })
+      const before = writes()
+
+      unmount()
+
+      expect(writes()).toBe(before + 1)
+      expect(af()).toContain('g=9')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('degrades to commit-only when mpv refuses the command', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result } = mount()
+      act(() => {
+        result.current.setBandGain(0, 3)
+      })
+      const before = writes()
+      // What an old engine, or a stopped player with no audio chain, answers.
+      client.commandRejection = '[mpv:-11] af-command'
+
+      await act(async () => {
+        result.current.setBandGain(0, 6)
+      })
+      // Crucially NOT a write per change: rewriting the chain sixty times a
+      // second is the bug this whole path exists to avoid, and an engine that
+      // cannot take commands is not a reason to go back to it.
+      expect(writes()).toBe(before)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(writes()).toBe(before + 1)
+      expect(af()).toContain('g=6')
+      // A failure the commit path absorbed is not the user's problem.
+      expect(result.current.error).toBeUndefined()
+
+      // And it does not keep trying: the next change goes straight to commit.
+      const commandsBefore = commands().length
+      await act(async () => {
+        result.current.setBandGain(0, 9)
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(commands()).toHaveLength(commandsBefore)
+      expect(af()).toContain('g=9')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports the error when the commit write fails too', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result } = mount()
+      act(() => {
+        result.current.setBandGain(0, 3)
+      })
+      client.commandRejection = '[mpv:-11] af-command'
+      client.setPropertyRejection = '[mpv:-11] mpv_set_property_string("af")'
+
+      await act(async () => {
+        result.current.setBandGain(0, 6)
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+
+      expect(result.current.error?.code).toBe('mpv')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

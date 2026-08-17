@@ -545,6 +545,44 @@ not the largest slider — octave-spaced one-octave bells overlap and add, so
 per-platform branching; on binaries older than them the call fails with a typed
 `mpv` error (`errno: -11`), which remains the supported availability probe.
 
+**A slider commands the running filter; it does not rewrite the chain**
+(2026-08-17, the fix for the EQ fader bank shipped in `c1918ac`). Writing `af`
+is a *rebuild*: mpv keeps only the entries whose arguments are byte-identical
+and destroys and recreates the rest, losing what they had buffered
+(`filters/f_output_chain.c:535-593`), then compares the chain's measured delay
+before and after and issues an exact refresh seek if it dropped by ≥0.2 s
+(`player/audio.c:107-125`) — and the write is synchronous, so the JS thread
+waits for all of it. One write is a settings change; sixty a second is a
+destroyed stream, which is exactly what a `PanResponder` produces and exactly
+what the owner heard. The answer is mpv's `af-command`, which reaches into the
+live filter: `Player.setAudioFilterParam(filter, param, value)`. ffmpeg's
+biquads flag `frequency`/`width_type`/`width`/`gain` as
+`AV_OPT_FLAG_RUNTIME_PARAM` and their `process_command` recomputes the
+coefficients with `config_filter(outlink, **0**)` — `reset = 0`, so the filter's
+own state survives and a gain *sweeps* (n8.1.2 `af_biquads.c:1410-1420,1444,
+1522-1533,1028-1031`); `volume` does the same for its gain expression
+(`af_volume.c:64,66-68,307-321`). Two traps, both found the hard way:
+**(1) mpv's `<target>` argument defaults to `all`, and `all` is silently
+wrong** — every `af` entry is its own libavfilter graph with an `abuffer` and an
+`abuffersink` around the real filter, `avfilter_graph_send_command` overwrites
+its result on every matching filter and returns the *last* one
+(`avfiltergraph.c:1470-1481`), and the sink answers `ENOSYS`
+(`avfilter.c:610-629`) — so the gain lands and mpv reports failure, our fallback
+rewrites the chain, and the bug reappears wearing a different hat. We send the
+filter's own name as the target, which is why the API takes an `AudioFilter`
+rather than a label. **(2) `af-command` needs a labelled entry and a chain whose
+*shape* does not move with its values**, or a band crossing 0 dB becomes a
+rebuild mid-drag: `equalizerPresetChain(curve, { editable: true })` emits all
+ten bands, labelled (`@rnmedia_eq_<hz>`), pre-amp and limiter included — a flat
+curve still compiles to nothing at all. The residue is honest: `af` now lags the
+running chain, so `useEqualizer` commits the property once, 250 ms after the
+last change (its only timer, flushed on unmount), and a player that refuses the
+commands degrades to *commit-only* rather than back to per-frame writes.
+Device-verified (POCO F4, release, live stream and seekable file): a 3 s drag
+costs **0 AudioTrack underruns and 0 flushes** with the position advancing
+3001 ms; the same gesture on the broken-target build cost 32 640 underrun frames
+and 198 865 flushed frames.
+
 **Loudness normalization is a *managed entry* of this same chain, not a second
 mechanism** (2026-08-13). `Player.setLoudnessNormalization(enabled, options?)`
 owns exactly one labelled entry — `@rnmedia_loudnorm:loudnorm=…` — appended

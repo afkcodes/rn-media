@@ -2,14 +2,17 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   EQUALIZER_BANDS,
   EQUALIZER_BAND_COUNT,
+  EQUALIZER_LIMITER_LABEL,
+  EQUALIZER_PREAMP_LABEL,
   EQUALIZER_PRESETS,
   EQUALIZER_PRESET_LIST,
   defineEqualizerPreset,
+  equalizerBandLabel,
   equalizerPresetChain,
   peakResponseDb,
 } from '../equalizer-presets'
 import { PlayerErrorException } from '../errors'
-import { compileAudioFilters } from '../filters'
+import { compileAudioFilters, diffAudioFilterParams } from '../filters'
 import { Player } from '../player'
 import { MpvProperty } from '../properties'
 import { FakeMpvClient } from './fake-mpv-client'
@@ -368,5 +371,87 @@ describe('presets through the Player', () => {
 
     player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.flat))
     expect(client.written.get(MpvProperty.audioFilters)).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Editable chains — the shape a slider needs
+// ---------------------------------------------------------------------------
+
+describe('equalizerPresetChain({ editable: true })', () => {
+  const bassBoost = EQUALIZER_PRESETS.bassBoost
+
+  it('labels every entry, which is how af-command addresses one', () => {
+    const chain = equalizerPresetChain(bassBoost, { editable: true })
+    expect(chain[0]).toMatchObject({
+      name: 'volume',
+      label: EQUALIZER_PREAMP_LABEL,
+    })
+    expect(chain.at(-1)).toMatchObject({
+      name: 'alimiter',
+      label: EQUALIZER_LIMITER_LABEL,
+    })
+    expect(chain.slice(1, -1).map((filter) => filter.label)).toEqual(
+      EQUALIZER_BANDS.map((_, index) => equalizerBandLabel(index))
+    )
+  })
+
+  it('emits every band, so the shape does not depend on the gains', () => {
+    // Bass Boost has four non-zero bands; sparse mode compiles four entries,
+    // editable mode compiles ten. That difference is the whole feature: a band
+    // crossing 0 dB must not add or remove a filter mid-drag.
+    expect(equalizerPresetChain(bassBoost)).toHaveLength(4 + 2)
+    expect(equalizerPresetChain(bassBoost, { editable: true })).toHaveLength(
+      EQUALIZER_BAND_COUNT + 2
+    )
+  })
+
+  it('keeps the pre-amp even at 0 dB, for the same reason', () => {
+    // A cut-only curve needs no headroom, so sparse mode omits the volume
+    // entry entirely — and would have to add one the moment a band goes up.
+    const cut = { gainsDb: [0, 0, 0, 0, 0, 0, 0, 0, 0, -6] }
+    expect(equalizerPresetChain(cut)[0]).toMatchObject({ name: 'equalizer' })
+    expect(equalizerPresetChain(cut, { editable: true })[0]).toMatchObject({
+      name: 'volume',
+      label: EQUALIZER_PREAMP_LABEL,
+      options: [['volume', '0dB']],
+    })
+  })
+
+  it('still compiles a flat curve to nothing at all', () => {
+    expect(
+      equalizerPresetChain(EQUALIZER_PRESETS.flat, { editable: true })
+    ).toEqual([])
+  })
+
+  it('respects `limiter: false` and the bell width like any other chain', () => {
+    const chain = equalizerPresetChain(bassBoost, {
+      editable: true,
+      limiter: false,
+      bandwidthOctaves: 2,
+    })
+    expect(chain).toHaveLength(EQUALIZER_BAND_COUNT + 1)
+    expect(compileAudioFilters(chain)).toContain('t=o:w=2')
+  })
+
+  it('makes any two curves differ by parameters alone', () => {
+    // The property the whole design rests on: for a fixed band set, no pair of
+    // curves is a different graph, so no drag can ever need a rebuild.
+    const from = equalizerPresetChain(bassBoost, { editable: true })
+    const to = equalizerPresetChain(EQUALIZER_PRESETS.vocalBoost, {
+      editable: true,
+    })
+    const changes = diffAudioFilterParams(from, to)
+    expect(changes).toBeDefined()
+    expect(
+      changes?.every((change) =>
+        (change.filter.label ?? '').startsWith('rnmedia_eq_')
+      )
+    ).toBe(true)
+  })
+
+  it('rejects a band index that is not a band', () => {
+    expectInvalidState(() => equalizerBandLabel(EQUALIZER_BAND_COUNT))
+    expectInvalidState(() => equalizerBandLabel(-1))
   })
 })

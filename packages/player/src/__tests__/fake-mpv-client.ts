@@ -35,6 +35,14 @@ export class FakeMpvClient implements MpvClient {
   /** Properties written via `setProperty*`, latest value wins. */
   readonly written = new Map<string, MpvPropertyValue>()
 
+  /**
+   * The name of every successful `setProperty*`, in order — the *count* of
+   * writes, which {@link written} cannot show. A test that cares how often a
+   * property is rewritten (an EQ drag must not rewrite `af` per frame) reads
+   * this; one that cares about the value reads {@link written}.
+   */
+  readonly propertyWrites: string[] = []
+
   /** Values `getProperty*` should return. */
   readonly readable = new Map<string, MpvPropertyValue>()
 
@@ -409,6 +417,7 @@ export class FakeMpvClient implements MpvClient {
     if (this.setPropertyRejection !== undefined) {
       throw new Error(this.setPropertyRejection)
     }
+    this.propertyWrites.push(name)
     this.written.set(name, value)
     this.readable.set(name, value)
   }

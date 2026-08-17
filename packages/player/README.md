@@ -193,6 +193,11 @@ player.setAudioFilters([
 ])
 player.getAudioFilters() // mpv's own `af` string, read back
 player.clearAudioFilters()
+
+// A slider does NOT rewrite the chain: it commands the running filter.
+const chain = equalizerPresetChain(curve, { editable: true }) // labelled bands
+player.setAudioFilters(chain)
+await player.setAudioFilterParam(chain[6], 'g', -3) // mpv's `af-command`
 ```
 
 Typed descriptors compile into mpv's `af` grammar — one mpv entry per filter,
@@ -213,6 +218,27 @@ add, so `Loudness` peaks at +8.8 dB from +7 dB sliders and attenuating by the
 largest slider would still clip. Bands at 0 dB are dropped, a flat preset
 compiles to an empty chain, and an `alimiter` is appended as the inter-sample
 safety net (`{ limiter: false }` opts out).
+
+**Changing a value without rebuilding the chain.** `setAudioFilters` writes the
+whole `af` property, and mpv answers that by destroying and recreating every
+entry whose arguments changed — fine for a settings change, ruinous sixty times
+a second, which is what a slider is. `setAudioFilterParam(filter, param, value)`
+sends mpv's `af-command` instead: the biquad's coefficients are recomputed with
+its state left alone, so a gain sweeps rather than clicks, and nothing in the
+chain is torn down. It needs an entry with a **label**, which is what
+`equalizerPresetChain(curve, { editable: true })` produces (and that chain also
+emits all ten bands, so its *shape* never depends on the gains). The options
+that can be changed this way are listed, with their FFmpeg citations, in
+`AUDIO_FILTER_RUNTIME_PARAMS`; `diffAudioFilterParams(from, to)` answers "is
+this a new graph, or the same graph with different numbers?" and returns the
+commands when it is the latter. `useEqualizer` is built on exactly this.
+
+Two consequences worth knowing: mpv's `af` property is deliberately *not*
+rewritten, so `getAudioFilters()` keeps showing the value the entry was created
+with until you write the chain again — and anything that rebuilds the chain from
+that property (a new file, an audio-device switch) puts the old value back. Write
+the chain once the gesture is over. The library's own bookkeeping is kept in
+step, so `setLoudnessNormalization` never reverts a commanded value.
 
 Notes:
 
@@ -275,9 +301,20 @@ presets, savedPresets, error, hydrated }` plus `setEnabled`, `setBandGain`,
   returned object *is* the notification — every mutator re-renders, and the
   value is a fresh immutable snapshot. An event carrying the same fact would be
   a second source of truth to fall out of sync with.
-- **One `setAudioFilters` per *effective* change.** The chain is recompiled and
-  pushed only when the compiled `af` string would actually differ, so a
-  re-render on the same value writes nothing. Nothing ticks; there is no timer.
+- **Built to be dragged.** Nothing is written unless the compiled chain would
+  actually differ, and *how* it is written depends on what changed. A gain-only
+  change — the slider case — is pushed into the running filters with
+  `af-command`: no chain rebuild, no blocked JS thread, no click, whatever the
+  frame rate of the gesture. A change to the graph (EQ toggled, `extraFilters`
+  or `chain` options changed, the curve leaving or returning to flat) is one
+  `setAudioFilters`. Then, 250 ms after the last in-place change, one more
+  `setAudioFilters` makes mpv's `af` property agree with the running chain
+  again, so the curve survives the next track or device switch; until it lands,
+  `player.getAudioFilters()` still shows the pre-drag string. That commit is the
+  hook's only timer, and it is flushed on unmount. An engine that refuses the
+  commands degrades to commit-only — the curve then lands when the gesture
+  settles rather than following the finger, which is honest; going back to
+  rewriting the chain per frame is what wrecks playback, and it never does that.
 - **It owns `setAudioFilters` while mounted.** That method replaces the whole
   user chain, so the rest of *your* chain goes in `extraFilters` and is appended
   after the EQ bands:
