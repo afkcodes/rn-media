@@ -649,18 +649,20 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    *   *started*, so the next `playing` broadcast re-promotes through media3 as
    *   usual.
    *
-   * **Already foreground is left alone.** A media button arriving at a live
-   * playing service also lands here (media3's receiver starts us with
-   * `startForegroundService` too), and there the OS is holding nobody to
-   * anything — a second `startForeground` with a different notification id
-   * followed by a demotion would tear down media3's own notification for no
-   * reason. `getForegroundServiceType()` is the authoritative answer (an AMS
-   * round trip; documented to return `FOREGROUND_SERVICE_TYPE_NONE` "if the
-   * service is not a foreground service", and this package's manifest always
-   * declares `mediaPlayback`, so a promoted service never reads as NONE). It is
-   * API 29+; below that media3's `isPlaybackOngoing()` — its
-   * `MediaNotificationManager.isStartedInForeground()` — is the closest public
-   * signal, and it errs towards *not* interfering.
+   * **Already foreground is left alone — but only on a *positive* answer.** A
+   * media button arriving at a live playing service also lands here (media3's
+   * receiver starts us with `startForegroundService` too), and there the OS is
+   * holding nobody to anything: AOSP `ActiveServices.sendServiceArgsLocked`
+   * clears `fgRequired` outright when `r.isForeground` already holds at
+   * delivery time ("Service already foreground; no new timeout"). Promoting
+   * anyway would hand `startForeground` a *different* notification id, which
+   * cancels media3's own notification for no reason. So the skip is worth
+   * having — and it is worth having only while the answer is trustworthy, which
+   * is why [ForegroundPromise.isServiceForeground] asks ActivityManager on
+   * **every** API level and [ForegroundPromise.decide] treats "unknown" as
+   * "keep the promise". The previous pre-Q fallback, media3's
+   * `isPlaybackOngoing()`, was a latch that reads `true` forever after the
+   * first promotion — see [ForegroundPromise.decide] for the `javap` findings.
    *
    * Idempotent on purpose. The cold "nothing to serve" start answers the same
    * promise from `onCreate` ([stopWithoutEverBecomingForeground]) and then
@@ -669,46 +671,52 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * better trade than a piece of state saying which of the two ran.
    */
   private fun keepForegroundPromise() {
-    // Pre-O nothing can have made a promise: `startForegroundService` is API
-    // 26+, and both starters (`MediaSessionController.startService` and media3's
-    // MediaButtonReceiver) use a plain `startService` below it.
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    if (isForegroundAlready()) return
-
+    val sdkInt = Build.VERSION.SDK_INT
     val snapshot = MediaSessionController.snapshot()
     val config = MediaSessionController.androidConfig
-    if (snapshot.wantsForeground && config != null &&
-      promoteWithSnapshotNotification(config)
-    ) {
-      return
+    val action = ForegroundPromise.decide(
+      sdkInt = sdkInt,
+      // Not asked below O: there is no promise there for the answer to bear on,
+      // and the probe is a binder call.
+      alreadyForeground = if (sdkInt >= Build.VERSION_CODES.O) isForegroundAlready() else null,
+      wantsForeground = snapshot.wantsForeground,
+      canBuildSnapshotNotification = config != null && session != null,
+    )
+    when (action) {
+      PromiseAction.SKIP -> return
+      PromiseAction.PROMOTE_WITH_SNAPSHOT ->
+        // `config` is non-null here by construction — `canBuildSnapshotNotification`
+        // is what put us in this branch.
+        if (config != null && promoteWithSnapshotNotification(config)) {
+          Log.d(TAG, "Kept the startForeground() promise with the real media notification.")
+          return
+        }
+      PromiseAction.PROMOTE_THEN_DEMOTE -> Unit
     }
     // Either the engagement that started us is already gone, or the real
-    // notification could not be built (no session — a start delivered to a
-    // service that has just released one — or a Notification the platform
-    // rejected). The promise is kept either way; what changes is only whether
-    // the user sees anything.
+    // notification could not be built (a Notification the platform rejected).
+    // The promise is kept either way; what changes is only whether the user
+    // sees anything.
     promoteThenDemote()
+    Log.d(TAG, "Kept the startForeground() promise with nothing drawn; the service stays started.")
   }
 
   /**
-   * Is this service *currently* in the foreground?
+   * Is this service *currently* in the foreground? `null` when unknowable.
    *
-   * Asked of the OS rather than tracked, because media3 promotes and demotes
-   * behind us ([onUpdateNotificationAsync], the `stopForegroundOnPause` grace
-   * period) and a local flag would drift. `getForegroundServiceType()` is a
-   * binder round trip to ActivityManager — once per started start, never in a
-   * hot path.
+   * API 29+ reads it off the `Service` itself; below that
+   * [ForegroundPromise.isServiceForeground] asks ActivityManager for the same
+   * framework bit. Both are a binder round trip — once per *started* start,
+   * never in a hot path — and both are documented in [ForegroundPromise].
    */
-  private fun isForegroundAlready(): Boolean =
+  private fun isForegroundAlready(): Boolean? =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       foregroundServiceType != android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
     } else {
-      // API 26–28. `isPlaybackOngoing` is media3's
-      // `MediaNotificationManager.isStartedInForeground()`, which is a latch: it
-      // is set when media3 promotes and never cleared (verified by `javap`,
-      // 1.11.0). So it reads as "media3 has taken the foreground transitions
-      // over", which is precisely when this method must keep its hands off.
-      isPlaybackOngoing
+      ForegroundPromise.isServiceForeground(
+        this,
+        android.content.ComponentName(this, RnMediaMediaSessionService::class.java),
+      )
     }
 
   /**
@@ -900,12 +908,21 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * media3's warning applies and is why the `else` branch is unconditional:
    * "if playback is not ongoing, the service must be terminated otherwise the
    * service will be crashed and restarted by the system."
+   *
+   * **The app's broadcast is the whole predicate, and used to not be.** This
+   * was `isPlaybackOngoing && playing`, and the extra conjunct was the same
+   * misread of the same latch that §30 exists for: `isPlaybackOngoing()` is
+   * `MediaNotificationManager.isStartedInForeground()`, set only in *media3's*
+   * `startForeground` and never cleared (`javap`, 1.11.0). It therefore reads
+   * `false` in exactly the window [keepForegroundPromise] created — where *we*
+   * hold the foreground with the real media notification and media3 has not yet
+   * taken over — so a task swipe there stopped a service that was playing.
+   * Deleting the conjunct restores the rule this doc already stated.
    */
   override fun onTaskRemoved(rootIntent: Intent?) {
     MediaSessionController.notifyTaskRemoved()
 
-    val playing = MediaSessionController.snapshot().status == MediaPlaybackStatus.PLAYING
-    if (isPlaybackOngoing && playing) return
+    if (MediaSessionController.snapshot().status == MediaPlaybackStatus.PLAYING) return
 
     // Also pauses every session's player, which routes back through
     // `handleSetPlayWhenReady` -> the JS `pause` handler, so the app learns it
@@ -1134,19 +1151,54 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * `Util.setForegroundServiceNotification(…, "mediaPlayback")` →
    * `Util.stopForeground(…)`, catching `IllegalStateException`.
    *
+   * **Its own channel, never the app's, and the channel does not outlive the
+   * call.** Borrowing the app's channel — which this used to do — inherits its
+   * importance, and an app is free to configure `IMPORTANCE_DEFAULT`, i.e. a
+   * channel that peeks; nothing about a title-less, text-less notification with
+   * a lifetime of milliseconds should be able to interrupt anyone. And the
+   * fallback it used to have was worse: a channel is permanent and
+   * user-visible the moment it is created, so a placeholder made here would sit
+   * in the app's notification settings forever, under a name the app never
+   * chose, for a notification nobody ever saw.
+   *
+   * So: this package's own channel, at `IMPORTANCE_LOW` (no sound, no peek),
+   * deleted again as soon as the demotion lands.
+   *
+   * `IMPORTANCE_MIN` would be better still and is not available — the framework
+   * refuses it for a foreground-service notification and rewrites the channel:
+   * AOSP `NotificationManagerService.enqueueNotificationInternal`,
+   * `if (notification.isFgsOrUij()) { … if (r.getImportance() == IMPORTANCE_MIN
+   * || … IMPORTANCE_NONE) { channel.setImportance(IMPORTANCE_LOW); … } }`
+   * ("Increase the importance of fgs/uij notifications unless the user had an
+   * opinion otherwise"). Asking for MIN and being silently upgraded reads as an
+   * intention the code does not have, so it asks for what it gets.
+   *
+   * Deleting is not a data-loss risk: the id is this package's own, and AOSP
+   * `PreferencesHelper.createNotificationChannel` *un-deletes* an existing
+   * deleted channel and keeps its settings rather than replacing it, so a later
+   * re-creation restores anything a user had changed. While deleted it is
+   * filtered out of every enumeration Settings uses
+   * (`PreferencesHelper.getNotificationChannels`: `includeDeleted || !nc.isDeleted()`).
+   *
+   * Verified on device (POCO F4, Android 16 / API 36, 2026-08-19): screen
+   * recordings taken across this call with the shade open and with it closed
+   * show no new shade entry and no new status-bar icon, and afterwards
+   * `dumpsys notification` shows the channel present with `mDeleted=true`
+   * alongside the app's own untouched `playback`. The platform's own ten-second
+   * deferral of foreground-service notifications (Android 12+;
+   * `deferred_fgs_notifications_enabled=true` on that device) is what keeps it
+   * off screen in the first place — a notification with no actions and no
+   * `MediaStyle` is not shown immediately, and this one is gone long before the
+   * deferral elapses. One device, one version.
+   *
    * Pre-O is a no-op rather than a caller's problem: `startForegroundService`
    * is API 26+, so nothing below it can have made a promise, and the two-arg
    * `Notification.Builder(Context, String)` does not exist there either.
    */
   private fun promoteThenDemote() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val channelId = MediaSessionController.androidConfig?.notificationChannelId
-      ?: PLACEHOLDER_CHANNEL_ID
-    createNotificationChannel(
-      channelId,
-      MediaSessionController.androidConfig?.notificationChannelName
-        ?: PLACEHOLDER_CHANNEL_NAME,
-    )
+    val channelId = TRANSIENT_CHANNEL_ID
+    createNotificationChannel(channelId, TRANSIENT_CHANNEL_NAME)
 
     try {
       val notification = android.app.Notification.Builder(this, channelId)
@@ -1158,16 +1210,21 @@ class RnMediaMediaSessionService : MediaLibraryService() {
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         startForeground(
-          PLACEHOLDER_NOTIFICATION_ID,
+          TRANSIENT_NOTIFICATION_ID,
           notification,
           android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
         )
       } else {
-        startForeground(PLACEHOLDER_NOTIFICATION_ID, notification)
+        startForeground(TRANSIENT_NOTIFICATION_ID, notification)
       }
       stopForeground(STOP_FOREGROUND_REMOVE)
     } catch (error: Throwable) {
       Log.w(TAG, "Could not satisfy the startForeground() contract.", error)
+    } finally {
+      // Whether or not the promotion landed, nothing about this channel should
+      // survive the call. In the `finally` because a channel left behind by a
+      // refused `startForeground` is exactly the stray entry this avoids.
+      deleteNotificationChannel(channelId)
     }
   }
 
@@ -1176,7 +1233,15 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    *
    * media3 would otherwise create it from a string resource we cannot supply at
    * runtime. Creating it first wins, because `ensureNotificationChannel`
-   * returns early when `getNotificationChannel(channelId) != null`.
+   * returns early when `getNotificationChannel(channelId) != null` — and that
+   * check is also what makes re-creating [promoteThenDemote]'s deleted channel
+   * work, because the app-facing `getNotificationChannel(String)` does not
+   * return deleted channels.
+   *
+   * `IMPORTANCE_LOW` for both callers: a media notification must never make a
+   * sound or peek — the transport controls are the point, not the alert — and
+   * it is also the floor the framework enforces for anything a foreground
+   * service posts (see [promoteThenDemote]).
    */
   private fun createNotificationChannel(id: String?, name: String?) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -1184,14 +1249,23 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     val manager = getSystemService(NotificationManager::class.java) ?: return
     if (manager.getNotificationChannel(id) != null) return
     manager.createNotificationChannel(
-      android.app.NotificationChannel(
-        id,
-        name,
-        // LOW: a media notification must never make a sound or peek. The
-        // transport controls are the point, not the alert.
-        NotificationManager.IMPORTANCE_LOW,
-      ).apply { setShowBadge(false) }
+      android.app.NotificationChannel(id, name, NotificationManager.IMPORTANCE_LOW)
+        .apply { setShowBadge(false) }
     )
+  }
+
+  /**
+   * Remove a channel this class created for its own transient use.
+   *
+   * Guarded on the id so an app's configured channel can never be deleted by a
+   * refactor that widens a caller: [TRANSIENT_CHANNEL_ID] is this package's,
+   * nobody else posts to it, and it exists for the few milliseconds
+   * [promoteThenDemote] holds the foreground.
+   */
+  private fun deleteNotificationChannel(id: String) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    if (id != TRANSIENT_CHANNEL_ID) return
+    runCatching { getSystemService(NotificationManager::class.java)?.deleteNotificationChannel(id) }
   }
 
   internal companion object {
@@ -1199,13 +1273,27 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     const val ROOT_ID = "rn-media-root"
 
     /**
-     * Channel + id for the throwaway notification in
-     * [stopWithoutEverBecomingForeground]. Only used when the service was woken
-     * with no configuration to borrow, i.e. after process death.
+     * Channel + id for [promoteThenDemote]'s throwaway notification — the one
+     * that keeps a `startForeground()` promise without ever being drawn.
+     *
+     * Deliberately **not** the app's channel. Borrowing that one inherits its
+     * importance (an app is free to configure `IMPORTANCE_DEFAULT`, which can
+     * peek) for a notification with no title, no text and a lifetime measured
+     * in milliseconds. This one is `IMPORTANCE_LOW` — the floor the framework
+     * enforces for a foreground-service notification whatever is asked for, see
+     * [promoteThenDemote] — and is deleted again in the same call, so it
+     * neither peeks nor persists in the user's notification settings. The name
+     * is written to be honest if a user ever does see it in a system dump.
+     *
+     * The id is its own too, never media3's 1001: media3's notification may be
+     * on screen as an ordinary posted notification while the service is demoted
+     * (`stopForegroundOnPause`, see [cancelMediaNotification]), and
+     * `stopForeground(STOP_FOREGROUND_REMOVE)` removes whatever the most recent
+     * `startForeground` was handed.
      */
-    private const val PLACEHOLDER_CHANNEL_ID = "rn-media-session-transient"
-    private const val PLACEHOLDER_CHANNEL_NAME = "Playback"
-    private const val PLACEHOLDER_NOTIFICATION_ID = 1002
+    private const val TRANSIENT_CHANNEL_ID = "rn-media-session-transient"
+    private const val TRANSIENT_CHANNEL_NAME = "Background playback handover"
+    private const val TRANSIENT_NOTIFICATION_ID = 1002
 
     /**
      * How long a playback resumption may hold a foreground service before it is
