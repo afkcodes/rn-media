@@ -94,6 +94,14 @@ internal object MediaSessionController : CommandDispatcher {
    * Main thread only. `true` between asking the OS for the service and the
    * service telling us it is gone, so a burst of `playing` broadcasts issues
    * one start, not twenty.
+   *
+   * A stuck `true` is a silent, permanent loss of background playback — every
+   * later `playing` broadcast would skip [startService] and no foreground
+   * service would ever come back — so every exit is cleared, deliberately and
+   * in one place each: [detachService] (the OS destroyed it), [stop] (the app
+   * ended the session), [discardRevival] (a resumption was abandoned) and
+   * [attachService] when there is nothing to serve (the service is about to
+   * stop itself without ever becoming ours).
    */
   private var serviceRequested = false
 
@@ -412,7 +420,18 @@ internal object MediaSessionController : CommandDispatcher {
 
   /** Called from `Service.onCreate` on the main thread. `null` = nothing to serve. */
   fun attachService(service: RnMediaMediaSessionService): BroadcastPlayer? {
-    val existing = player ?: return null
+    val existing = player
+    if (existing == null) {
+      // Nothing to serve: this service will either revive (which re-arms the
+      // flag through [attachRevivedService]) or stop itself, and either way it
+      // never becomes *this* object's service — so [detachService] will decline
+      // to clear the flag on its way out (the instances do not match). Clearing
+      // it here is what keeps a stuck `true` from swallowing every later
+      // `startService`, leaving playback with no foreground service and no way
+      // to ask for one again.
+      serviceRequested = false
+      return null
+    }
     this.service = service
     serviceRequested = true
     return existing
@@ -668,8 +687,20 @@ internal object MediaSessionController : CommandDispatcher {
    * Called exclusively from a broadcast that says playback is starting, which
    * is the Android 12+ contract: an app may start a foreground service while it
    * is itself foreground, or within the exemption window granted by a media
-   * button press. media3 then owns every subsequent `startForeground` /
-   * `stopForeground` transition.
+   * button press.
+   *
+   * **This call is a promise, and it is kept in
+   * [RnMediaMediaSessionService.onStartCommand], not here.**
+   * `startForegroundService` obliges the service to call `startForeground()`
+   * within the OS window (~10 s on Android 13/14) or the process is killed with
+   * an uncatchable `ForegroundServiceDidNotStartInTimeException`. media3 only
+   * promotes while `playWhenReady && (STATE_READY || STATE_BUFFERING)`, so if
+   * the engagement this broadcast reported evaporates before media3's next
+   * notification pass — a fast pause, a track that errors immediately — nobody
+   * would keep it. The service's `onStartCommand` therefore satisfies the
+   * contract itself before handing back to media3 (ARCHITECTURE §30). Every
+   * `startForeground`/`stopForeground` transition *after* that first one is
+   * still media3's.
    *
    * `startForegroundService` rather than `startService`: it is the same call
    * media3 makes internally when it promotes us, it is the one that survives
@@ -717,9 +748,6 @@ internal object MediaSessionController : CommandDispatcher {
       )
     }
   }
-
-  private val Snapshot.wantsForeground: Boolean
-    get() = status == MediaPlaybackStatus.PLAYING || status == MediaPlaybackStatus.BUFFERING
 
   // MARK: - Revival
 

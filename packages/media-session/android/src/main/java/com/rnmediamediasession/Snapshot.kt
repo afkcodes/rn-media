@@ -261,6 +261,25 @@ internal data class Snapshot(
       else "item id '${override.id}' vs queue[$timelineIndex] id '${current.id}'"
     }
 
+  /**
+   * Does this state need the media service to be a **foreground** service?
+   *
+   * The same question media3 asks of its own player —
+   * `MediaNotificationManager.isAnySessionUserEngaged` is
+   * `playWhenReady && (STATE_READY || STATE_BUFFERING)`, and
+   * `BroadcastPlayer.getState` maps exactly these two statuses onto that pair —
+   * asked of the app's last broadcast instead, which is the truth this package
+   * trusts.
+   *
+   * Two callers that **must** agree, because a disagreement is a process kill:
+   * [MediaSessionController.setPlaybackState] uses it to decide whether a
+   * broadcast may `startForegroundService()`, and
+   * `RnMediaMediaSessionService.onStartCommand` uses it to decide how to keep
+   * the promise that call just made (ARCHITECTURE §30).
+   */
+  val wantsForeground: Boolean
+    get() = status == MediaPlaybackStatus.PLAYING || status == MediaPlaybackStatus.BUFFERING
+
   val isSeekable: Boolean
     // Capability-only, and deliberately still snapshot-wide: whether a *given*
     // entry is seekable additionally depends on that entry's own
