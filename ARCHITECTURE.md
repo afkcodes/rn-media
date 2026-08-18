@@ -2011,16 +2011,71 @@ all of which end with the promise kept:
 | Revival | unchanged (§20) — promotes with the mirrored metadata, now with the same demote-in-silence fallback if that notification cannot be built |
 | Cold start with nothing to serve | unchanged — `stopWithoutEverBecomingForeground`, which is now that same promote-then-demote plus `stopSelf` |
 
-**"Already foreground?" is asked of the OS.** `Service.getForegroundServiceType()`
-is documented to return `FOREGROUND_SERVICE_TYPE_NONE` "if the service is not a
-foreground service" (framework source, API 36), it is an ActivityManager round
-trip rather than a cached bit, and this package's manifest always declares
-`mediaPlayback`, so a promoted service can never read as NONE. It is API 29+;
-below that media3's public `isPlaybackOngoing()` is the closest signal and errs
-towards not interfering. A locally tracked boolean was rejected: media3 promotes
-and demotes behind us (`stopForegroundOnPause`, the grace period of §19), so a
-flag of ours would drift, and drifting in the "we think we are foreground"
-direction is the crash this section exists to remove.
+**"Already foreground?" is asked of ActivityManager, on every API level.** The
+skip is worth having: AOSP `ActiveServices.sendServiceArgsLocked` clears
+`fgRequired` outright when the record is already foreground at delivery time
+(`if (r.fgRequired && !r.fgWaiting) { if (!r.isForeground) scheduleServiceForegroundTransitionTimeoutLocked(r); else r.fgRequired = false; }`
+— "Service already foreground; no new timeout"), so there is genuinely no
+deadline to meet, and promoting anyway would hand `startForeground` a *different*
+notification id and cancel media3's own notification for nothing. Two readings of
+that same `r.isForeground` bit:
+
+- **API 29+**: `Service.getForegroundServiceType()`, documented to return
+  `FOREGROUND_SERVICE_TYPE_NONE` "if the service is not a foreground service";
+  this package's manifest always declares `mediaPlayback`, so a promoted service
+  can never read as NONE.
+- **API 26–28**: `ActivityManager.getRunningServices`, whose deprecation note is
+  precise about what survived — "no longer available to third party
+  applications. For backwards compatibility, it will still return the caller's
+  own services" — implemented in `ActiveServices.getRunningServiceInfoLocked`
+  (`allowed || (sr.app != null && sr.app.uid == callingUid)`), with
+  `makeRunningServiceInfoLocked` filling `info.foreground = r.isForeground`.
+
+**This replaced a real hole, source-verified only (no 8/9 hardware here).** The
+pre-Q fallback used to be media3's `isPlaybackOngoing()`, on the reasoning that
+it "errs towards not interfering". It does not: it is a **latch** (see the
+platform-truths entry below), `true` for the life of the process after media3's
+first promotion. On Android 8–9 the sequence media3 promotes → media3 demotes →
+a fresh `startForegroundService` arrives would therefore have read "already
+foreground", skipped, and left the promise unkept — the exact crash this section
+exists to remove, on versions that enforce it. The rule is now stated once, in
+`ForegroundPromise.decide`, and it is the asymmetry rather than a guess: **only
+a positive answer may skip; `false` and *unknown* are identical and both keep the
+promise**, because a redundant promote-then-demote is two binder calls and a
+missed one is an uncatchable process kill. Every failure of the probe — a
+`SecurityException` from an OEM that tightened the API, an empty list, our record
+missing — returns "unknown".
+
+A locally tracked boolean was rejected for the same reason it always was: media3
+promotes and demotes behind us (`stopForegroundOnPause`, the grace period of
+§19), so a flag of ours would drift, and drifting in the "we think we are
+foreground" direction is the crash.
+
+**The decision is a pure function with an exhaustive JVM test.** A foreground
+*transition* needs a device; deciding *which* transition to make does not, and
+that is the half that has now shipped wrong twice. `ForegroundPromise.decide`
+takes `(sdkInt, alreadyForeground: Boolean?, wantsForeground,
+canBuildSnapshotNotification)` and returns `SKIP` /
+`PROMOTE_WITH_SNAPSHOT` / `PROMOTE_THEN_DEMOTE`; `ForegroundPromiseTest` sweeps
+the whole table and asserts the invariant directly — *on API 26+, no input other
+than a positive already-foreground may produce `SKIP`*. The same file guards the
+other half of the original mistake: the set of files in this package that call
+`startForegroundService` is pinned (`MediaSessionController.kt`, and only it), so
+a fourth start path cannot be added without naming its keeper in the same commit.
+The bug existed because two of three paths had an answer and nobody checked the
+third; that is now a failing test rather than a phone call.
+
+**Audit of every path that can make the promise** (the AAR half by `javap`,
+1.11.0):
+
+| Who calls `startForegroundService` | Keeper | Verdict |
+|---|---|---|
+| `MediaSessionController.startService` (the reported stack) | `onStartCommand` → `keepForegroundPromise` | kept |
+| media3 `MediaButtonReceiver.onReceive` (play-shaped key events only, and it says so: *"Ignore key event that is not a `play` command on API 26 or above to avoid an `ForegroundServiceDidNotStartInTimeException`"* — observed on device in this package's logcat) | same `onStartCommand` | kept |
+| media3 `MediaNotificationManager.startForeground` | itself, synchronously: `ContextCompat.startForegroundService` then `Util.setForegroundServiceNotification(…, "mediaPlayback")` in the same method | self-kept; our `onStartCommand` then sees a foreground service and skips |
+| media3 `MediaSessionService.stopSelfSafely` | itself: shutdown notification → `startForeground` → `stopForeground` → `stopSelf` | self-kept |
+| The framework restarting us stickily, or `am start-foreground-service` | same `onStartCommand` | kept |
+| Notification action `PendingIntent`s (media3 uses `startForegroundService` for `Play`, plain `startService` for the rest — visible in `dumpsys notification`) | same `onStartCommand` | kept |
 
 **The predicate is now one property, `Snapshot.wantsForeground`.** It used to be a
 private extension inside `MediaSessionController`; the service needs the same
@@ -2037,12 +2092,105 @@ service that never becomes *this* object's service is declined by
 `detachService`'s identity check on the way out, so nothing would have cleared a
 flag set for it.
 
-On-device repro for the original crash (no unit test is possible — a foreground
-service transition needs a device): play, then pause within the same second, from
-a cold service (`adb shell dumpsys activity services … | grep isForeground` before
-and after). Pre-fix, a `ForegroundServiceDidNotStartInTimeException` follows
-within ~10 s on Android 13/14; post-fix the service reports `isForeground=false`
-with no notification and the next play brings it up normally.
+**Same latch, second misuse, fixed here too: `onTaskRemoved`.** Its predicate was
+`isPlaybackOngoing && playing`, while its own comment said the truth it trusts is
+the app's last broadcast. The conjunct reads `false` in precisely the window
+`keepForegroundPromise` creates — *we* hold the foreground with the real media
+notification and media3 has not taken over yet — so a task swipe there stopped a
+service that was playing. It is now the broadcast alone.
+
+**The throwaway notification does not touch the app's channel.**
+`promoteThenDemote` used to borrow the app's configured channel, falling back to
+a placeholder named "Playback" when there was none. Both are wrong in small ways:
+a channel is permanent and user-visible the moment it is created, so the
+placeholder would sit in the app's notification settings forever — under a name
+the app never chose, next to the app's own channel of the same name — for a
+notification nobody ever saw; and borrowing the app's channel inherits its
+importance, which an app is free to set to `IMPORTANCE_DEFAULT`, i.e. peekable.
+It now always uses its own `rn-media-session-transient` channel at
+`IMPORTANCE_LOW` (no sound, no peek, whatever the app configured) and **deletes
+it again in the same call**, in a `finally` so a refused `startForeground` cannot
+leave one behind. `IMPORTANCE_MIN` is not on the table and the device said so
+before the docs did: it comes back out of `dumpsys notification` as
+`mImportance=2`, because AOSP
+`NotificationManagerService.enqueueNotificationInternal` rewrites the channel for
+anything a foreground service posts — `if (notification.isFgsOrUij()) { … if
+(r.getImportance() == IMPORTANCE_MIN || … IMPORTANCE_NONE) {
+channel.setImportance(IMPORTANCE_LOW); … } }`. Asking for a value the framework
+always overrides would read as an intention the code does not have, so it asks
+for what it gets. Deleting is not destructive: the id is this package's, AOSP
+`PreferencesHelper.createNotificationChannel` un-deletes rather than replaces if
+it is ever created again, and while deleted the channel is filtered out of the
+enumerations Settings uses (`includeDeleted || !nc.isDeleted()`).
+
+### On-device verification (POCO F4, Android 16 / API 36, 2026-08-19)
+
+No unit test can cover a foreground transition, so these are device facts.
+
+**The timeout is not ~10 s everywhere.** `adb shell dumpsys activity settings` on
+that device reports `service_start_foreground_timeout_ms=30000` and
+`service_start_foreground_anr_delay_ms=10000` — the AOSP default is 10 s, the
+device ships 30. Anything that waits for the crash must wait longer than the
+device says, not longer than the docs say.
+
+**The natural race cannot be won from `adb` on this hardware, and that is worth
+recording rather than hiding.** With a warm process, media3's promotion follows
+the service start by ~15 ms (measured: `Background started FGS` → first
+`isForeground=true`); under a 12-way CPU load it stretches to ~90–300 ms, but a
+`pause` dispatched into that window is overwritten a moment later by the async
+`play` still resolving, and media3 promotes anyway. Airplane mode does not help:
+the app's reconnect loop re-enters `BUFFERING`, which re-engages media3. So
+play-then-pause is the *shape* of the bug, not a usable repro here.
+
+**What is a usable repro** is the same promise with the timing collapsed out of
+it — a started start whose engagement is not `playing`:
+
+```
+adb shell am stopservice <pkg>/com.rnmediamediasession.RnMediaMediaSessionService
+adb shell dumpsys activity services <pkg>            # must print (nothing)
+adb shell am start-foreground-service -n <pkg>/com.rnmediamediasession.RnMediaMediaSessionService
+```
+
+with the app's runtime already up (so this is the warm path, not §20's revival).
+Pre-fix, at exactly +30 s:
+
+```
+W ActivityManager: Bringing down service while still waiting for start foreground: ServiceRecord{… RnMediaMediaSessionService …}
+E AndroidRuntime: FATAL EXCEPTION: main
+E AndroidRuntime: android.app.RemoteServiceException$ForegroundServiceDidNotStartInTimeException:
+    Context.startForegroundService() did not then call Service.startForeground()
+I Process: Sending signal. PID: 12755 SIG: 9
+```
+
+Post-fix, the identical sequence leaves `startForegroundCount=1` with no
+`isForeground` line — the promise kept, nothing drawn, the service still started
+— and the process alive at +50 s. The next play then promotes normally:
+`isForeground=true foregroundId=1001`, a single notification in
+`dumpsys notification` (`id=1001`, `groupKey=media3_group_key`, `actions=5`,
+`category=transport` — media3's own, not a placeholder), and
+`startForegroundCount` still `1` at +7 s, which is how "replaced in place" reads
+in `dumpsys`: `ServiceRecord.startForegroundCount` only counts a not-foreground →
+foreground transition.
+
+**Nothing flashes.** Screen recordings taken across `promoteThenDemote` with the
+shade open and with it closed show no new shade entry and no new status-bar icon
+(diffing every encoded frame of the status bar strip: 4 frames in 6 s, all
+clock-sized deltas). The mechanism is the platform's own ten-second deferral of
+foreground-service notifications (Android 12+; `deferred_fgs_notifications_enabled=true`
+on this device) — a notification with no actions and no `MediaStyle` is not shown
+at once, and this one is gone in milliseconds. One device, one version; the
+`IMPORTANCE_MIN` channel above is the belt to that braces.
+
+**No stray channel.** After a full session of this testing the example app's
+channel list reads exactly:
+
+```
+mId='rn-media-session-transient', mName=Background playback handover, mImportance=2, … mDeleted=true
+mId='playback',                   mName=Playback,                     mImportance=2, … mDeleted=false
+```
+
+— the app's own channel untouched, and ours already gone from everything the
+user can see.
 
 ## Platform truths we build around (learned, verified)
 
@@ -2117,12 +2265,26 @@ with no notification and the next play brings it up normally.
   in exactly two places (`javap`, 1.11.0): `false` in the constructor and `true`
   in `startForeground(MediaNotification)`. The demotion path
   (`updateNotificationInternal`'s `notify` + `Util.stopForeground`) and
-  `removeNotification()` both leave it alone. So it means "media3 has taken the
-  foreground transitions over", never "the service is foreground right now" —
-  for the second question the OS is the only honest source
-  (`Service.getForegroundServiceType()`, API 29+, documented to return
-  `FOREGROUND_SERVICE_TYPE_NONE` when the service is not foreground). §30
-  depends on the difference.
+  `removeNotification()` both leave it alone. Re-verified 2026-08-19 against the
+  shipped AAR at the bytecode level: `putfield startedInForeground` appears at
+  exactly two offsets, `iconst_0` in `<init>` and `iconst_1` at the end of
+  `private void startForeground(MediaNotification)` (right after
+  `Util.setForegroundServiceNotification`), while `updateNotificationInternal`'s
+  demotion arm (`NotificationManager.notify` + `Util.stopForeground(service,
+  false)`) and `removeNotification` (`Util.stopForeground(service, true)` +
+  `cancel`) touch neither. So it means "media3 has taken the foreground
+  transitions over", never "the service is foreground right now".
+
+  **This package therefore consults it nowhere.** Both former callers are gone:
+  §30's pre-Q "already foreground?" — which the latch would have answered `true`
+  forever, skipping the promise-keeping on Android 8–9 for the very crash §30
+  exists to remove — and `onTaskRemoved`'s `isPlaybackOngoing && playing`, which
+  it answers `false` for exactly the window where §30 holds the foreground
+  itself. For "is this service foreground right now" the framework is the only
+  honest source: `Service.getForegroundServiceType()` on API 29+, and
+  `ActivityManager.getRunningServices` → `RunningServiceInfo.foreground` below
+  it, which is the same `ServiceRecord.isForeground` the framework itself checks
+  before deciding whether to hold us to a promise at all.
 - **`am kill` and `am force-stop` are not the same kill.** `am kill` leaves the
   System UI resumption card in place (SystemUI logs `Converting … to resume`) and
   earns a START_STICKY service restart a second later; `force-stop` removes the
