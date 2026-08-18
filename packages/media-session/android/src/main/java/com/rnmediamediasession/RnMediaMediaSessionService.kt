@@ -49,8 +49,19 @@ import org.json.JSONObject
  * `playWhenReady && (STATE_READY || STATE_BUFFERING)`. Everything below is
  * expressed in terms of nudging that predicate rather than fighting it.
  *
+ * With **one** exception, and it is the same one every time: the *first*
+ * transition after a start this package (or media3's receiver) asked for.
+ * `startForegroundService()` is a promise with an uncatchable penalty, media3
+ * only promotes once its predicate holds, and nothing guarantees the predicate
+ * still holds by the time media3 looks. So [onStartCommand] keeps that first
+ * promise itself — see [keepForegroundPromise] for the warm path,
+ * [beginRevival] for the cold one and [stopWithoutEverBecomingForeground] for
+ * the one with nothing to serve — and hands every transition after it back to
+ * media3.
+ *
  * | Edge case | Handled where |
  * |---|---|
+ * | `startForegroundService()` promised a `startForeground()` that media3 may never make | [keepForegroundPromise] (warm), [beginRevival] (cold), [stopWithoutEverBecomingForeground] (nothing to serve) |
  * | Android 12+ `ForegroundServiceStartNotAllowedException` (can't start an FGS from the background) | [MediaSessionController.startService] only starts from a play command, and [onForegroundServiceStartNotAllowedException] below reports the loss when the OS refuses anyway |
  * | Android 14 FGS type enforcement | `foregroundServiceType="mediaPlayback"` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK` in this package's manifest; media3 passes the matching runtime type |
  * | Android 13+ notification redesign (controls derive from the session) | media button preferences, rebuilt on every broadcast — see [refresh] |
@@ -364,7 +375,13 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       pending.started = true
       pending.startedAtMs = SystemClock.elapsedRealtime()
 
-      postResumptionNotification(pending.config.android)
+      // The seeded snapshot is deliberately `stopped` (see `ResumptionStore`),
+      // so this path cannot ask [keepForegroundPromise] to decide — it promotes
+      // unconditionally, with the mirrored metadata, because the user asked for
+      // that track back. The fallback is the same one every other path uses: if
+      // the notification could not be built, keep the promise with nothing
+      // drawn rather than let the process be killed for it.
+      if (!promoteWithSnapshotNotification(pending.config.android)) promoteThenDemote()
 
       if (!ReactRuntime.startRuntime(this) { onRuntimeReady() }) {
         abandonRevival("ReactHost.start() could not be issued")
@@ -484,8 +501,16 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   }
 
   /**
-   * The bridge notification: what the user looks at between the OS creating
-   * this service and media3 taking the notification over.
+   * Become foreground **now**, with a real media notification built from the
+   * current snapshot. Returns whether the promise was actually kept.
+   *
+   * The bridge notification: what the user looks at between the OS creating (or
+   * re-starting) this service and media3 taking the notification over. Shared by
+   * the two paths that must satisfy the `startForegroundService` contract
+   * themselves rather than wait for media3 — [beginRevival] (cold, no JS
+   * runtime yet) and [keepForegroundPromise] (warm, playing) — because in both
+   * of them the notification the user should see is exactly this one, and
+   * posting it is what stops the process being killed.
    *
    * Three properties, none of them incidental:
    * - **It is a `MediaStyle` notification bound to the real session token.**
@@ -505,12 +530,14 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * `startForeground` can refuse (Android 12+ background-start rules). That is
    * caught rather than propagated, on the same reasoning as
    * [stopWithoutEverBecomingForeground]: if the OS will not let us be
-   * foreground it is also not holding us to the promise.
+   * foreground it is also not holding us to the promise. `false` then says so,
+   * and both callers fall back to [promoteThenDemote] — an unkept promise is
+   * the one outcome neither of them may accept.
    */
   @Suppress("DEPRECATION")
-  private fun postResumptionNotification(config: AndroidMediaSessionConfig) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val current = session ?: return
+  private fun promoteWithSnapshotNotification(config: AndroidMediaSessionConfig): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+    val current = session ?: return false
     val snapshot = MediaSessionController.snapshot()
     val item = snapshot.timeline.getOrNull(snapshot.timelineIndex)
 
@@ -540,22 +567,36 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       } else {
         startForeground(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID, notification)
       }
+      return true
     } catch (error: Throwable) {
-      Log.w(TAG, "Could not post the playback-resumption notification.", error)
+      Log.w(TAG, "Could not post the media notification to become foreground.", error)
+      return false
     }
   }
 
   /**
-   * A start request while a revival is armed.
+   * Every *started* start of this service — and therefore every
+   * `startForeground()` promise it can be held to.
+   *
+   * The promise is kept here rather than in [onCreate] on purpose: `onCreate`
+   * also runs for a plain `bindService` (a `MediaController` connecting, Android
+   * Auto looking at the browse tree), where no promise exists and posting a
+   * notification would put a foreground service on screen for a bind. This
+   * method runs for started services only, which is exactly the set of starts
+   * that carry one.
    *
    * `super` is media3's, and it is what turns an `ACTION_MEDIA_BUTTON` intent
    * into a play command on the session — but only *after* this method has made
    * us foreground, which is the ordering the five-second contract requires.
    *
-   * A **null** intent is the system restarting us stickily, with nobody asking
-   * for anything. Reviving there would boot the whole app spontaneously, minutes
-   * after a kill, for no user-visible reason; so that case stops instead. A
-   * resumption is always someone pressing something.
+   * A **null** intent while a revival is armed is the system restarting us
+   * stickily, with nobody asking for anything. Reviving there would boot the
+   * whole app spontaneously, minutes after a kill, for no user-visible reason;
+   * so that case stops instead. A resumption is always someone pressing
+   * something. (A null intent on the warm path still goes through
+   * [keepForegroundPromise]: a sticky restart of a service that had not yet
+   * become foreground is restarted with the same obligation, and keeping a
+   * promise nobody is holding us to costs one undrawn notification.)
    */
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (revival != null) {
@@ -564,9 +605,111 @@ class RnMediaMediaSessionService : MediaLibraryService() {
         return START_NOT_STICKY
       }
       beginRevival(startsPlayback = false)
+    } else {
+      keepForegroundPromise()
     }
     return super.onStartCommand(intent, flags, startId)
   }
+
+  /**
+   * Satisfy the `startForegroundService()` contract for a **warm** start — the
+   * bug this method exists for, and the only one of the three start paths that
+   * had no answer to it.
+   *
+   * **The crash.** `Context.startForegroundService()` is a promise that the
+   * service will call `startForeground()` within the OS window (~10 s on
+   * Android 13/14); breaking it earns
+   * `RemoteServiceException$ForegroundServiceDidNotStartInTimeException`, which
+   * is uncatchable and takes the process down. Reported from a POCO F4 on
+   * Android 13, with the stack naming the origin exactly:
+   * `MediaSessionController.setPlaybackState` → `startService` →
+   * `context.startForegroundService(intent)`.
+   *
+   * **Why media3 does not always keep it.** media3 promotes from its own
+   * notification pass, and only while
+   * `MediaNotificationManager.isAnySessionUserEngaged`
+   * (`playWhenReady && (STATE_READY || STATE_BUFFERING)`) holds. The broadcast
+   * that started us said `playing`; if that has evaporated by the time media3
+   * runs — a fast pause, a stop, a track that errors or ends immediately, any
+   * state race — media3 never promotes and nobody else does. media3 guards its
+   * *own* starts this way (its `MediaButtonReceiver` refuses to start the
+   * service for anything but a play-shaped key event, logging "to avoid an
+   * `ForegroundServiceDidNotStartInTimeException`", and `stopSelfSafely` posts a
+   * shutdown notification purely to keep the promise — both verified by `javap`
+   * on the shipped 1.11.0 AAR). An app-initiated start is the app's to keep, and
+   * this package is the app.
+   *
+   * Two outcomes, both of which end with the promise kept:
+   * - the snapshot still [wants foreground][Snapshot.wantsForeground] — post the
+   *   *real* media notification ([promoteWithSnapshotNotification]) under
+   *   media3's own id, so media3's next pass replaces it in place and takes
+   *   ownership back with nothing flickering;
+   * - it does not (the race already landed) — [promoteThenDemote]: foreground
+   *   for a few milliseconds, notification never drawn, and the service stays
+   *   *started*, so the next `playing` broadcast re-promotes through media3 as
+   *   usual.
+   *
+   * **Already foreground is left alone.** A media button arriving at a live
+   * playing service also lands here (media3's receiver starts us with
+   * `startForegroundService` too), and there the OS is holding nobody to
+   * anything — a second `startForeground` with a different notification id
+   * followed by a demotion would tear down media3's own notification for no
+   * reason. `getForegroundServiceType()` is the authoritative answer (an AMS
+   * round trip; documented to return `FOREGROUND_SERVICE_TYPE_NONE` "if the
+   * service is not a foreground service", and this package's manifest always
+   * declares `mediaPlayback`, so a promoted service never reads as NONE). It is
+   * API 29+; below that media3's `isPlaybackOngoing()` — its
+   * `MediaNotificationManager.isStartedInForeground()` — is the closest public
+   * signal, and it errs towards *not* interfering.
+   *
+   * Idempotent on purpose. The cold "nothing to serve" start answers the same
+   * promise from `onCreate` ([stopWithoutEverBecomingForeground]) and then
+   * arrives here as well; a second promote-and-demote on a service that is
+   * already stopping is two binder calls and no user-visible effect, which is a
+   * better trade than a piece of state saying which of the two ran.
+   */
+  private fun keepForegroundPromise() {
+    // Pre-O nothing can have made a promise: `startForegroundService` is API
+    // 26+, and both starters (`MediaSessionController.startService` and media3's
+    // MediaButtonReceiver) use a plain `startService` below it.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    if (isForegroundAlready()) return
+
+    val snapshot = MediaSessionController.snapshot()
+    val config = MediaSessionController.androidConfig
+    if (snapshot.wantsForeground && config != null &&
+      promoteWithSnapshotNotification(config)
+    ) {
+      return
+    }
+    // Either the engagement that started us is already gone, or the real
+    // notification could not be built (no session — a start delivered to a
+    // service that has just released one — or a Notification the platform
+    // rejected). The promise is kept either way; what changes is only whether
+    // the user sees anything.
+    promoteThenDemote()
+  }
+
+  /**
+   * Is this service *currently* in the foreground?
+   *
+   * Asked of the OS rather than tracked, because media3 promotes and demotes
+   * behind us ([onUpdateNotificationAsync], the `stopForegroundOnPause` grace
+   * period) and a local flag would drift. `getForegroundServiceType()` is a
+   * binder round trip to ActivityManager — once per started start, never in a
+   * hot path.
+   */
+  private fun isForegroundAlready(): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      foregroundServiceType != android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
+    } else {
+      // API 26–28. `isPlaybackOngoing` is media3's
+      // `MediaNotificationManager.isStartedInForeground()`, which is a latch: it
+      // is set when media3 promotes and never cleared (verified by `javap`,
+      // 1.11.0). So it reads as "media3 has taken the foreground transitions
+      // over", which is precisely when this method must keep its hands off.
+      isPlaybackOngoing
+    }
 
   /**
    * `MediaService.stopService()` — the only thing that ends background
@@ -613,7 +756,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * not race anything.
    *
    * The id is `DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID`
-   * (1001) by the same invariant [postResumptionNotification] relies on: the
+   * (1001) by the same invariant [promoteWithSnapshotNotification] relies on: the
    * provider is built without `setNotificationId`, so that constant is the id
    * it uses.
    */
@@ -936,13 +1079,6 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   }
 
   /**
-   * Create the channel ourselves so the app's configured *name* is used.
-   *
-   * media3 would otherwise create it from a string resource we cannot supply at
-   * runtime. Creating it first wins, because `ensureNotificationChannel`
-   * returns early when `getNotificationChannel(channelId) != null`.
-   */
-  /**
    * Leave, without tripping the foreground-service contract.
    *
    * A plain `stopSelf()` here is a process kill, not a clean exit. Whoever woke
@@ -955,24 +1091,55 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * process, which is exactly the after-process-death media-button path this
    * branch exists to handle.
    *
-   * So: post a notification, become foreground, and immediately drop both. The
-   * notification exists for a few milliseconds and is never drawn.
-   *
-   * `startForeground` can itself refuse (Android 12+ background-start rules).
-   * That is caught rather than propagated — if the OS will not let us be
-   * foreground it is also not going to hold us to the promise, and there is
-   * nothing useful left to do but stop.
+   * So: post a notification, become foreground, and immediately drop both
+   * ([promoteThenDemote]) — then stop. The notification exists for a few
+   * milliseconds and is never drawn.
    */
   private fun stopWithoutEverBecomingForeground() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
       // Pre-O there is no startForeground() contract to satisfy —
       // `startForegroundService` itself is API 26+ — and the two-arg
-      // `Notification.Builder(Context, String)` below does not exist either
-      // (lint NewApi). A plain stop is already safe here.
+      // `Notification.Builder(Context, String)` [promoteThenDemote] uses does
+      // not exist either (lint NewApi). A plain stop is already safe here.
       stopSelf()
       return
     }
+    promoteThenDemote()
+    stopSelf()
+  }
 
+  /**
+   * Keep the `startForeground()` promise without ever drawing anything:
+   * promote, then demote in the same breath.
+   *
+   * The shared half of [stopWithoutEverBecomingForeground] — which stops
+   * afterwards, because it has nothing to serve — and of
+   * [keepForegroundPromise]'s race branch, which deliberately does **not**: a
+   * warm service whose play was cancelled a moment ago is still a live session
+   * the app will broadcast to again, and the next `playing` re-promotes it
+   * through media3 in the ordinary way. Demoted is not stopped.
+   *
+   * Its own notification id, never media3's: media3's notification (1001) may be
+   * on screen as an ordinary posted notification while the service is demoted
+   * (`stopForegroundOnPause`, see [cancelMediaNotification]), and
+   * `stopForeground(STOP_FOREGROUND_REMOVE)` removes whatever was handed to the
+   * most recent `startForeground` — which must therefore be a throwaway of ours
+   * and not the user's media notification.
+   *
+   * `startForeground` can itself refuse (Android 12+ background-start rules).
+   * That is caught rather than propagated — if the OS will not let us be
+   * foreground it is also not going to hold us to the promise. This is media3's
+   * own recipe for the same problem, `MediaSessionService.stopSelfSafely`
+   * (`javap`, 1.11.0): shutdown notification →
+   * `Util.setForegroundServiceNotification(…, "mediaPlayback")` →
+   * `Util.stopForeground(…)`, catching `IllegalStateException`.
+   *
+   * Pre-O is a no-op rather than a caller's problem: `startForegroundService`
+   * is API 26+, so nothing below it can have made a promise, and the two-arg
+   * `Notification.Builder(Context, String)` does not exist there either.
+   */
+  private fun promoteThenDemote() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val channelId = MediaSessionController.androidConfig?.notificationChannelId
       ?: PLACEHOLDER_CHANNEL_ID
     createNotificationChannel(
@@ -1000,12 +1167,17 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       }
       stopForeground(STOP_FOREGROUND_REMOVE)
     } catch (error: Throwable) {
-      Log.w(TAG, "Could not satisfy the startForeground() contract before stopping.", error)
+      Log.w(TAG, "Could not satisfy the startForeground() contract.", error)
     }
-
-    stopSelf()
   }
 
+  /**
+   * Create the channel ourselves so the app's configured *name* is used.
+   *
+   * media3 would otherwise create it from a string resource we cannot supply at
+   * runtime. Creating it first wins, because `ensureNotificationChannel`
+   * returns early when `getNotificationChannel(channelId) != null`.
+   */
   private fun createNotificationChannel(id: String?, name: String?) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     if (id.isNullOrEmpty() || name.isNullOrEmpty()) return

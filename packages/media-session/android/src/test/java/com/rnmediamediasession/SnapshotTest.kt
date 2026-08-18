@@ -4,6 +4,7 @@ import com.margelo.nitro.rnmediamediasession.MediaCapability
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -336,6 +337,29 @@ class SnapshotTest {
     )
 
     assertEquals(100_000L, state.trackEndDelayMs(now = 0L))
+  }
+
+  // MARK: - wantsForeground
+
+  @Test
+  fun `only playing and buffering want a foreground service`() {
+    // The predicate two pieces of code have to agree on, because a
+    // disagreement is a process kill (ARCHITECTURE §30):
+    // `MediaSessionController.setPlaybackState` decides whether a broadcast may
+    // `startForegroundService()` with it, and the service's `onStartCommand`
+    // decides with it whether to keep that promise by posting the real media
+    // notification or by promoting and demoting in silence. It is also media3's
+    // own `isAnySessionUserEngaged` (`playWhenReady && (STATE_READY ||
+    // STATE_BUFFERING)`) restated over the app's broadcasts — see
+    // `BroadcastPlayer.getState`, which maps exactly these two onto that pair.
+    assertTrue(Snapshot.EMPTY.copy(status = MediaPlaybackStatus.PLAYING).wantsForeground)
+    assertTrue(Snapshot.EMPTY.copy(status = MediaPlaybackStatus.BUFFERING).wantsForeground)
+    assertFalse(Snapshot.EMPTY.copy(status = MediaPlaybackStatus.PAUSED).wantsForeground)
+    assertFalse(Snapshot.EMPTY.copy(status = MediaPlaybackStatus.STOPPED).wantsForeground)
+    assertFalse(Snapshot.EMPTY.copy(status = MediaPlaybackStatus.ERROR).wantsForeground)
+    // The seed a playback resumption starts from is deliberately `stopped`, so
+    // the revival path cannot rely on this predicate and promotes by itself.
+    assertFalse(Snapshot.EMPTY.wantsForeground)
   }
 
   // MARK: - End-of-track latch policy
