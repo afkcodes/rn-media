@@ -2625,6 +2625,15 @@ export class Player {
     // Everything except the start offset, which belongs to one entry.
     const { startPosition: _startPosition, ...sharedOptions } = options
 
+    // PIPELINED, not awaited per entry: the command channel executes in call
+    // order, so correctness only needs the final await — and a per-entry
+    // `await` puts a JS microtask + bridge turnaround between every append,
+    // which on a real library is the difference between "instant" and
+    // seconds of silence before the jump (found via a consumer app whose
+    // user taps a song inside a several-thousand-track queue, 2026-08-19).
+    // A rejected append no longer stops the entries behind it from being
+    // issued; the first rejection still propagates from the batch await.
+    const appends: Promise<void>[] = []
     for (const [index, source] of sources.entries()) {
       // Per entry, not once for the whole queue: the HLS guard is decided by
       // each source's own extension, so a `.m3u8` next to a `.mp3` gets the
@@ -2640,8 +2649,9 @@ export class Player {
         index === startIndex ? options : sharedOptions,
         source
       )
-      await this.command(buildLoadfileArgs(source, 'append', fileOptions))
+      appends.push(this.command(buildLoadfileArgs(source, 'append', fileOptions)))
     }
+    await Promise.all(appends)
     // Shuffle before the jump, never after: the jump is what starts playback,
     // and shuffling a playing queue would renumber the entry mpv just started.
     // Nothing has played yet at this point, so "shuffle the whole list" and
