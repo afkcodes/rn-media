@@ -193,7 +193,7 @@ dependencies {
   // Declared dependencies precede the mockable jar on the unit-test runtime
   // classpath, so this one wins (verified by the tests themselves: they assert
   // parsed values, which a stub cannot produce).
-  testImplementation "org.json:json:20260719"
+  testImplementation "org.json:json:20260814"
 }
 
 react {
