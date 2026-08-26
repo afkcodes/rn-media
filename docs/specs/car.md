@@ -465,26 +465,20 @@ answering `onGetRoot`, so the capability must be declared **before**
 that order). Replacing the handler at runtime with one that has `search` would
 need reconnecting browsers to see the change; not a v1 concern, recorded here.
 
-**A-10 — the DHU could not be used; an instrumented `MediaBrowser` was.** DHU
-2.0 (build 2022-03-30, the only one the SDK ships) connects to Android Auto
-17.3.662854 and completes the TLS handshake, then stalls before it opens a
-window — the phone's `gearhead:car` process starts encoding H.264 for it, so the
-*phone* half of the session is up and the receiver never renders. Two
-environment notes for whoever tries next: passing `-c config/default_720p.ini`
-makes it fail earlier (at "connected", before TLS — the default 800×480 config
-is the one that negotiates), and its stdin must be held open or it exits
-immediately.
-
-So the browse tree is verified on the device by a **real `MediaBrowser`**
-instead: `apps/example/android/app/src/androidTest/.../CarBrowseInstrumentedTest.kt`,
-10 tests, run with `./gradlew :app:connectedDebugAndroidTest`. Android Auto is a
-legacy `MediaBrowserCompat` client and a media3 `MediaBrowser` walks the same
-session callbacks over the same binder, so this covers the root, the four tabs,
-drilling in, `content://` artwork (including fetching the bytes through the
-provider and proving an unregistered hash is refused), paging, `getItem`,
-search, the empty-list-not-error rule, and a browse **tap** end to end. What it
-cannot cover is what only a car draws: the grid, the group headings and the
-sign-in error screen. Those stay pending a working head unit.
+**A-10 — the DHU needs `startupfocus = true`; `scripts/dhu.sh` is the recipe.**
+DHU 2.0 (build 2022-03-30) connects to Android Auto 17.3.662854, finishes TLS
+and draws nothing — `screenshot` answers `Don't have video focus - nothing to
+screenshot`. It never requests video focus unless `~/.android/headunit.ini`
+sets `startupfocus = true`, a key present in the binary and in none of the
+shipped sample files. With it the head unit renders. Also: a stale
+`gearhead:car` session holds the server (force-stop Android Auto and restart
+the server before each connect); `-c config/default_720p.ini` breaks the
+handshake (800×480 negotiates); its stdin must stay open. The first diagnosis
+was "a 2022 receiver against a 2026 Auto" — wrong, and worth remembering.
+`scripts/dhu.sh [serial]` does all of it. What the car drew, and the
+instrumented `MediaBrowser` test that covers the same callbacks
+(`CarBrowseInstrumentedTest`, 10 cases, `./gradlew :app:connectedDebugAndroidTest`),
+are in ARCHITECTURE §31.
 
 **A-11 — a `metadataMismatch` false positive, found by driving the DHU.** With
 the car connected, tapping a track in the browse tree produced
