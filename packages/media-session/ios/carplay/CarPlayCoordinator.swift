@@ -9,6 +9,15 @@ import CarPlay
 import Foundation
 import UIKit
 
+/// `CPListTemplate.showsSpinnerWhileEmpty` is iOS 18.4+ (CI, 2026-08-26: "only
+/// available in iOS 18.4 or newer" — the review table had it at 12.0, which is
+/// the *template's* availability, not the property's). Below 18.4 an empty list
+/// is simply empty until `updateSections` lands; the fill is the same.
+@MainActor
+private func spin(_ template: CPListTemplate, _ on: Bool) {
+  if #available(iOS 18.4, *) { template.showsSpinnerWhileEmpty = on }
+}
+
 /**
  * Something changed on the session's side that the car may be showing.
  *
@@ -161,7 +170,7 @@ final class CarPlayCoordinator: NSObject {
     // root template promptly after `didConnect`; an app whose `getChildren` is
     // slow (or whose runtime is still booting) must not leave the car blank.
     let placeholder = CPListTemplate(title: nil, sections: [])
-    placeholder.showsSpinnerWhileEmpty = true
+    spin(placeholder, true)
     controller.setRootTemplate(placeholder, animated: false, completion: nil)
 
     guard let source = CarPlayLink.shared.source else {
@@ -176,7 +185,7 @@ final class CarPlayCoordinator: NSObject {
 
       switch answer {
       case .failure(let failure):
-        placeholder.showsSpinnerWhileEmpty = false
+        spin(placeholder, false)
         self.present(failure)
       case .items(let nodes):
         self.installRoot(nodes, in: controller, token: token)
@@ -198,7 +207,7 @@ final class CarPlayCoordinator: NSObject {
     tabs = result.accepted.map { node in
       let template = CPListTemplate(title: node.title, sections: [])
       template.tabTitle = node.title
-      template.showsSpinnerWhileEmpty = true
+      spin(template, true)
       return BrowseLevel(parentId: node.id, template: template)
     }
 
@@ -248,7 +257,7 @@ final class CarPlayCoordinator: NSObject {
   private func fill(_ level: BrowseLevel, token: Int) {
     guard !level.isLoading else { return }
     guard let source = CarPlayLink.shared.source else {
-      level.template.showsSpinnerWhileEmpty = false
+      spin(level.template, false)
       return
     }
     level.isLoading = true
@@ -258,7 +267,7 @@ final class CarPlayCoordinator: NSObject {
       level.isLoading = false
       guard self.generation == token else { return }
 
-      level.template.showsSpinnerWhileEmpty = false
+      spin(level.template, false)
       switch answer {
       case .failure(let failure):
         level.nodes = []
@@ -389,7 +398,7 @@ final class CarPlayCoordinator: NSObject {
 
     let token = generation
     let level = BrowseLevel(parentId: node.id, template: CPListTemplate(title: node.title, sections: []))
-    level.template.showsSpinnerWhileEmpty = true
+    spin(level.template, true)
     stack.append(level)
 
     controller.pushTemplate(level.template, animated: true) { [weak self] pushed, _ in
