@@ -234,6 +234,70 @@ class CarBrowseTest {
     assertFalse("a later play must reach the app", latch.consume())
   }
 
+  // MARK: - The item/queue mismatch that is not one
+
+  @Test
+  fun `a mismatch that the next broadcast resolves is never reported`() {
+    // The regression: an app describes one moment with setMediaItem +
+    // setPlaybackState, each of which hops to the main thread on its own, so
+    // the session holds half the statement for one turn. Observed on a device
+    // as `item id 'diverse-fm' vs queue[1] id 'fip-hls'` after a car tap moved
+    // playback from entry 0 to entry 1.
+    val turns = ArrayDeque<() -> Unit>()
+    val reported = mutableListOf<String>()
+    var live: String? = "item id 'a' vs queue[1] id 'b'"
+    val reporter = MismatchReporter({ turns.addLast(it) }, { live }, { reported.add(it) })
+
+    reporter.observe(live)
+    // The other half of the same broadcast lands before the check runs.
+    live = null
+    turns.removeFirst().invoke()
+
+    assertEquals(emptyList<String>(), reported)
+  }
+
+  @Test
+  fun `a mismatch that survives the turn is reported once`() {
+    val turns = ArrayDeque<() -> Unit>()
+    val reported = mutableListOf<String>()
+    val stuck = "item id 'a' vs queue[1] id 'b'"
+    val reporter = MismatchReporter({ turns.addLast(it) }, { stuck }, { reported.add(it) })
+
+    reporter.observe(stuck)
+    turns.removeFirst().invoke()
+    // getState() runs many times per broadcast; the app has not fixed it.
+    reporter.observe(stuck)
+    turns.removeFirst().invoke()
+
+    assertEquals(listOf(stuck), reported)
+  }
+
+  @Test
+  fun `many observations in one turn schedule one check`() {
+    val turns = ArrayDeque<() -> Unit>()
+    val reporter = MismatchReporter({ turns.addLast(it) }, { "x" }, { })
+
+    repeat(20) { reporter.observe("x") }
+
+    assertEquals(1, turns.size)
+  }
+
+  @Test
+  fun `a different mismatch is worth hearing again`() {
+    val turns = ArrayDeque<() -> Unit>()
+    val reported = mutableListOf<String>()
+    var live = "first"
+    val reporter = MismatchReporter({ turns.addLast(it) }, { live }, { reported.add(it) })
+
+    reporter.observe(live)
+    turns.removeFirst().invoke()
+    live = "second"
+    reporter.observe(live)
+    turns.removeFirst().invoke()
+
+    assertEquals(listOf("first", "second"), reported)
+  }
+
   @Test
   fun `arming twice in one turn schedules one disarm`() {
     val turns = ArrayDeque<() -> Unit>()

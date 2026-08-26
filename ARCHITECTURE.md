@@ -2311,14 +2311,34 @@ expiry).
 
 ### On-device verification (POCO F4, Android 16 / API 36, 2026-08-27)
 
-**The Desktop Head Unit does not work against current Android Auto.** DHU 2.0
-(build 2022-03-30, the only one the SDK ships) connects to Android Auto
-17.3.662854, completes the TLS handshake, and stalls before it opens a window
-while the phone's `gearhead:car` process is already encoding H.264 for it — the
-phone half is up, the 2022 receiver never renders. Two notes for whoever tries
-next: `-c config/default_720p.ini` fails *earlier* (the default 800×480 config
-is the one that negotiates), and its stdin must be held open or it exits at
-once. `--usb` accessory mode is untried.
+**The Desktop Head Unit needs one config key that none of its sample files
+carry.** DHU 2.0 (build 2022-03-30) connects to Android Auto 17.3.662854,
+completes the TLS handshake and then draws nothing — `screenshot` says
+`Don't have video focus - nothing to screenshot`. The receiver never asks for
+*video focus* unless `~/.android/headunit.ini` sets `startupfocus = true`; the
+key exists in the binary and in no shipped `.ini`. With it, the DHU renders.
+Three more notes for the next person: a stale `gearhead:car` session holds the
+head-unit server (force-stop Android Auto and restart the server before each
+connect, or the link dies right after `connected.`); `-c config/default_720p.ini`
+breaks the handshake (the default 800×480 negotiates); and the DHU's stdin must
+be held open or it exits at once. The first diagnosis — "a 2022 receiver
+against a 2026 Android Auto" — was wrong, and is kept here because it is the
+conclusion a stalled handshake invites.
+
+**What the car draws (DHU, 2026-08-27, screenshots reviewed by the architect):**
+the app in the car launcher (the merged `com.google.android.gms.car.application`
+meta-data); the browse root as four tabs *Library · Albums · Artists · Recent*
+with the search icon (`SEARCH_SUPPORTED` from the session-command gating);
+Library rows with title, subtitle and artwork rendering through
+`content://com.rnmediaplayerexample.rnmedia.artwork/<sha256>`, the one track
+without a cover correctly blank; **Albums as a grid** (`childStyle: 'grid'`
+honoured end to end); a real car tap → `playFromMediaId(track:fip-hls)` →
+`track 0 → 1` and Now Playing switching from Diverse FM to FIP, with **no
+`remote command: play`** after it — `MediaRequestLatch` proven through an actual
+head unit. With the sign-in simulation on *while playback is active*, the root
+shows "No items" rather than the sign-in screen, consistent with non-fatal
+replication (§31, errors) — the idle-state sign-in screen is still to be
+photographed.
 
 **So the tree was verified by the client Android Auto actually is.** Auto is a
 legacy `MediaBrowserCompat` browser; a media3 `MediaBrowser` walks the same
@@ -2357,10 +2377,19 @@ Auto (`pageSize = MAX_VALUE`) and fatal for a modern `MediaBrowser`; results
 are now windowed (`Long` arithmetic — `page * Integer.MAX_VALUE` overflows) and
 `paging_is_honoured_rather_than_crashing_the_session` pins it.
 
-**Still pending, and only a car can show it:** what the head unit *draws* —
-the albums grid, the group headings, the sign-in error screen with its
-button. CarPlay is CI-compiled only until Apple hardware exists (the cast
-precedent, #48).
+**A false positive the car exposed in the library.** A car tap produced
+`metadataMismatch: item id 'diverse-fm' vs queue[1] id 'fip-hls'` from an app
+whose every broadcast was self-consistent. An app describes one moment with two
+calls (`setMediaItem`, then `setPlaybackState`) and each hops to the main
+thread on its own, so for one looper turn the session holds half the statement
+and `getState()` judged an invariant on a state the app never published.
+`MismatchReporter` defers the check by one turn — both writes are already
+queued when the first runs, so a check posted from inside it lands after all
+of them. A mismatch the app genuinely publishes still reports; three
+consecutive track jumps on the device now report zero (was one per jump).
+
+**Still pending:** the idle-state sign-in screen photograph, and CarPlay, which
+is CI-compiled only until Apple hardware exists (the cast precedent, #48).
 
 ## Platform truths we build around (learned, verified)
 
