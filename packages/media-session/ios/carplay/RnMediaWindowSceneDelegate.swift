@@ -52,11 +52,11 @@ import UIKit
  *   that wrote one already owns its startup.
  */
 @objc(RnMediaWindowSceneDelegate)
-public final class RnMediaWindowSceneDelegate: UIResponder, UIWindowSceneDelegate {
+final class RnMediaWindowSceneDelegate: UIResponder, UIWindowSceneDelegate {
   /// `UIWindowSceneDelegate`'s window. iOS reads it; nothing else needs to.
-  public var window: UIWindow?
+  var window: UIWindow?
 
-  public func scene(
+  func scene(
     _ scene: UIScene,
     willConnectTo session: UISceneSession,
     options connectionOptions: UIScene.ConnectionOptions

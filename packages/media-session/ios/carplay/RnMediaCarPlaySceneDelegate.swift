@@ -37,11 +37,11 @@ import UIKit
  * through ``CarPlayLink``.
  */
 @objc(RnMediaCarPlaySceneDelegate)
-public final class RnMediaCarPlaySceneDelegate: UIResponder,
+final class RnMediaCarPlaySceneDelegate: UIResponder,
   CPTemplateApplicationSceneDelegate
 {
   /// The car connected and handed us its interface controller.
-  public func templateApplicationScene(
+  func templateApplicationScene(
     _ templateApplicationScene: CPTemplateApplicationScene,
     didConnect interfaceController: CPInterfaceController
   ) {
@@ -58,7 +58,7 @@ public final class RnMediaCarPlaySceneDelegate: UIResponder,
    * (developer.apple.com/documentation/carplay/cptemplateapplicationscenedelegate,
    * read 2026-08-26).
    */
-  public func templateApplicationScene(
+  func templateApplicationScene(
     _ templateApplicationScene: CPTemplateApplicationScene,
     didDisconnectInterfaceController interfaceController: CPInterfaceController
   ) {
