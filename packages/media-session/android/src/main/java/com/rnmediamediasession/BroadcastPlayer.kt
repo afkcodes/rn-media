@@ -236,8 +236,24 @@ internal class BroadcastPlayer(
    */
   private val pendingVolume = mutableListOf<SettableFuture<Any?>>()
 
-  /** Last value passed to [warnOnce]; see it for why only one is remembered. */
-  private var warnedMismatch: String? = null
+  /**
+   * The item/queue disagreement channel, deferred by a turn so that the gap
+   * between an app's `setMediaItem` and its `setPlaybackState` is not mistaken
+   * for one. See [MismatchReporter].
+   */
+  private val mismatchReporter = MismatchReporter(
+    postToNextTurn = { mainHandler.post(it) },
+    current = { snapshot.itemQueueMismatch },
+    report = { mismatch ->
+      // Reported as well as logged, with the same wording the iOS twin uses.
+      SessionErrors.report(
+        SessionErrorCode.METADATAMISMATCH,
+        "setMediaItem does not describe the current queue entry ($mismatch); the queue " +
+          "entry wins and the item's fields — including its duration — are ignored. " +
+          "Broadcast the matching queueIndex, or an item whose id matches it.",
+      )
+    },
+  )
 
   /**
    * Everything [getState] derives from a snapshot that is not the snapshot
@@ -342,7 +358,7 @@ internal class BroadcastPlayer(
         .setIsDeviceMuted(remote.muted)
     }
 
-    warnOnce(current.itemQueueMismatch)
+    mismatchReporter.observe(current.itemQueueMismatch)
 
     val timeline = derived.playlist
     if (timeline.isEmpty()) {
@@ -450,30 +466,6 @@ internal class BroadcastPlayer(
       .setMaxVolume(maxVolume)
       .apply { routingControllerId?.let(::setRoutingControllerId) }
       .build()
-
-  /**
-   * Report a `setMediaItem`/queue disagreement once per distinct combination.
-   *
-   * `getState()` runs many times per broadcast, so an unguarded log would be a
-   * flood. Only the last reported combination is remembered: mismatches are
-   * sticky in practice (they persist until the app fixes its broadcast), and a
-   * genuine flip-flop between two combinations is itself worth seeing twice.
-   * Main-thread confined like the rest of this class, hence no synchronisation.
-   */
-  private fun warnOnce(mismatch: String?) {
-    if (mismatch == null || mismatch == warnedMismatch) return
-    warnedMismatch = mismatch
-    // Reported as well as logged, with the same wording the iOS twin uses. The
-    // de-duplication stays here rather than in `SessionErrors`: this field is
-    // the *value* that changed, and a flip-flop between two mismatches is worth
-    // hearing twice.
-    SessionErrors.report(
-      SessionErrorCode.METADATAMISMATCH,
-      "setMediaItem does not describe the current queue entry ($mismatch); the queue " +
-        "entry wins and the item's fields — including its duration — are ignored. " +
-        "Broadcast the matching queueIndex, or an item whose id matches it.",
-    )
-  }
 
   private fun mediaItemData(item: NativeMediaItem, index: Int, snapshot: Snapshot): MediaItemData {
     // Per entry, not per snapshot: `effectiveDurationMs` folds in that entry's

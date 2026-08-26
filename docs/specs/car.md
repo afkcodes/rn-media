@@ -485,3 +485,19 @@ provider and proving an unregistered hash is refused), paging, `getItem`,
 search, the empty-list-not-error rule, and a browse **tap** end to end. What it
 cannot cover is what only a car draws: the grid, the group headings and the
 sign-in error screen. Those stay pending a working head unit.
+
+**A-11 — a `metadataMismatch` false positive, found by driving the DHU.** With
+the car connected, tapping a track in the browse tree produced
+`metadataMismatch: … item id 'diverse-fm' vs queue[1] id 'fip-hls'` from an app
+whose every individual broadcast was self-consistent. Cause: an app describes
+one moment with two calls (`setMediaItem`, then `setPlaybackState`) and each
+hops to the main thread separately, so for one looper turn the session holds
+*half* the statement — the new index with the old item — and `getState()` runs
+in that gap. The invariant was being judged on a state the app never published.
+
+Fixed by deferring the report one turn (`MismatchReporter`): both writes of a
+broadcast are already queued when the first runs, so a check posted from inside
+the first lands after all of them. A mismatch the app is genuinely publishing
+still reports, exactly once, and a *different* mismatch still reports again —
+all four cases are unit-tested. Verified on the device: three consecutive track
+jumps, zero reports (one per jump before).
