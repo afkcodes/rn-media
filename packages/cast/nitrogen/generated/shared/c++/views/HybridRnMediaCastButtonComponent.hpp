@@ -7,14 +7,15 @@
 
 #pragma once
 
-#include <optional>
-#include <NitroModules/NitroDefines.hpp>
-#include <NitroModules/NitroHash.hpp>
-#include <NitroModules/CachedProp.hpp>
-#include <react/renderer/core/ConcreteComponentDescriptor.h>
-#include <react/renderer/core/PropsParserContext.h>
+#include <NitroModules/ReactProp.hpp>
+#include <NitroModules/ViewComponentDescriptor.hpp>
+#include <NitroModules/ViewPropsHolderState.hpp>
 #include <react/renderer/components/view/ConcreteViewShadowNode.h>
 #include <react/renderer/components/view/ViewProps.h>
+#include <react/renderer/core/PropsParserContext.h>
+#include <react/renderer/core/RawProps.h>
+
+#include <string>
 
 #include <optional>
 #include <memory>
@@ -41,8 +42,20 @@ namespace margelo::nitro::rnmediacast::views {
                                  const react::RawProps& rawProps);
 
   public:
-    CachedProp<std::optional<double>> tintColor;
-    CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridRnMediaCastButtonSpec>& /* ref */)>>> hybridRef;
+    nitro::ReactProp<std::optional<double>> tintColor;
+    nitro::ReactProp<std::optional<std::function<void(const std::shared_ptr<HybridRnMediaCastButtonSpec>& /* ref */)>>> hybridRef;
+
+    [[nodiscard]]
+    bool hasSameProps(const HybridRnMediaCastButtonProps& other) const noexcept {
+      return tintColor.hasSameValue(other.tintColor) &&
+             hybridRef.hasSameValue(other.hybridRef);
+    }
+
+    [[nodiscard]]
+    bool hasAnyProvidedProps() const noexcept {
+      return tintColor.isProvided() ||
+             hybridRef.isProvided();
+    }
 
   private:
     static bool filterObjectKeys(const std::string& propName);
@@ -51,32 +64,7 @@ namespace margelo::nitro::rnmediacast::views {
   /**
    * State for the "RnMediaCastButton" View.
    */
-  class HybridRnMediaCastButtonState final {
-  public:
-    HybridRnMediaCastButtonState() = default;
-    explicit HybridRnMediaCastButtonState(const std::shared_ptr<HybridRnMediaCastButtonProps>& props):
-      _props(props) {}
-
-  public:
-    [[nodiscard]]
-    const std::shared_ptr<HybridRnMediaCastButtonProps>& getProps() const {
-      return _props;
-    }
-
-  public:
-#ifdef ANDROID
-  HybridRnMediaCastButtonState(const HybridRnMediaCastButtonState& /* previousState */, folly::dynamic /* data */) {}
-  folly::dynamic getDynamic() const {
-    throw std::runtime_error("HybridRnMediaCastButtonState does not support folly!");
-  }
-  react::MapBuffer getMapBuffer() const {
-    throw std::runtime_error("HybridRnMediaCastButtonState does not support MapBuffer!");
-  };
-#endif
-
-  private:
-    std::shared_ptr<HybridRnMediaCastButtonProps> _props;
-  };
+  using HybridRnMediaCastButtonState = nitro::ViewPropsHolderState<HybridRnMediaCastButtonProps>;
 
   /**
    * The Shadow Node for the "RnMediaCastButton" View.
@@ -89,21 +77,7 @@ namespace margelo::nitro::rnmediacast::views {
   /**
    * The Component Descriptor for the "RnMediaCastButton" View.
    */
-  class HybridRnMediaCastButtonComponentDescriptor final: public react::ConcreteComponentDescriptor<HybridRnMediaCastButtonShadowNode> {
-  public:
-    explicit HybridRnMediaCastButtonComponentDescriptor(const react::ComponentDescriptorParameters& parameters);
-
-  public:
-    /**
-     * A faster path for cloning props - reuses the caching logic from `HybridRnMediaCastButtonProps`.
-     */
-    std::shared_ptr<const react::Props> cloneProps(const react::PropsParserContext& context,
-                                                   const std::shared_ptr<const react::Props>& props,
-                                                   react::RawProps rawProps) const override;
-#ifdef ANDROID
-    void adopt(react::ShadowNode& shadowNode) const override;
-#endif
-  };
+  using HybridRnMediaCastButtonComponentDescriptor = nitro::ViewComponentDescriptor<HybridRnMediaCastButtonShadowNode>;
 
   /* The actual view for "RnMediaCastButton" needs to be implemented in platform-specific code. */
 

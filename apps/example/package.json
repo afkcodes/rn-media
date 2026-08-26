@@ -12,15 +12,15 @@
     "pod": "bundle install && bundle exec pod install --project-directory=ios"
   },
   "dependencies": {
-    "@react-native/new-app-screen": "0.87.0",
+    "@react-native/new-app-screen": "0.87.1",
     "@rn-media/audio-session": "*",
     "@rn-media/cast": "*",
     "@rn-media/media-session": "*",
     "@rn-media/player": "*",
-    "react": "19.2.3",
-    "react-native": "0.87.0",
+    "react": "19.2.8",
+    "react-native": "0.87.1",
     "react-native-mmkv": "^4.3.2",
-    "react-native-nitro-modules": "^0.36.5",
+    "react-native-nitro-modules": "^0.37.0",
     "react-native-safe-area-context": "^5.5.2"
   },
   "devDependencies": {
@@ -30,17 +30,17 @@
     "@react-native-community/cli": "20.2.0",
     "@react-native-community/cli-platform-android": "20.2.0",
     "@react-native-community/cli-platform-ios": "20.2.0",
-    "@react-native/babel-preset": "0.87.0",
-    "@react-native/eslint-config": "0.87.0",
-    "@react-native/metro-config": "0.87.0",
-    "@react-native/typescript-config": "0.87.0",
+    "@react-native/babel-preset": "0.87.1",
+    "@react-native/eslint-config": "0.87.1",
+    "@react-native/metro-config": "0.87.1",
+    "@react-native/typescript-config": "0.87.1",
     "@types/jest": "^30.0.0",
     "babel-plugin-module-resolver": "^5.0.2",
     "eslint": "^8.57.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
-  "//eslint": "`eslint` and `typescript` are declared here on purpose. `eslint` because `npm run lint` invokes the binary directly and used to rely on npm's auto-installed peer, which is not a dependency anyone declared. `typescript` because the workspace root pins ~6.0.3 for the ESLint stack (see the root package.json) — without this pin `tsc --noEmit` here would silently run that 6.x instead of the repo's TypeScript 7.",
+  "//eslint": "`eslint` and `typescript` are declared here on purpose. `eslint` because `npm run lint` invokes the binary directly and used to rely on npm's auto-installed peer, which is not a dependency anyone declared. `typescript` because the workspace root pins ~6.0.3 for the ESLint stack (see the root package.json) \u2014 without this pin `tsc --noEmit` here would silently run that 6.x instead of the repo's TypeScript 7.",
   "engines": {
     "node": ">= 22.13.0"
   }

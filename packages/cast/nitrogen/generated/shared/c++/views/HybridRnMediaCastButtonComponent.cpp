@@ -7,18 +7,12 @@
 
 #include "HybridRnMediaCastButtonComponent.hpp"
 
-#include <string>
-#include <exception>
-#include <utility>
-#include <NitroModules/NitroDefines.hpp>
-#include <NitroModules/JSIConverter.hpp>
-#include <NitroModules/PropNameIDCache.hpp>
-#include <react/renderer/core/RawValue.h>
-#include <react/renderer/core/ShadowNode.h>
-#include <react/renderer/core/ComponentDescriptor.h>
-#include <react/renderer/components/view/ViewProps.h>
+#include <NitroModules/NitroHash.hpp>
+#include <NitroModules/ReactProp.hpp>
 
 namespace margelo::nitro::rnmediacast::views {
+
+  using namespace facebook;
 
   extern const char HybridRnMediaCastButtonComponentName[] = "RnMediaCastButton";
 
@@ -26,26 +20,8 @@ namespace margelo::nitro::rnmediacast::views {
                                                              const HybridRnMediaCastButtonProps& sourceProps,
                                                              const react::RawProps& rawProps):
     react::ViewProps(context, sourceProps, rawProps, filterObjectKeys),
-    tintColor([&]() -> CachedProp<std::optional<double>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("tintColor", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.tintColor;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<double>>::fromRawValue(*runtime, value, sourceProps.tintColor);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("RnMediaCastButton.tintColor: ") + exc.what());
-      }
-    }()),
-    hybridRef([&]() -> CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridRnMediaCastButtonSpec>& /* ref */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("hybridRef", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.hybridRef;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridRnMediaCastButtonSpec>& /* ref */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.hybridRef);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("RnMediaCastButton.hybridRef: ") + exc.what());
-      }
-    }()) { }
+    tintColor(nitro::ReactProp<std::optional<double>>::fromRawValue("RnMediaCastButton", "tintColor", rawProps, sourceProps.tintColor)),
+    hybridRef(nitro::ReactProp<std::optional<std::function<void(const std::shared_ptr<HybridRnMediaCastButtonSpec>& /* ref */)>>>::fromRawValue("RnMediaCastButton", "hybridRef", rawProps, sourceProps.hybridRef)) { }
 
   bool HybridRnMediaCastButtonProps::filterObjectKeys(const std::string& propName) {
     switch (hashString(propName)) {
@@ -54,30 +30,5 @@ namespace margelo::nitro::rnmediacast::views {
       default: return false;
     }
   }
-
-  HybridRnMediaCastButtonComponentDescriptor::HybridRnMediaCastButtonComponentDescriptor(const react::ComponentDescriptorParameters& parameters)
-    : ConcreteComponentDescriptor(parameters,
-                                  react::RawPropsParser()) {}
-
-  std::shared_ptr<const react::Props> HybridRnMediaCastButtonComponentDescriptor::cloneProps(const react::PropsParserContext& context,
-                                                                                             const std::shared_ptr<const react::Props>& props,
-                                                                                             react::RawProps rawProps) const {
-    // 1. Prepare raw props parser
-    rawProps.parse(rawPropsParser_);
-    // 2. Copy props with Nitro's cached copy constructor
-    return HybridRnMediaCastButtonShadowNode::Props(context, /* & */ rawProps, props);
-  }
-
-#ifdef ANDROID
-  void HybridRnMediaCastButtonComponentDescriptor::adopt(react::ShadowNode& shadowNode) const {
-    // This is called immediately after `ShadowNode` is created, cloned or in progress.
-    // On Android, we need to wrap props in our state, which gets routed through Java and later unwrapped in JNI/C++.
-    auto& concreteShadowNode = static_cast<HybridRnMediaCastButtonShadowNode&>(shadowNode);
-    const std::shared_ptr<const HybridRnMediaCastButtonProps>& constProps = concreteShadowNode.getConcreteSharedProps();
-    const std::shared_ptr<HybridRnMediaCastButtonProps>& props = std::const_pointer_cast<HybridRnMediaCastButtonProps>(constProps);
-    HybridRnMediaCastButtonState state{props};
-    concreteShadowNode.setStateData(std::move(state));
-  }
-#endif
 
 } // namespace margelo::nitro::rnmediacast::views
