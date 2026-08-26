@@ -2309,20 +2309,58 @@ Rejected alternatives, for the record: granting `SET_MEDIA_ITEM` globally
 shows nothing); waiting for RN 0.88 (parity is a gate, and the shim has an
 expiry).
 
-### On-device verification (Android Auto — PENDING, 2026-08-27)
+### On-device verification (POCO F4, Android 16 / API 36, 2026-08-27)
 
-The Desktop Head Unit 2.0 is installed (`$ANDROID_HOME/extras/google/auto`,
-Linux: glibc 2.44, libc++ present) and the POCO F4 has gearhead. The pass needs
-two owner taps on the phone (Android Auto → About → version ×10 → developer
-mode; ⋮ → *Start head unit server*), then `adb forward tcp:5277 tcp:5277` and
-`./desktop-head-unit`. What it must show, per `docs/specs/car.md` §5: four root
-tabs; the Albums grid with artwork served by `content://…rnmedia.artwork`; a
-track tap starting playback with Now Playing metadata; the Search tab answering;
-the sign-in toggle producing Auto's error screen with its "Sign in" button; and
-a cold browse (`am force-stop`, then open the app in the DHU) listing from the
-cache and refreshing. Until those lines are pasted here, the Android half is
-compiled, unit-tested (134 Kotlin, 305 TS) and installed — not verified. CarPlay
-is CI-compiled only until Apple hardware exists (the cast precedent, #48).
+**The Desktop Head Unit does not work against current Android Auto.** DHU 2.0
+(build 2022-03-30, the only one the SDK ships) connects to Android Auto
+17.3.662854, completes the TLS handshake, and stalls before it opens a window
+while the phone's `gearhead:car` process is already encoding H.264 for it — the
+phone half is up, the 2022 receiver never renders. Two notes for whoever tries
+next: `-c config/default_720p.ini` fails *earlier* (the default 800×480 config
+is the one that negotiates), and its stdin must be held open or it exits at
+once. `--usb` accessory mode is untried.
+
+**So the tree was verified by the client Android Auto actually is.** Auto is a
+legacy `MediaBrowserCompat` browser; a media3 `MediaBrowser` walks the same
+session callbacks over the same binder and, unlike the DHU, produces values.
+`apps/example/android/app/src/androidTest/…/CarBrowseInstrumentedTest.kt`
+(10 tests, `./gradlew :app:connectedDebugAndroidTest`) boots the whole stack —
+Activity → RN → `MediaService.init` — and covers the root, the four tabs in
+order, drilling in, `content://` artwork (fetches the bytes through the
+provider and asserts an unregistered hash is refused), paging, `getItem`,
+search, the empty-list-never-error rule, and a browse tap end to end. Run twice
+on the device — once by the implementation lane, once by the architect:
+
+```
+Finished 10 tests on 22021211RI - 16
+BUILD SUCCESSFUL in 1m 35s
+ReactNativeJS: [example] remote command: getChildren(rn-media-root)
+ReactNativeJS: [example] remote command: getChildren(library)
+ReactNativeJS: [example] remote command: playFromMediaId(track:mp3-test)
+ReactNativeJS: [example] track 0 → 3
+ReactNativeJS: [example] remote command: getMediaItem(track:diverse-fm)
+ReactNativeJS: [example] remote command: search("diverse")
+```
+
+No `remote command: play` follows `playFromMediaId` — that line's absence is
+`MediaRequestLatch` swallowing media3's synthesised `play()` on hardware.
+`dumpsys media_session` reports `actions=2616839`, which decodes to include
+`ACTION_PLAY_FROM_MEDIA_ID` and `ACTION_PLAY_FROM_SEARCH` — absent before this
+change. Android Auto's own app list on the phone shows the example app: the
+car `<meta-data>` merged from the library.
+
+**Found by the lane's own review, before any device run:**
+`MediaLibrarySessionImpl.verifyResultItems` *throws* `IllegalStateException(
+"Invalid size=…, pageSize=…")` on the application thread when a result exceeds
+the requested page. Returning the whole cached list would have been fine for
+Auto (`pageSize = MAX_VALUE`) and fatal for a modern `MediaBrowser`; results
+are now windowed (`Long` arithmetic — `page * Integer.MAX_VALUE` overflows) and
+`paging_is_honoured_rather_than_crashing_the_session` pins it.
+
+**Still pending, and only a car can show it:** what the head unit *draws* —
+the albums grid, the group headings, the sign-in error screen with its
+button. CarPlay is CI-compiled only until Apple hardware exists (the cast
+precedent, #48).
 
 ## Platform truths we build around (learned, verified)
 

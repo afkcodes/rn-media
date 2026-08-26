@@ -464,3 +464,24 @@ answering `onGetRoot`, so the capability must be declared **before**
 `initialize` (the TS layer calls `setBrowseCapabilities` first, and a test pins
 that order). Replacing the handler at runtime with one that has `search` would
 need reconnecting browsers to see the change; not a v1 concern, recorded here.
+
+**A-10 — the DHU could not be used; an instrumented `MediaBrowser` was.** DHU
+2.0 (build 2022-03-30, the only one the SDK ships) connects to Android Auto
+17.3.662854 and completes the TLS handshake, then stalls before it opens a
+window — the phone's `gearhead:car` process starts encoding H.264 for it, so the
+*phone* half of the session is up and the receiver never renders. Two
+environment notes for whoever tries next: passing `-c config/default_720p.ini`
+makes it fail earlier (at "connected", before TLS — the default 800×480 config
+is the one that negotiates), and its stdin must be held open or it exits
+immediately.
+
+So the browse tree is verified on the device by a **real `MediaBrowser`**
+instead: `apps/example/android/app/src/androidTest/.../CarBrowseInstrumentedTest.kt`,
+10 tests, run with `./gradlew :app:connectedDebugAndroidTest`. Android Auto is a
+legacy `MediaBrowserCompat` client and a media3 `MediaBrowser` walks the same
+session callbacks over the same binder, so this covers the root, the four tabs,
+drilling in, `content://` artwork (including fetching the bytes through the
+provider and proving an unregistered hash is refused), paging, `getItem`,
+search, the empty-list-not-error rule, and a browse **tap** end to end. What it
+cannot cover is what only a car draws: the grid, the group headings and the
+sign-in error screen. Those stay pending a working head unit.
