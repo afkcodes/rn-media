@@ -1189,10 +1189,24 @@ Android, a connected CarPlay scene on iOS.
 
 ### Testing it
 
-The Desktop Head Unit runs on Linux and macOS
-(`$ANDROID_HOME/extras/google/auto/desktop-head-unit`). On the phone: Android
-Auto → About → tap the header 10× to unlock developer mode → ⋮ → *Start head
-unit server*. Then `adb forward tcp:5277 tcp:5277` and run the DHU.
+Two ways, and the first is the one that catches layout.
+
+**The Desktop Head Unit** (Linux / macOS, `sdkmanager "extras;google;auto"`)
+draws the real Android Auto UI on your desk. Three things its documentation
+does not say, all handled by [`scripts/dhu.sh`](../../scripts/dhu.sh) in this
+repo: `~/.android/headunit.ini` must contain `startupfocus = true` or the DHU
+connects and **draws nothing** (no shipped sample sets it); Android Auto's
+head-unit server must be restarted after a force-stop before every connect, or
+the link dies right after `connected.`; and the DHU exits the moment its stdin
+closes. One-time on the phone: Android Auto → About → tap the header 10× for
+developer mode.
+
+**A real `MediaBrowser`** walks the same session callbacks over the same
+binder that Auto's legacy client does, and unlike a head unit it produces
+values you can assert on. The example app's
+`CarBrowseInstrumentedTest` (`./gradlew :app:connectedDebugAndroidTest`) is
+the model: root, tabs, drilling in, `content://` artwork bytes, paging,
+`getItem`, search, and a tap end to end, on the phone.
 
 ## CarPlay
 

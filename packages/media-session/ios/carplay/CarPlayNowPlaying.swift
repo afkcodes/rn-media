@@ -107,7 +107,7 @@ enum CarPlayCycle {
    */
   static func next(after current: Double, in rates: [Double]) -> Double {
     guard let first = rates.first else { return current }
-    guard let index = rates.firstIndex(where: { abs($0 - current) < 0.001 }) else {
+    guard let index = rates.firstIndex(where: { (rate: Double) -> Bool in Swift.abs(rate - current) < 0.001 }) else {
       return first
     }
     return rates[(index + 1) % rates.count]

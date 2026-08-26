@@ -83,6 +83,7 @@ that describe your app and ignore the rest.
 | …that keeps playing in the background, on the lock screen and in the notification | **+** [`@rn-media/media-session`](packages/media-session/README.md) |
 | …that ducks for navigation prompts, pauses for calls and stops when the headphones come out | **+** [`@rn-media/audio-session`](packages/audio-session/README.md) |
 | …that can hand off to a Chromecast | **+** [`@rn-media/cast`](packages/cast/README.md) |
+| …that the car can browse — Android Auto tabs, CarPlay templates, voice "play X" | already in `media-session`: implement `getChildren` + `playFromMediaId` ([recipe](#in-the-car)) |
 | A lock screen for a player that is **not** ours — RNTP, `expo-audio`, a TTS engine | `media-session` **alone** |
 | Focus / interruption handling for someone else's player | `audio-session` **alone** |
 
@@ -567,6 +568,93 @@ not. And on stock libmpv only the play-time half of the resolver exists; the
 prefetch hook is [our patch](docs/engine.md).
 [Full contract](packages/player/README.md#dynamic-source-resolution-signed-urls-transcode-sessions).
 
+### In the car
+
+Android Auto and CarPlay are the same feature seen twice: a **tree** the car
+browses and a **tap** that plays. One handler serves both — nothing here is
+platform-specific except the two lines of iOS config at the end.
+
+```ts
+import {
+  BaseMediaHandler, BrowseError, BROWSE_ROOT, MediaService, useCarConnection,
+  type BrowseItem, type SearchFocus,
+} from '@rn-media/media-session'
+
+class Handler extends BaseMediaHandler {
+  // The root's children are the car's TABS: at most four, browsable only.
+  async getChildren(parentId: string): Promise<BrowseItem[]> {
+    if (!(await auth.isSignedIn())) {
+      // The car draws its sign-in screen, with a button that opens this URL.
+      throw new BrowseError('authenticationExpired', 'Sign in to browse your library',
+        { label: 'Sign in', url: 'myapp://signin' })
+    }
+    if (parentId === BROWSE_ROOT) {
+      return [
+        { id: 'albums', title: 'Albums', browsable: true, childStyle: 'grid', mediaType: 'folderAlbums' },
+        { id: 'artists', title: 'Artists', browsable: true, mediaType: 'folderArtists' },
+        { id: 'recent', title: 'Recent', browsable: true },
+      ]
+    }
+    if (parentId === 'albums') {
+      return (await catalogue.albums()).map((a) => ({
+        id: `album:${a.id}`, title: a.title, subtitle: a.artist,
+        artworkUri: a.coverUrl,        // https is fine — served to Auto via content:// for you
+        browsable: true, playable: true,  // opens the track list AND plays from the top
+      }))
+    }
+    if (parentId.startsWith('album:')) {
+      return (await catalogue.tracks(parentId.slice(6))).map((t) => ({
+        id: `track:${t.id}`, title: t.title, subtitle: t.artist,
+        artworkUri: t.coverUrl, playable: true, explicit: t.explicit,
+      }))
+    }
+    return []                       // an unknown parent is an empty list, never an error
+  }
+
+  // The car tapped something playable (or voice picked it). Build the queue,
+  // broadcast, play — your next broadcast is the acknowledgement.
+  async playFromMediaId(id: string) {
+    const tracks = id.startsWith('album:')
+      ? await catalogue.tracks(id.slice(6))
+      : [await catalogue.track(id.slice(6))]
+    await player.loadPlaylist(tracks.map((t) => t.streamUrl))
+    service.setQueue(tracks.map(toMediaItem))
+    player.play()
+  }
+
+  // "Play some jazz" — Android Auto / Assistant. `query` can be '' ("play something").
+  async playFromSearch(query: string, focus: SearchFocus) {
+    const hit = query === '' ? await catalogue.recent(1) : await catalogue.search(query, focus)
+    if (hit.length > 0) await this.playFromMediaId(`track:${hit[0].id}`)
+  }
+
+  // Auto's search tab. CarPlay audio apps have no search template, so iOS never calls it.
+  async search(query: string): Promise<BrowseItem[]> {
+    return (await catalogue.search(query)).map((t) => ({
+      id: `track:${t.id}`, title: t.title, subtitle: t.artist, playable: true,
+    }))
+  }
+}
+
+const service = await MediaService.init(() => new Handler())
+
+// A download finished, the library synced — tell the car that list is stale.
+downloads.on('complete', () => service.invalidateBrowse('recent'))
+
+// In the UI: hide the mini-player while the car is driving playback.
+function MiniPlayer() {
+  const car = useCarConnection()          // { kind: 'none' | 'androidAuto' | 'automotiveOs' | 'carPlay' }
+  return car.kind === 'none' ? <Bar /> : null
+}
+```
+
+Android needs **nothing else** — the car manifest entry merges from the library.
+CarPlay needs a UIScene app and Apple's entitlement, which the Expo plugin
+writes: `["@rn-media/media-session", { "carPlay": true }]` (bare RN: the two
+snippets in the [package README](packages/media-session/README.md#carplay)).
+The car's rules, what each field becomes on each platform, and the Desktop Head
+Unit recipe are all there too.
+
 ## Cast to a speaker
 
 Casting is a **URL handoff, not an output route**: mpv can never *be* the thing
@@ -809,15 +897,23 @@ stays out): [docs/engine.md](docs/engine.md#reaching-into-mpv).
 | `service.getSleepTimerRemaining(): number \| undefined` | Seconds | |
 | `service.setResumptionSnapshot(snapshot?: string): void` | Writes the native mirror by hand | `withPersistence` does this for you; no-op on iOS |
 | `service.stopService(): Promise<void>` | The **only** way to end background execution | Does not forget the persisted session |
+| `service.invalidateBrowse(parentId?: string): void` | The car's list for `parentId` changed (download finished, library sync) | Android `notifyChildrenChanged`; CarPlay rebuilds the visible template; omit the id for everything |
+| `service.getCarConnection(): CarConnection` | `{ kind: 'none' \| 'androidAuto' \| 'automotiveOs' \| 'carPlay' }` | Reactive twin: `useCarConnection()` |
+| `BrowseItem` | One node of the car tree | `{ id, title, subtitle?, artworkUri?, browsable?, playable?, childStyle?, group?, explicit?, completion?, mediaType? }` — an item may be **both** browsable and playable |
+| `BROWSE_ROOT` | The id `getChildren` receives for the root | Its children are the tabs: **≤ 4, browsable only**; extras are dropped and reported as `browseRootRejected` |
+| `BrowseError` | Throw it from any browse method | `new BrowseError('authenticationExpired', msg, { label: 'Sign in', url })` shows the car's sign-in screen; codes: `authenticationExpired \| premiumAccountRequired \| notAvailableInRegion \| parentalControlRestricted \| notSupported` |
 | `MediaControl` | `'play' \| 'pause' \| 'stop' \| 'skipToNext' \| 'skipToPrevious' \| 'fastForward' \| 'rewind' \| 'repeatMode' \| 'shuffle'` | Buttons, in order |
 | `MediaCapability` | `'play' \| 'pause' \| 'stop' \| 'seek' \| 'skipToNext' \| 'skipToPrevious' \| 'skipToQueueItem' \| 'setRate' \| 'setRepeatMode' \| 'setShuffle'` | Commands your handler will service |
 | `MediaPlaybackStatus` | `'playing' \| 'paused' \| 'buffering' \| 'stopped' \| 'error'` | |
 
 **Handlers.** `MediaHandler` is `play`, `pause`, `stop`, `seekTo(ms)`,
 `skipToNext`, `skipToPrevious`, `skipToQueueItem(index)`, `setRate(rate)`,
-`onTaskRemoved`, `customAction(name, extras?)`, `getChildren(parentId)`,
-`getMediaItem(id)` — plus the optional `onSetRepeatMode`, `onSetShuffle`,
-`onSetDeviceVolume`, `onAdjustDeviceVolume`, `onSetDeviceMuted`, `onSleepTimer`,
+`onTaskRemoved`, `customAction(name, extras?)`, and the car trio
+`getChildren(parentId)`, `getMediaItem(id)`, `playFromMediaId(id)` — plus the
+optional `playFromSearch(query, focus)` (voice: "play some jazz"; absent ⇒ voice
+play is not advertised), `search(query)` (Auto's search tab; absent ⇒ the tab is
+not drawn), `onSetRepeatMode`, `onSetShuffle`, `onSetDeviceVolume`,
+`onAdjustDeviceVolume`, `onSetDeviceMuted`, `onSleepTimer`,
 `onPlaybackResumption` and `onSessionError`.
 
 | | |
@@ -903,8 +999,8 @@ nothing in an app has to.
 |---|---|
 | React Native | **>= 0.82** (New Architecture); developed against 0.87.0 |
 | Peer dependency | [`react-native-nitro-modules`](https://nitro.margelo.com) |
-| Android setup | minSdk **24**, compileSdk **36**. Nothing to configure: the `media-session` manifest merges the foreground-service permissions and the `mediaPlayback` service, and `POST_NOTIFICATIONS` is *not* required for media notifications |
-| iOS setup | **15.1+** — `@rn-media/cast` raises the floor to **16.0** and needs **Xcode 26+** to build. One `Info.plist` key: `UIBackgroundModes` → `<array><string>audio</string></array>` |
+| Android setup | minSdk **24**, compileSdk **36**. Nothing to configure: the `media-session` manifest merges the foreground-service permissions, the `mediaPlayback` service, the Android Auto declaration and the artwork provider; `POST_NOTIFICATIONS` is *not* required for media notifications |
+| iOS setup | **15.1+** — `@rn-media/cast` raises the floor to **16.0** and needs **Xcode 26+** to build. One `Info.plist` key: `UIBackgroundModes` → `<array><string>audio</string></array>`. CarPlay adds a scene manifest and the `com.apple.developer.carplay-audio` entitlement (Apple-granted) — `carPlay: true` on the plugin writes both |
 | Expo | Prebuild (managed) workflow, no manual native edits: `"plugins": ["@rn-media/media-session"]` covers the whole library, merges `UIBackgroundModes` idempotently, and installs the notification drawable — the only way a prebuild app can add one. Expo Go cannot load this library; use a development build. [Plugin reference](packages/media-session/README.md#expo-config-plugin) |
 | Android binary | 3.63 MB downloaded for `arm64-v8a`; 7,338,952 bytes of stripped `libmpv.so` (the other three ABIs are in the same band) |
 | iOS binary | `Mpv.framework`'s device slice is 1,756,424 bytes; ≈7.1 MB across all ten frameworks |
@@ -977,6 +1073,14 @@ Every row here is a real bug someone hit, in this repo or in review.
   otherwise. In-app volume control and the keys with the app on screen do drive
   the receiver. The routing rules with the screen off are under investigation,
   and this entry stays until a physical press proves it either way.
+- **CarPlay has never been run** — it compiles on CI and mirrors Android Auto's
+  handler contract, but no Simulator or head-unit session has been observed
+  (Apple hardware and the entitlement are both owner-side). Android Auto *is*
+  verified: on the Desktop Head Unit and by a real `MediaBrowser` on a phone.
+- **Cold browse from the car needs `android.playbackResumption: true`.** A car
+  binding a dead process gets the cached tree immediately; refreshing it means
+  reviving JavaScript, and only the resumption path is allowed to. Without it
+  the car sees the last cached lists until the app is opened.
 
 ## Roadmap
 
