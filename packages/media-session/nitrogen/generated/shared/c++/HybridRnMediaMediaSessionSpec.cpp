@@ -26,6 +26,9 @@ namespace margelo::nitro::rnmediamediasession {
       prototype.registerHybridMethod("cancelSleepTimer", &HybridRnMediaMediaSessionSpec::cancelSleepTimer);
       prototype.registerHybridMethod("getSleepTimerRemaining", &HybridRnMediaMediaSessionSpec::getSleepTimerRemaining);
       prototype.registerHybridMethod("getSleepTimer", &HybridRnMediaMediaSessionSpec::getSleepTimer);
+      prototype.registerHybridMethod("setBrowseCapabilities", &HybridRnMediaMediaSessionSpec::setBrowseCapabilities);
+      prototype.registerHybridMethod("invalidateBrowse", &HybridRnMediaMediaSessionSpec::invalidateBrowse);
+      prototype.registerHybridMethod("getCarConnection", &HybridRnMediaMediaSessionSpec::getCarConnection);
     });
   }
 

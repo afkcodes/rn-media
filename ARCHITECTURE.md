@@ -2192,6 +2192,138 @@ mId='playback',                   mName=Playback,                     mImportanc
 — the app's own channel untouched, and ours already gone from everything the
 user can see.
 
+### 31. The car is a browser that taps: one handler, a per-controller door, and a cache that outlives JS
+
+Android Auto and CarPlay are the same feature seen twice (`docs/specs/car.md`):
+a **tree** the car browses (`getChildren(parentId)`, `getMediaItem(id)`,
+`search(query)`) and a **tap** that starts playback (`playFromMediaId(id)`,
+`playFromSearch(query, focus)`). One `MediaHandler`, one `BrowseItem`, both
+platforms — parity by construction rather than by two feature flags.
+
+**The tap arrives through the door we kept shut, so the door became per-controller.**
+Android Auto is a *legacy* `MediaBrowserCompat` client. Its tap is
+`onPlayFromMediaId` → `MediaSessionLegacyStub.handleMediaRequest` →
+`dispatchSessionTaskWithPlayerCommand(COMMAND_SET_MEDIA_ITEM, …)` →
+`MediaSession.Callback.onSetMediaItems` carrying only a `mediaId` (voice: the
+same path with `requestMetadata.searchQuery`) — media3 1.11.0 source, not
+javadoc. The media-session spec's rule that `COMMAND_SET_MEDIA_ITEM` is never
+advertised (a stray controller must not replace the app's playlist) stays true
+for strays: `onConnectAsync` grants it only when
+`session.isAutoCompanionController` (`com.google.android.projection.gearhead`),
+`session.isAutomotiveController` (`com.android.car.media` / `.carlauncher`) or
+`ControllerInfo.isTrusted()` says so, and *removes* it otherwise
+(`CarControllers.carCommands`, a pure predicate with a JVM test). Two things the
+implementation found that the design had not: the grant is inert unless the
+**player** also advertises the command (`ConnectedControllersManager.
+isPlayerCommandAvailable` ANDs the two), so `MediaButtons.addAlways` now carries
+it and the per-controller step is a *removal*; and `onSetMediaItems` answers
+with the **current** timeline unchanged — the app's next broadcast is the
+acknowledgement (§9), and `SimpleBasePlayer.handleSetMediaItems` is never
+reached with foreign items (asserted).
+
+**media3 synthesises a `play()` after the tap, and for a facade that means
+"resume the wrong song".** `handleMediaRequest` runs `setMediaItems → prepare →
+play` inline once `onSetMediaItems` resolves. A real player plays what was just
+set; this player's `play()` is `handlers.play()`, i.e. resume the *previous*
+track while the app is still loading the tapped one — a fraction of a second of
+the wrong song on a car stereo. `MediaRequestLatch` swallows exactly that call:
+armed in `onSetMediaItems`, disarmed on the next looper turn (the whole media3
+sequence runs inside one message, so the window is "the rest of this turn", not
+a duration). Consuming, not peeking — a second `play` in the same turn is a
+real gesture and reaches the app.
+
+**Browse is a pull with a native cache, not a pushed snapshot.** The obvious
+design (and queue-player's) pushes a whole static tree into native so a cold car
+connection answers without JS. Ours asks the handler through Nitro's
+value-returning callbacks and writes every answer to `BrowseCache` (memory +
+disk JSON, 64 entries / 2 MB, LRU). A car binding a dead process gets the cache
+(or an empty list — "return an empty list rather than error codes") immediately,
+a revival starts **only for a car controller** (a SystemUI bind must not boot
+the app, §30), and `notifyChildrenChanged` fires for every parent served stale
+once JS answers. Dynamic trees, and it works when JS is dead. A pull that does
+not answer within 5 s serves the cache and logs; the car never spins forever.
+Consequence worth stating plainly: the browse revival passes `promotes = false`
+— a bind makes no `startForegroundService()` promise and promoting would be a
+background FGS start on API 31+ — so **cold browse requires
+`android.playbackResumption: true`**; a browse-only session is the follow-up.
+
+**Nitro's returning callback is a promise of a promise.** A handler declared
+`(parentId) => Promise<NativeBrowseResult>` is generated as
+`Promise<Promise<NativeBrowseResult>>` on both platforms (the outer schedules
+onto the JS thread, the inner is the JS promise). Unwrap twice; the TS
+declaration stays as it is because that is what lets an async handler typecheck.
+Found by the iOS lane in the generated Swift, forwarded to Android before it
+cost a debugging round.
+
+**Car artwork cannot be a URL.** Google: browse artwork is `content://` or
+`android.resource://` only; bitmaps in results are banned (AAOS, 1 MB binder).
+`RnMediaArtworkProvider` (exported, read-only — UAMP's precedent) serves
+`cacheDir/rn-media/artwork/<sha256(url)>`, downloading on miss at the browser's
+`MEDIA_ART_SIZE_PIXELS` hint, and **only for URLs the browse path registered**
+(`ArtworkRegistry`); it is not a general fetch endpoint. The manifest merges the
+car `<meta-data>` and `automotive_app_desc.xml` from the library — Android is
+zero-config.
+
+**Errors reach the car's screen only for two codes.** `LibraryResult` errors are
+replicated to the platform state for legacy browsers only when the code is
+`ERROR_SESSION_AUTHENTICATION_EXPIRED` or
+`ERROR_SESSION_PARENTAL_CONTROL_RESTRICTED`
+(`MediaLibrarySessionImpl.isReplicationErrorCode`; `onGetLibraryRoot` exempt;
+mode `NON_FATAL` by default since 1.9.0). The architect's spec said
+`PREMIUM_ACCOUNT_REQUIRED` from a summarised javadoc; Lane A corrected it from
+source — the evidence rule at work. `BrowseError` carries an optional
+`resolution` (label + deep link) that becomes the
+`ERROR_RESOLUTION_ACTION_LABEL/_INTENT` extras behind Auto's "Sign in" button.
+Legacy string keys are copied with their source cited because media3's own copy
+(`androidx.media3.session.legacy.MediaConstants`) is `@RestrictTo(LIBRARY)`.
+
+**Root tabs are four, browsable-only, and the drop is reported.** The car's
+root hint says so; extras and playable roots are dropped by the TS layer (and
+again natively at the browser's smaller hint) and surface once on the
+sessionError channel as `browseRootRejected` — never silently (§27).
+
+**CarPlay needs a UIScene app; RN 0.87 is not one.** The scene entrypoint
+(`startReactNativeWithModuleName:inWindow:connectionOptions:`) exists on RN
+`main` (→ 0.88) and is absent in 0.87.1 (both headers read). So the pod ships
+two `@objc` bare-name delegates the app's `Info.plist` names:
+`RnMediaCarPlaySceneDelegate` and `RnMediaWindowSceneDelegate`, the latter a
+phone-window shim that re-parents RN's root view under the live `UIWindowScene`
+(react-native-carplay and queue-player do the same) with a written expiry: it is
+deleted when the app adopts 0.88's entrypoint. Templates come from the same
+handler — `CPTabBarTemplate` of lazily-filled `CPListTemplate`s, playable taps
+push `CPNowPlayingTemplate.shared`, which our `MPNowPlayingInfoCenter` already
+feeds; repeat/shuffle/rate buttons cycle through the same handlers as the lock
+screen. `search`/`playFromSearch` are never called on iOS because a CarPlay
+audio app has no search template — a platform absence recorded in the table,
+not a gap. The Expo plugin's `carPlay: true` writes the scene manifest and the
+`com.apple.developer.carplay-audio` entitlement (Apple-approved; the Simulator
+needs only the key).
+
+**One C++ keyword.** `explicit` is a C++ keyword, so the bridge field is
+`NativeBrowseItem.isExplicit`; the public `BrowseItem.explicit` is unchanged. It
+surfaced at `:app:assembleDebug`, after every TS gate was green.
+
+Rejected alternatives, for the record: granting `SET_MEDIA_ITEM` globally
+(reintroduces the playlist-replacement hole); pushing a static snapshot
+(dies with the service, static only); serving HTTPS artwork and hoping (Auto
+shows nothing); waiting for RN 0.88 (parity is a gate, and the shim has an
+expiry).
+
+### On-device verification (Android Auto — PENDING, 2026-08-27)
+
+The Desktop Head Unit 2.0 is installed (`$ANDROID_HOME/extras/google/auto`,
+Linux: glibc 2.44, libc++ present) and the POCO F4 has gearhead. The pass needs
+two owner taps on the phone (Android Auto → About → version ×10 → developer
+mode; ⋮ → *Start head unit server*), then `adb forward tcp:5277 tcp:5277` and
+`./desktop-head-unit`. What it must show, per `docs/specs/car.md` §5: four root
+tabs; the Albums grid with artwork served by `content://…rnmedia.artwork`; a
+track tap starting playback with Now Playing metadata; the Search tab answering;
+the sign-in toggle producing Auto's error screen with its "Sign in" button; and
+a cold browse (`am force-stop`, then open the app in the DHU) listing from the
+cache and refreshing. Until those lines are pasted here, the Android half is
+compiled, unit-tested (134 Kotlin, 305 TS) and installed — not verified. CarPlay
+is CI-compiled only until Apple hardware exists (the cast precedent, #48).
+
 ## Platform truths we build around (learned, verified)
 
 - **`UInt(_: Double)` traps in Swift where `Double.toInt()` is total in

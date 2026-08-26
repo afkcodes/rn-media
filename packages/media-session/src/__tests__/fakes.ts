@@ -1,6 +1,7 @@
 import type {
   MediaSessionConfig,
   MediaSessionHandlers,
+  NativeBrowseCapabilities,
   NativeMediaItem,
   NativePlaybackState,
   NativeRemotePlayback,
@@ -10,6 +11,7 @@ import type {
   SleepTimerMode,
 } from '../specs/media-session.nitro'
 import type {
+  BrowseItem,
   MediaHandler,
   MediaItem,
   MediaRepeatMode,
@@ -47,6 +49,31 @@ export class FakeNativeMediaSession implements RnMediaMediaSession {
    * for the after-stop window (see the spec's `onRevivalRequested`).
    */
   revivalRequester: (() => void) | undefined
+
+  /** Every `setBrowseCapabilities`, in order. */
+  readonly browseCapabilities: NativeBrowseCapabilities[] = []
+  /** Every `invalidateBrowse` argument, in order (`undefined` = everything). */
+  readonly invalidations: (string | undefined)[] = []
+  /** What `getCarConnection()` answers. Set it, then `emitCarConnection`. */
+  carConnection = 'none'
+
+  setBrowseCapabilities(caps: NativeBrowseCapabilities): void {
+    this.browseCapabilities.push(caps)
+  }
+
+  invalidateBrowse(parentId?: string): void {
+    this.invalidations.push(parentId)
+  }
+
+  getCarConnection(): string {
+    return this.carConnection
+  }
+
+  /** Play the part of a head unit plugging in or out. */
+  emitCarConnection(kind: string): void {
+    this.carConnection = kind
+    this.emit().onCarConnectionChanged(kind)
+  }
 
   initialize(
     config: MediaSessionConfig,
@@ -218,7 +245,7 @@ export class RecordingHandler implements MediaHandler {
   /** When set, every method throws it synchronously. */
   throwWith: Error | undefined
 
-  private record(call: string): void | Promise<void> {
+  protected record(call: string): void | Promise<void> {
     this.calls.push(call)
     if (this.throwWith != null) throw this.throwWith
     if (this.rejectWith != null) return Promise.reject(this.rejectWith)
@@ -283,14 +310,58 @@ export class RecordingHandler implements MediaHandler {
       `customAction(${name},${JSON.stringify(extras) ?? 'undefined'})`
     )
   }
-  getChildren(parentId: string): Promise<MediaItem[]> {
+  /** What {@link getChildren} answers, keyed by parent id. */
+  readonly children = new Map<string, BrowseItem[]>()
+  /** When set, every browse method rejects with it. */
+  browseRejectWith: unknown
+
+  getChildren(parentId: string): Promise<BrowseItem[]> {
     this.calls.push(`getChildren(${parentId})`)
-    return Promise.resolve([])
+    if (this.browseRejectWith != null) {
+      return Promise.reject(this.browseRejectWith)
+    }
+    return Promise.resolve(this.children.get(parentId) ?? [])
   }
-  getMediaItem(id: string): Promise<MediaItem | undefined> {
+  getMediaItem(id: string): Promise<BrowseItem | undefined> {
     this.calls.push(`getMediaItem(${id})`)
-    return Promise.resolve(undefined)
+    if (this.browseRejectWith != null) {
+      return Promise.reject(this.browseRejectWith)
+    }
+    return Promise.resolve(
+      [...this.children.values()].flat().find((child) => child.id === id)
+    )
   }
+  playFromMediaId(id: string) {
+    return this.record(`playFromMediaId(${id})`)
+  }
+}
+
+/**
+ * A handler that also answers voice and search — separate from
+ * {@link RecordingHandler} because the *absence* of these two methods is what
+ * the capability declaration is made of, and one class cannot demonstrate both.
+ */
+export class SearchingHandler extends RecordingHandler {
+  readonly results: BrowseItem[] = []
+
+  playFromSearch(query: string, focus: { kind: string }) {
+    return this.record(`playFromSearch(${query},${focus.kind})`)
+  }
+  search(query: string): Promise<BrowseItem[]> {
+    this.calls.push(`search(${query})`)
+    if (this.browseRejectWith != null) {
+      return Promise.reject(this.browseRejectWith)
+    }
+    return Promise.resolve(this.results)
+  }
+}
+
+/** A valid minimal browse node. */
+export function browseItem(
+  id: string,
+  overrides: Partial<BrowseItem> = {}
+): BrowseItem {
+  return { id, title: `Node ${id}`, ...overrides }
 }
 
 /** A valid minimal media item. */

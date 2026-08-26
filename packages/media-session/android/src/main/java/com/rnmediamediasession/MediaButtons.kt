@@ -59,6 +59,21 @@ internal object MediaButtons {
     .add(Player.COMMAND_GET_TIMELINE)
     .add(Player.COMMAND_GET_METADATA)
     .add(Player.COMMAND_PREPARE)
+    // The car browse tap, and it has to be on the *player* to work at all:
+    // media3 gates a controller's command on BOTH the per-controller grant and
+    // the player's own set —
+    // `ConnectedControllersManager.isPlayerCommandAvailable` returns
+    // `info.playerCommands.contains(c) && playerWrapper.getAvailableCommands()
+    // .contains(c)` (media3 1.11.0). Granting it per controller in
+    // `onConnectAsync` and leaving it off the player would be a silent no-op:
+    // Android Auto's tap would arrive at `dispatchSessionTaskWithPlayerCommand`
+    // and be dropped without a line in logcat.
+    //
+    // It is not an open door. Who may *use* it is decided per controller
+    // (`CarControllers.carCommands`), and what it does when used is decided by
+    // `MediaSession.Callback.onSetMediaItems`, which never lets a foreign item
+    // reach the playlist — see `RnMediaMediaSessionService`.
+    .add(Player.COMMAND_SET_MEDIA_ITEM)
 
   /**
    * `capabilities ∪ controls` → `Player.Commands`.

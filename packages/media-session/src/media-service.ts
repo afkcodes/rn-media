@@ -1,3 +1,13 @@
+import {
+  BROWSE_ROOT,
+  capRootTabs,
+  errorToNativeBrowseResult,
+  rootRejectionMessage,
+  toCarConnection,
+  toNativeBrowseItem,
+  toNativeBrowseResult,
+  toSearchFocus,
+} from './browse'
 import { logSessionError, MediaSessionError } from './errors'
 import { getNativeMediaSession } from './native'
 import {
@@ -12,11 +22,14 @@ import {
 } from './validate'
 import type {
   MediaSessionHandlers,
+  NativeBrowseResult,
   NativeRemotePlayback,
   RnMediaMediaSession,
   SessionErrorCode,
 } from './specs/media-session.nitro'
 import type {
+  BrowseItem,
+  CarConnection,
   MediaHandler,
   MediaItem,
   MediaServiceApi,
@@ -43,6 +56,17 @@ export interface MediaServiceController extends MediaServiceApi {
     handlerFactory: () => MediaHandler,
     config?: MediaServiceConfig
   ): Promise<MediaServiceApi>
+
+  /**
+   * Call `listener` whenever {@link MediaServiceApi.getCarConnection} would
+   * start returning something different. Returns the unsubscribe.
+   *
+   * On the controller rather than in {@link MediaServiceApi} because it is not
+   * a session command: it is the plumbing behind the `useCarConnection()` hook,
+   * and it deliberately outlives `init`/`stopService` so a component mounted
+   * before the session exists still hears the first connection.
+   */
+  subscribeCarConnection(listener: () => void): () => void
 }
 
 type LifecycleState = 'idle' | 'initializing' | 'ready'
@@ -89,6 +113,39 @@ export function createMediaService(
    * app just handed us — not state we invented.
    */
   let remotePlayback: NativeRemotePlayback | undefined
+
+  /**
+   * The last car-connection state native reported, held as **one object whose
+   * identity only changes when the value does**.
+   *
+   * Not a pass-through to `native.getCarConnection()` on every read, and that
+   * is a correctness requirement rather than an optimisation: `useCarConnection`
+   * is a `useSyncExternalStore`, whose `getSnapshot` must return a referentially
+   * stable value or React re-renders forever. Reading a fresh string from the
+   * bridge and widening it into a fresh object would do exactly that.
+   */
+  let carConnection: CarConnection = { kind: 'none' }
+
+  /**
+   * Subscribers to {@link carConnection}. Never cleared by `stopService()`: a
+   * screen that mounted before the session existed must still be told when a
+   * car arrives, and the listener belongs to the component, not to the session.
+   */
+  const carListeners = new Set<() => void>()
+
+  function setCarConnection(next: CarConnection): void {
+    if (next.kind === carConnection.kind) return
+    carConnection = next
+    for (const listener of carListeners) {
+      try {
+        listener()
+      } catch (error) {
+        // A subscriber that throws must not stop the others from hearing it,
+        // and there is no caller to reject to. Same floor as everywhere else.
+        console.error('[media-session] car-connection listener threw:', error)
+      }
+    }
+  }
 
   /**
    * Invoke a handler method and return *now*.
@@ -208,6 +265,49 @@ export function createMediaService(
     dispatch('onSessionError', (h) => h.onSessionError?.(error))
   }
 
+  /**
+   * Run one browse pull and turn *any* outcome into a `NativeBrowseResult`.
+   *
+   * This is the one place in the fan-in that awaits JavaScript, so it is also
+   * the one place that can be left hanging by it. It never rejects: a rejection
+   * would surface to the car as an unspecified failure, and the honest answers
+   * are already enumerated — the items, a {@link BrowseError} the car can draw,
+   * or an empty list plus a report on `onHandlerError` for anything else
+   * (Google: "return an empty list for no children rather than error codes").
+   */
+  async function browse(
+    method: keyof MediaHandler,
+    run: (target: MediaHandler) => Promise<BrowseItem[]>
+  ): Promise<NativeBrowseResult> {
+    const target = handler
+    // No handler: the session is being torn down, or a browser reached a
+    // service whose runtime has not initialized yet. An empty tree, never an
+    // error — the car retries when `invalidateBrowse`/`notifyChildrenChanged`
+    // says there is something to see.
+    if (target === undefined) return { items: [] }
+    try {
+      return toNativeBrowseResult(await run(target))
+    } catch (error) {
+      const mapped = errorToNativeBrowseResult(error)
+      if (mapped !== undefined) return mapped
+      onHandlerError(method, error)
+      return { items: [] }
+    }
+  }
+
+  /**
+   * The root pull, with the cap both platforms share applied **here** rather
+   * than in each native half — see `capRootTabs`. Anything dropped is reported
+   * on the session-error channel, never swallowed.
+   */
+  async function browseRoot(target: MediaHandler): Promise<BrowseItem[]> {
+    const { tabs, rejected } = capRootTabs(await target.getChildren(BROWSE_ROOT))
+    if (rejected.length > 0) {
+      reportSessionError('browseRootRejected', rootRejectionMessage(rejected))
+    }
+    return tabs
+  }
+
   const handlers: MediaSessionHandlers = {
     play: () => dispatch('play', (h) => h.play()),
     pause: () => dispatch('pause', (h) => h.pause()),
@@ -259,6 +359,36 @@ export function createMediaService(
       }
     },
     onSessionError: (code, message) => reportSessionError(code, message),
+
+    getChildren: (parentId) =>
+      browse('getChildren', (h) =>
+        parentId === BROWSE_ROOT ? browseRoot(h) : h.getChildren(parentId)
+      ),
+    getMediaItem: async (id) => {
+      const target = handler
+      if (target === undefined) return { items: [] }
+      try {
+        const item = await target.getMediaItem(id)
+        // Zero or one, which is what the bridge's one result shape means here.
+        return { items: item === undefined ? [] : [toNativeBrowseItem(item)] }
+      } catch (error) {
+        const mapped = errorToNativeBrowseResult(error)
+        if (mapped !== undefined) return mapped
+        onHandlerError('getMediaItem', error)
+        return { items: [] }
+      }
+    },
+    search: (query) =>
+      // Native only calls this when `setBrowseCapabilities` said the handler
+      // has it; the `?? []` covers a handler swapped between the two.
+      browse('search', async (h) => (await h.search?.(query)) ?? []),
+    playFromMediaId: (id) =>
+      dispatch('playFromMediaId', (h) => h.playFromMediaId(id)),
+    playFromSearch: (query, focus) =>
+      dispatch('playFromSearch', (h) =>
+        h.playFromSearch?.(query, toSearchFocus(focus))
+      ),
+    onCarConnectionChanged: (kind) => setCarConnection(toCarConnection(kind)),
   }
 
   function assertReady(call: string): void {
@@ -342,6 +472,19 @@ export function createMediaService(
         : { mode: 'trackEnd', remainingSeconds: timer.remainingSeconds }
     },
 
+    invalidateBrowse(parentId?: string): void {
+      assertReady('invalidateBrowse()')
+      native.invalidateBrowse(parentId)
+    },
+
+    getCarConnection(): CarConnection {
+      // No `assertReady`: this is a question, not a command, and it has an
+      // obviously correct answer before `init` — nothing is connected to a
+      // session that does not exist yet. Throwing here would make the reactive
+      // twin throw during the first render of any screen that uses it.
+      return carConnection
+    },
+
     async stopService(): Promise<void> {
       assertReady('stopService()')
       await native.stopService()
@@ -353,11 +496,20 @@ export function createMediaService(
       // The session that was routed to a remote device is gone; a later init
       // starts local, exactly like a fresh process.
       remotePlayback = undefined
+      // With no session there is nothing for a car to be connected *to*, and
+      // native stops reporting. Saying `none` is the honest snapshot; the
+      // subscribers stay, because they belong to components, not to sessions.
+      setCarConnection({ kind: 'none' })
     },
   }
 
   return {
     ...api,
+
+    subscribeCarConnection(listener: () => void): () => void {
+      carListeners.add(listener)
+      return () => carListeners.delete(listener)
+    },
 
     async init(
       handlerFactory: () => MediaHandler,
@@ -380,8 +532,24 @@ export function createMediaService(
         // the session it was registered with.
         revivalCallback = config.android?.onRevivalRequested
         remotePlayback = undefined
-        handler = handlerFactory()
+        const target = handlerFactory()
+        handler = target
+        // Before `initialize`, deliberately: the session is built inside that
+        // call and starts accepting controller connections the moment it
+        // exists, and what a browser is granted (`COMMAND_CODE_LIBRARY_SEARCH`,
+        // which is the only thing that sets Android Auto's `SEARCH_SUPPORTED`)
+        // is decided per connection. Declaring after would race the first
+        // browser to connect.
+        native.setBrowseCapabilities({
+          search: target.search !== undefined,
+          playFromSearch: target.playFromSearch !== undefined,
+        })
         await native.initialize(nativeConfig, handlers)
+        // A car can already be connected when a session is (re)created — an
+        // app started from the car, or an `init` after `stopService()` with the
+        // head unit still plugged in. Native knows; ask once rather than wait
+        // for a transition that has already happened.
+        setCarConnection(toCarConnection(native.getCarConnection()))
         state = 'ready'
         return api
       } catch (error) {
@@ -421,5 +589,9 @@ export const MediaService: MediaServiceController = {
   cancelSleepTimer: () => resolveSingleton().cancelSleepTimer(),
   getSleepTimerRemaining: () => resolveSingleton().getSleepTimerRemaining(),
   getSleepTimer: () => resolveSingleton().getSleepTimer(),
+  invalidateBrowse: (parentId) => resolveSingleton().invalidateBrowse(parentId),
+  getCarConnection: () => resolveSingleton().getCarConnection(),
+  subscribeCarConnection: (listener) =>
+    resolveSingleton().subscribeCarConnection(listener),
   stopService: () => resolveSingleton().stopService(),
 }

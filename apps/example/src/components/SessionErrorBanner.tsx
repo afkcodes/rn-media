@@ -36,6 +36,8 @@ const HEADLINE: Record<SessionErrorCode, string> = {
   metadataMismatch: 'Metadata was dropped',
   iconNotFound: 'An icon did not resolve',
   localAudioSlotUnavailable: 'The local audio slot could not be held',
+  playFromMediaIdUnhandled: 'A car tapped an item this app cannot play',
+  browseRootRejected: 'Some browse tabs were dropped',
 }
 
 export const SessionErrorBanner = React.memo(function SessionErrorBanner({

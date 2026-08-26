@@ -543,6 +543,13 @@ export class Playback implements PlaybackCommands {
   cancelSleepTimer(): void {
     this.#session.cancelSleepTimer()
   }
+  /**
+   * Tell a connected car that the browse tree changed. See
+   * `SessionBridge.invalidateBrowse`.
+   */
+  invalidateBrowse(parentId?: string): void {
+    this.#session.invalidateBrowse(parentId)
+  }
   /** Mode + remaining seconds, for the badge. See `SessionBridge.sleepTimer`. */
   sleepTimer(): SleepTimerState | undefined {
     return this.#session.sleepTimer()

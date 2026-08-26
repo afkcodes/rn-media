@@ -66,6 +66,9 @@ namespace margelo::nitro::rnmediamediasession {
     void cancelSleepTimer() override;
     std::optional<double> getSleepTimerRemaining() override;
     std::optional<NativeSleepTimerState> getSleepTimer() override;
+    void setBrowseCapabilities(const NativeBrowseCapabilities& caps) override;
+    void invalidateBrowse(const std::optional<std::string>& parentId) override;
+    std::string getCarConnection() override;
 
   private:
     jni::global_ref<JHybridRnMediaMediaSessionSpec::JavaPart> _javaPart;

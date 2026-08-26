@@ -685,6 +685,12 @@ export const SESSION_ERROR_SEVERITY: Readonly<
   metadataMismatch: 'degraded',
   iconNotFound: 'degraded',
   localAudioSlotUnavailable: 'degraded',
+  // A car tapped a browse item and the app has no `playFromMediaId`: the tap
+  // did nothing at all, which is the whole browse tree being dead on that
+  // surface. Nothing about it degrades gracefully.
+  playFromMediaIdUnhandled: 'fatal',
+  // The root still works — with fewer tabs than the app asked for.
+  browseRootRejected: 'degraded',
 }
 
 /**

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The declaration Android Auto looks for before it will show this app at all.
+
+  Pointed at by the `com.google.android.gms.car.application` meta-data in this
+  package's manifest, and merged into every consumer — which is the whole point:
+  adding @rn-media/media-session is enough to get a car-ready app, with no
+  copy-paste into the app's own manifest.
+
+  `<uses name="media"/>` is the media-app declaration (the other values are for
+  messaging and templated apps, neither of which this package provides).
+  https://developer.android.com/training/cars/media#config_manifest
+-->
+<automotiveApp>
+  <uses name="media" />
+</automotiveApp>

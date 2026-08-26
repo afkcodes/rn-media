@@ -36,6 +36,8 @@ namespace margelo::nitro::rnmediamediasession {
     METADATAMISMATCH      SWIFT_NAME(metadatamismatch) = 4,
     ICONNOTFOUND      SWIFT_NAME(iconnotfound) = 5,
     LOCALAUDIOSLOTUNAVAILABLE      SWIFT_NAME(localaudioslotunavailable) = 6,
+    PLAYFROMMEDIAIDUNHANDLED      SWIFT_NAME(playfrommediaidunhandled) = 7,
+    BROWSEROOTREJECTED      SWIFT_NAME(browserootrejected) = 8,
   } CLOSED_ENUM;
 
 } // namespace margelo::nitro::rnmediamediasession
@@ -55,6 +57,8 @@ namespace margelo::nitro {
         case hashString("metadataMismatch"): return margelo::nitro::rnmediamediasession::SessionErrorCode::METADATAMISMATCH;
         case hashString("iconNotFound"): return margelo::nitro::rnmediamediasession::SessionErrorCode::ICONNOTFOUND;
         case hashString("localAudioSlotUnavailable"): return margelo::nitro::rnmediamediasession::SessionErrorCode::LOCALAUDIOSLOTUNAVAILABLE;
+        case hashString("playFromMediaIdUnhandled"): return margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYFROMMEDIAIDUNHANDLED;
+        case hashString("browseRootRejected"): return margelo::nitro::rnmediamediasession::SessionErrorCode::BROWSEROOTREJECTED;
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert \"" + unionValue + "\" to enum SessionErrorCode - invalid value!");
       }
@@ -68,6 +72,8 @@ namespace margelo::nitro {
         case margelo::nitro::rnmediamediasession::SessionErrorCode::METADATAMISMATCH: return JSIConverter<std::string>::toJSI(runtime, "metadataMismatch");
         case margelo::nitro::rnmediamediasession::SessionErrorCode::ICONNOTFOUND: return JSIConverter<std::string>::toJSI(runtime, "iconNotFound");
         case margelo::nitro::rnmediamediasession::SessionErrorCode::LOCALAUDIOSLOTUNAVAILABLE: return JSIConverter<std::string>::toJSI(runtime, "localAudioSlotUnavailable");
+        case margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYFROMMEDIAIDUNHANDLED: return JSIConverter<std::string>::toJSI(runtime, "playFromMediaIdUnhandled");
+        case margelo::nitro::rnmediamediasession::SessionErrorCode::BROWSEROOTREJECTED: return JSIConverter<std::string>::toJSI(runtime, "browseRootRejected");
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert SessionErrorCode to JS - invalid value: "
                                     + std::to_string(static_cast<int>(arg)) + "!");
@@ -86,6 +92,8 @@ namespace margelo::nitro {
         case hashString("metadataMismatch"):
         case hashString("iconNotFound"):
         case hashString("localAudioSlotUnavailable"):
+        case hashString("playFromMediaIdUnhandled"):
+        case hashString("browseRootRejected"):
           return true;
         default:
           return false;

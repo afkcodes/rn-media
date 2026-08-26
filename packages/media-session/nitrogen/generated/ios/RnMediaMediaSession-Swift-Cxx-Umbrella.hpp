@@ -10,6 +10,12 @@
 // Forward declarations of C++ defined types
 // Forward declaration of `AndroidMediaSessionConfig` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct AndroidMediaSessionConfig; }
+// Forward declaration of `BrowseErrorCode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseErrorCode; }
+// Forward declaration of `BrowseMediaType` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseMediaType; }
+// Forward declaration of `BrowseStyle` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseStyle; }
 // Forward declaration of `HybridRnMediaMediaSessionSpec` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { class HybridRnMediaMediaSessionSpec; }
 // Forward declaration of `IosMediaSessionConfig` to properly resolve imports.
@@ -28,12 +34,22 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 namespace margelo::nitro::rnmediamediasession { struct MediaSessionConfig; }
 // Forward declaration of `MediaSessionHandlers` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
+// Forward declaration of `NativeBrowseCapabilities` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseCapabilities; }
+// Forward declaration of `NativeBrowseError` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseError; }
+// Forward declaration of `NativeBrowseItem` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseItem; }
+// Forward declaration of `NativeBrowseResult` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseResult; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
 // Forward declaration of `NativeRemotePlayback` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
+// Forward declaration of `NativeSearchFocus` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSearchFocus; }
 // Forward declaration of `NativeSleepTimerState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 // Forward declaration of `PositionAnchor` to properly resolve imports.
@@ -47,6 +63,9 @@ namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 
 // Include C++ defined types
 #include "AndroidMediaSessionConfig.hpp"
+#include "BrowseErrorCode.hpp"
+#include "BrowseMediaType.hpp"
+#include "BrowseStyle.hpp"
 #include "HybridRnMediaMediaSessionSpec.hpp"
 #include "IosMediaSessionConfig.hpp"
 #include "MediaCapability.hpp"
@@ -56,9 +75,14 @@ namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 #include "MediaRepeatMode.hpp"
 #include "MediaSessionConfig.hpp"
 #include "MediaSessionHandlers.hpp"
+#include "NativeBrowseCapabilities.hpp"
+#include "NativeBrowseError.hpp"
+#include "NativeBrowseItem.hpp"
+#include "NativeBrowseResult.hpp"
 #include "NativeMediaItem.hpp"
 #include "NativePlaybackState.hpp"
 #include "NativeRemotePlayback.hpp"
+#include "NativeSearchFocus.hpp"
 #include "NativeSleepTimerState.hpp"
 #include "PositionAnchor.hpp"
 #include "RemoteVolumeControl.hpp"

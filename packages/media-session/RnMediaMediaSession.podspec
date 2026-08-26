@@ -28,6 +28,20 @@ Pod::Spec.new do |s|
   # `MPMediaItemArtwork` is built from.
   s.frameworks = "MediaPlayer", "UIKit"
 
+  # CarPlay, weakly.
+  #
+  # The framework ships on every iOS device, so this is not about availability
+  # — it is about *entitlement*. A CarPlay app is a managed capability
+  # (com.apple.developer.carplay-audio, Apple-approved per app), and the vast
+  # majority of apps installing this package will never have it. Weak linking
+  # keeps `CarPlay.framework` out of those apps' hard load requirements: the
+  # symbols resolve lazily, the scene delegates below are simply never
+  # instantiated because nothing in their Info.plist names them, and the app
+  # launches exactly as it did before. Every CarPlay symbol this pod touches is
+  # iOS 14.0 or earlier, against a 15.1 deployment floor, so no availability
+  # guards are needed inside the Swift.
+  s.weak_frameworks = "CarPlay"
+
   load 'nitrogen/generated/ios/RnMediaMediaSession+autolinking.rb'
   add_nitrogen_files(s)
 

@@ -8,9 +8,19 @@
  */
 import {
   BaseMediaHandler,
+  type BrowseItem,
   type MediaRepeatMode,
+  type SearchFocus,
   type SessionError,
 } from '@rn-media/media-session'
+import {
+  assertSignedIn,
+  childrenOf,
+  itemFor,
+  noteRecentlyPlayed,
+  queueIndexFor,
+  searchTracks,
+} from './browse'
 
 /**
  * What the handler needs from the app's playback layer.
@@ -217,5 +227,78 @@ export class DemoMediaHandler extends BaseMediaHandler {
       `[example] session error · ${error.severity} · ${error.code}: ${error.message}`
     )
     this.onError(error)
+  }
+
+  /* --- Android Auto / CarPlay --------------------------------------------- */
+
+  /**
+   * One screen of the car's browse tree.
+   *
+   * The whole tree is `src/playback/browse.ts` — data and pure functions, no
+   * player — so what a car shows can be asserted in Node. This method is the
+   * three lines that connect it: the sign-in simulation, the pull, the log
+   * line that proves on a device that the car reached JavaScript.
+   */
+  override getChildren(parentId: string): Promise<BrowseItem[]> {
+    this.#log(`getChildren(${parentId})`)
+    assertSignedIn()
+    return Promise.resolve(childrenOf(parentId))
+  }
+
+  override getMediaItem(id: string): Promise<BrowseItem | undefined> {
+    this.#log(`getMediaItem(${id})`)
+    assertSignedIn()
+    return Promise.resolve(itemFor(id))
+  }
+
+  /**
+   * A car tapped something playable.
+   *
+   * `jumpTo`, not a queue rebuild — see the note at the top of `browse.ts`.
+   * The acknowledgement the car sees is this app's next broadcast, exactly as
+   * it is for a notification play button.
+   */
+  override playFromMediaId(id: string): void {
+    this.#log(`playFromMediaId(${id})`)
+    const index = queueIndexFor(id)
+    if (index === undefined) {
+      // Deliberately not silent: an id the app cannot resolve is a bug in this
+      // app's own tree, and a car that plays nothing looks like a broken app.
+      console.warn(`[example] no queue entry for browse id "${id}"`)
+      return
+    }
+    noteRecentlyPlayed(id)
+    void this.target().jumpTo(index)
+  }
+
+  /**
+   * "Play some jazz", from Assistant or the head unit's microphone.
+   *
+   * `focus` is what the assistant managed to classify; this app uses it to
+   * narrow the substring match, and falls back to the whole query. An empty
+   * query means "play something", which here is the first entry.
+   */
+  playFromSearch(query: string, focus: SearchFocus): void {
+    this.#log(`playFromSearch("${query}", ${focus.kind})`)
+    const needle = focus.artist ?? focus.album ?? focus.title ?? focus.genre ?? query
+    const first = searchTracks(needle)[0]
+    if (first === undefined) {
+      console.warn(`[example] nothing matched the voice query "${query}"`)
+      return
+    }
+    this.playFromMediaId(first.id)
+  }
+
+  /**
+   * The car's search tab.
+   *
+   * Its presence is what makes the session advertise search at all — a handler
+   * without this method makes Android Auto hide the tab
+   * (`SEARCH_SUPPORTED=false`) rather than show one that answers nothing.
+   */
+  search(query: string): Promise<BrowseItem[]> {
+    this.#log(`search("${query}")`)
+    assertSignedIn()
+    return Promise.resolve(searchTracks(query))
   }
 }

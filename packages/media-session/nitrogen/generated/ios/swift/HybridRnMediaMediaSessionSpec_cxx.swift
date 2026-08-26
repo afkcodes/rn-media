@@ -292,4 +292,45 @@ open class HybridRnMediaMediaSessionSpec_cxx {
       return bridge.create_Result_std__optional_NativeSleepTimerState__(__exceptionPtr)
     }
   }
+  
+  @inline(__always)
+  public final func setBrowseCapabilities(caps: NativeBrowseCapabilities) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setBrowseCapabilities(caps: caps)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func invalidateBrowse(parentId: bridge.std__optional_std__string_) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.invalidateBrowse(parentId: { () -> String? in
+        if bridge.has_value_std__optional_std__string_(parentId) {
+          let __unwrapped = bridge.get_std__optional_std__string_(parentId)
+          return String(__unwrapped)
+        } else {
+          return nil
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func getCarConnection() -> bridge.Result_std__string_ {
+    do {
+      let __result = try self.__implementation.getCarConnection()
+      let __resultCpp = std.string(__result)
+      return bridge.create_Result_std__string_(__resultCpp)
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_std__string_(__exceptionPtr)
+    }
+  }
 }

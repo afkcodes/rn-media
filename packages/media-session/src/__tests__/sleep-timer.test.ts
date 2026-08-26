@@ -164,6 +164,7 @@ describe('onPlaybackResumption', () => {
       customAction: () => {},
       getChildren: () => Promise.resolve([]),
       getMediaItem: () => Promise.resolve(undefined),
+      playFromMediaId: () => {},
     }
     expect('onPlaybackResumption' in bare).toBe(false)
     const onHandlerError = vi.fn()

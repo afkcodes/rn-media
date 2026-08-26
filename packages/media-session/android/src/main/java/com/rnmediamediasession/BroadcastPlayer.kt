@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.DeviceInfo
@@ -167,6 +168,17 @@ internal class BroadcastPlayer(
 ) : SimpleBasePlayer(Looper.getMainLooper()) {
 
   private val mainHandler = Handler(Looper.getMainLooper())
+
+  /**
+   * The browse-tap guard. See [MediaRequestLatch] — armed by the session
+   * callback, consumed by [handleSetPlayWhenReady].
+   */
+  private val mediaRequest = MediaRequestLatch { disarm -> mainHandler.post(disarm) }
+
+  /** Called from `MediaSession.Callback.onSetMediaItems`. Main thread only. */
+  fun armMediaRequest() {
+    mediaRequest.arm()
+  }
 
   /**
    * What `COMMAND_SEEK_FORWARD` / `COMMAND_SEEK_BACK` resolve against before
@@ -487,10 +499,55 @@ internal class BroadcastPlayer(
 
   // MARK: - Commands in
 
-  override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> =
-    dispatch(startsPlayback = playWhenReady) {
+  override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
+    // The `play` media3 synthesises at the end of a browse tap is already
+    // implied by the `playFromMediaId` the app was handed a moment ago, and
+    // forwarding it would resume the *previous* track. See [MediaRequestLatch].
+    // The future is still created and armed exactly as for a real command, so
+    // the optimistic "playing" the surfaces show holds until the app's next
+    // broadcast — the acknowledgement is unchanged, only the duplicate call is
+    // dropped.
+    if (playWhenReady && mediaRequest.consume()) return awaitBroadcast(pending)
+    return dispatch(startsPlayback = playWhenReady) {
       if (playWhenReady) it.play() else it.pause()
     }
+  }
+
+  /**
+   * Reached only as part of a browse tap or a controller's `setMediaItem`, and
+   * only ever with **this player's own current timeline**: every route to it
+   * goes through `MediaSession.Callback.onSetMediaItems`, which answers with
+   * `snapshot.timeline` unchanged and never with the item the controller sent
+   * (see `RnMediaMediaSessionService.onSetMediaItems`). So there is nothing to
+   * apply — the app decides what plays, through `playFromMediaId`, and says so
+   * with its next broadcast.
+   *
+   * Implemented rather than left to `SimpleBasePlayer`, whose default throws
+   * `IllegalStateException("Missing implementation to handle COMMAND_SET_MEDIA_ITEM")`
+   * the moment the command is advertised.
+   */
+  override fun handleSetMediaItems(
+    mediaItems: MutableList<MediaItem>,
+    startIndex: Int,
+    startPositionMs: Long,
+  ): ListenableFuture<*> {
+    val timeline = snapshot.timeline
+    val foreign = mediaItems.filterNot { item ->
+      timeline.any { it.id == item.mediaId }
+    }
+    if (foreign.isNotEmpty()) {
+      // Never expected, and loud rather than silent if the invariant above ever
+      // stops holding: applying it would replace the app's playlist behind its
+      // back, which is the exact thing `onSetMediaItems` exists to prevent.
+      Log.w(
+        RnMediaMediaSessionService.TAG,
+        "Ignoring setMediaItems carrying ${foreign.size} item(s) that are not in the " +
+          "broadcast queue (first id: ${foreign.first().mediaId}). The app's queue is " +
+          "changed by the app, never by a controller.",
+      )
+    }
+    return Futures.immediateVoidFuture()
+  }
 
   override fun handleStop(): ListenableFuture<*> = dispatch { it.stop() }
 
@@ -656,6 +713,17 @@ internal class BroadcastPlayer(
     invoke: (MediaSessionHandlers) -> Unit,
   ): ListenableFuture<*> {
     commands.dispatch(startsPlayback, invoke)
+    return awaitBroadcast(awaiting)
+  }
+
+  /**
+   * The acknowledgement half of [dispatch], on its own so a command that is
+   * deliberately *not* forwarded (the browse tap's duplicate `play`) still gets
+   * the optimistic state and the same deadline.
+   */
+  private fun awaitBroadcast(
+    awaiting: MutableList<SettableFuture<Any?>>,
+  ): ListenableFuture<*> {
     val future = SettableFuture.create<Any?>()
     awaiting.add(future)
     // Without a deadline a JS handler that never broadcasts would wedge the

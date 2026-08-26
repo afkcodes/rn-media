@@ -70,6 +70,47 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     };
   }
   
+  // pragma MARK: std::function<void(const NativeBrowseResult& /* result */)>
+  Func_void_NativeBrowseResult create_Func_void_NativeBrowseResult(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_void_NativeBrowseResult::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](const NativeBrowseResult& result) mutable -> void {
+      swiftClosure.call(result);
+    };
+  }
+  
+  // pragma MARK: std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* parentId */)>
+  Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string create_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](const std::string& parentId) mutable -> std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>> {
+      auto __result = swiftClosure.call(parentId);
+      return __result;
+    };
+  }
+  
+  // pragma MARK: std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>& /* result */)>
+  Func_void_std__shared_ptr_Promise_NativeBrowseResult__ create_Func_void_std__shared_ptr_Promise_NativeBrowseResult__(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_void_std__shared_ptr_Promise_NativeBrowseResult__::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](const std::shared_ptr<Promise<NativeBrowseResult>>& result) mutable -> void {
+      swiftClosure.call(result);
+    };
+  }
+  
+  // pragma MARK: std::function<void(const std::string& /* id */)>
+  Func_void_std__string create_Func_void_std__string(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_void_std__string::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](const std::string& id) mutable -> void {
+      swiftClosure.call(id);
+    };
+  }
+  
+  // pragma MARK: std::function<void(const std::string& /* query */, const NativeSearchFocus& /* focus */)>
+  Func_void_std__string_NativeSearchFocus create_Func_void_std__string_NativeSearchFocus(void* NON_NULL swiftClosureWrapper) noexcept {
+    auto swiftClosure = RnMediaMediaSession::Func_void_std__string_NativeSearchFocus::fromUnsafe(swiftClosureWrapper);
+    return [swiftClosure = std::move(swiftClosure)](const std::string& query, const NativeSearchFocus& focus) mutable -> void {
+      swiftClosure.call(query, focus);
+    };
+  }
+  
   // pragma MARK: std::shared_ptr<HybridRnMediaMediaSessionSpec>
   std::shared_ptr<HybridRnMediaMediaSessionSpec> create_std__shared_ptr_HybridRnMediaMediaSessionSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
     RnMediaMediaSession::HybridRnMediaMediaSessionSpec_cxx swiftPart = RnMediaMediaSession::HybridRnMediaMediaSessionSpec_cxx::fromUnsafe(swiftUnsafePointer);

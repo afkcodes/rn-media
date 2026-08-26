@@ -103,7 +103,7 @@ round.
 | Signed / expiring URLs stay gapless | ❌ | ❌ | ❌ | ❌ | ✅ resolver runs at **prefetch** time — our own mpv patch |
 | EQ / DSP | ❌ | ❌ | ❌ | ✅ 10-band | ✅ 16 ffmpeg filters, 22 tuned EQ presets |
 | Casting (Chromecast / AirPlay) | ❌ (V5, commercial: Chromecast/Android + AirPlay/iOS, platform-split) | ❌ | ❌ app-side | ✅ | ✅ Chromecast, both platforms — session handoff, receiver-side queue, live streams; Android device-verified, iOS CI-verified |
-| Android Auto / CarPlay | ✅ | ❌ | ❌ | ✅ | 🚧 next feature ([Roadmap](#roadmap)) |
+| Android Auto / CarPlay | ⚠️ controls only — no browse tree, no play-from-search ([source](docs/comparison.md#android-auto)) | ❌ | ❌ | ✅ | ✅ browse tree + voice on Auto, CarPlay templates (Auto device pass pending — see ARCHITECTURE §31) |
 | DRM (Widevine/FairPlay) | ⚠️ announced | ❌ | ✅ | not documented | ❌ libmpv cannot ([Limitations](#limitations)) |
 | Native binary it adds | ≈none (platform codecs) | ≈none | ≈none | — | 3.63 MB downloaded for `arm64-v8a`, ≈7.1 MB for the iOS device slice ([Requirements](#requirements)) |
 
@@ -984,8 +984,8 @@ The gate that unlocks shipping, in this order: **on-device iOS verification**
 (playback, background audio, lock screen, HLS and the EQ chain on real hardware)
 → the naming decision → the first npm publish.
 
-Next, owner-approved: **Android Auto** with a CarPlay-symmetric API (a browse tree
-over the media3 `MediaLibraryService` already here), then
+Shipped 2026-08-27: **Android Auto + CarPlay** — one `getChildren`/`playFromMediaId`
+handler behind both (ARCHITECTURE §31). Next, owner-approved:
 **`@rn-media/downloads`** — offline playback as a *source resolver*, so the player
 needs no changes at all — then LRC lyrics over position projection, then video as
 an additive plugin package with its own binaries and zero core changes.

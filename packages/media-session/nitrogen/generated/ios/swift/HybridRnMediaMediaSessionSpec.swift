@@ -25,6 +25,9 @@ public protocol HybridRnMediaMediaSessionSpec_protocol: HybridObject {
   func cancelSleepTimer() throws -> Void
   func getSleepTimerRemaining() throws -> Double?
   func getSleepTimer() throws -> NativeSleepTimerState?
+  func setBrowseCapabilities(caps: NativeBrowseCapabilities) throws -> Void
+  func invalidateBrowse(parentId: String?) throws -> Void
+  func getCarConnection() throws -> String
 }
 
 public extension HybridRnMediaMediaSessionSpec_protocol {

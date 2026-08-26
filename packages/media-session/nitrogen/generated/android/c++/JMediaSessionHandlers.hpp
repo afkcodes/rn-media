@@ -10,19 +10,40 @@
 #include <fbjni/fbjni.h>
 #include "MediaSessionHandlers.hpp"
 
+#include "BrowseErrorCode.hpp"
+#include "BrowseMediaType.hpp"
+#include "BrowseStyle.hpp"
+#include "JBrowseErrorCode.hpp"
+#include "JBrowseMediaType.hpp"
+#include "JBrowseStyle.hpp"
+#include "JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string.hpp"
 #include "JFunc_void.hpp"
 #include "JFunc_void_MediaRepeatMode.hpp"
 #include "JFunc_void_SessionErrorCode_std__string.hpp"
 #include "JFunc_void_bool.hpp"
 #include "JFunc_void_double.hpp"
+#include "JFunc_void_std__string.hpp"
+#include "JFunc_void_std__string_NativeSearchFocus.hpp"
 #include "JFunc_void_std__string_std__string.hpp"
 #include "JMediaRepeatMode.hpp"
+#include "JNativeBrowseError.hpp"
+#include "JNativeBrowseItem.hpp"
+#include "JNativeBrowseResult.hpp"
+#include "JNativeSearchFocus.hpp"
 #include "JSessionErrorCode.hpp"
 #include "MediaRepeatMode.hpp"
+#include "NativeBrowseError.hpp"
+#include "NativeBrowseItem.hpp"
+#include "NativeBrowseResult.hpp"
+#include "NativeSearchFocus.hpp"
 #include "SessionErrorCode.hpp"
 #include <NitroModules/JNICallable.hpp>
+#include <NitroModules/JPromise.hpp>
+#include <NitroModules/Promise.hpp>
 #include <functional>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -83,6 +104,18 @@ namespace margelo::nitro::rnmediamediasession {
       jni::local_ref<JFunc_void::javaobject> onRevivalRequested = this->getFieldValue(fieldOnRevivalRequested);
       static const auto fieldOnSessionError = clazz->getField<JFunc_void_SessionErrorCode_std__string::javaobject>("onSessionError");
       jni::local_ref<JFunc_void_SessionErrorCode_std__string::javaobject> onSessionError = this->getFieldValue(fieldOnSessionError);
+      static const auto fieldGetChildren = clazz->getField<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject>("getChildren");
+      jni::local_ref<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject> getChildren = this->getFieldValue(fieldGetChildren);
+      static const auto fieldGetMediaItem = clazz->getField<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject>("getMediaItem");
+      jni::local_ref<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject> getMediaItem = this->getFieldValue(fieldGetMediaItem);
+      static const auto fieldSearch = clazz->getField<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject>("search");
+      jni::local_ref<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject> search = this->getFieldValue(fieldSearch);
+      static const auto fieldPlayFromMediaId = clazz->getField<JFunc_void_std__string::javaobject>("playFromMediaId");
+      jni::local_ref<JFunc_void_std__string::javaobject> playFromMediaId = this->getFieldValue(fieldPlayFromMediaId);
+      static const auto fieldPlayFromSearch = clazz->getField<JFunc_void_std__string_NativeSearchFocus::javaobject>("playFromSearch");
+      jni::local_ref<JFunc_void_std__string_NativeSearchFocus::javaobject> playFromSearch = this->getFieldValue(fieldPlayFromSearch);
+      static const auto fieldOnCarConnectionChanged = clazz->getField<JFunc_void_std__string::javaobject>("onCarConnectionChanged");
+      jni::local_ref<JFunc_void_std__string::javaobject> onCarConnectionChanged = this->getFieldValue(fieldOnCarConnectionChanged);
       return MediaSessionHandlers(
         [&]() -> std::function<void()> {
           if (play->isInstanceOf(JFunc_void_cxx::javaClassStatic())) [[likely]] {
@@ -263,6 +296,60 @@ namespace margelo::nitro::rnmediamediasession {
             auto onSessionErrorRef = jni::make_global(onSessionError);
             return JNICallable<JFunc_void_SessionErrorCode_std__string, void(SessionErrorCode, std::string)>(std::move(onSessionErrorRef));
           }
+        }(),
+        [&]() -> std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* parentId */)> {
+          if (getChildren->isInstanceOf(JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::javaobject>(getChildren);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto getChildrenRef = jni::make_global(getChildren);
+            return JNICallable<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string, std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(std::string)>(std::move(getChildrenRef));
+          }
+        }(),
+        [&]() -> std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* id */)> {
+          if (getMediaItem->isInstanceOf(JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::javaobject>(getMediaItem);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto getMediaItemRef = jni::make_global(getMediaItem);
+            return JNICallable<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string, std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(std::string)>(std::move(getMediaItemRef));
+          }
+        }(),
+        [&]() -> std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* query */)> {
+          if (search->isInstanceOf(JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::javaobject>(search);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto searchRef = jni::make_global(search);
+            return JNICallable<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string, std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(std::string)>(std::move(searchRef));
+          }
+        }(),
+        [&]() -> std::function<void(const std::string& /* id */)> {
+          if (playFromMediaId->isInstanceOf(JFunc_void_std__string_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_std__string_cxx::javaobject>(playFromMediaId);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto playFromMediaIdRef = jni::make_global(playFromMediaId);
+            return JNICallable<JFunc_void_std__string, void(std::string)>(std::move(playFromMediaIdRef));
+          }
+        }(),
+        [&]() -> std::function<void(const std::string& /* query */, const NativeSearchFocus& /* focus */)> {
+          if (playFromSearch->isInstanceOf(JFunc_void_std__string_NativeSearchFocus_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_std__string_NativeSearchFocus_cxx::javaobject>(playFromSearch);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto playFromSearchRef = jni::make_global(playFromSearch);
+            return JNICallable<JFunc_void_std__string_NativeSearchFocus, void(std::string, NativeSearchFocus)>(std::move(playFromSearchRef));
+          }
+        }(),
+        [&]() -> std::function<void(const std::string& /* kind */)> {
+          if (onCarConnectionChanged->isInstanceOf(JFunc_void_std__string_cxx::javaClassStatic())) [[likely]] {
+            auto downcast = jni::static_ref_cast<JFunc_void_std__string_cxx::javaobject>(onCarConnectionChanged);
+            return downcast->cthis()->getFunction();
+          } else {
+            auto onCarConnectionChangedRef = jni::make_global(onCarConnectionChanged);
+            return JNICallable<JFunc_void_std__string, void(std::string)>(std::move(onCarConnectionChangedRef));
+          }
         }()
       );
     }
@@ -273,7 +360,7 @@ namespace margelo::nitro::rnmediamediasession {
      */
     [[maybe_unused]]
     static jni::local_ref<JMediaSessionHandlers::javaobject> fromCpp(const MediaSessionHandlers& value) {
-      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_MediaRepeatMode::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_SessionErrorCode_std__string::javaobject>);
+      using JSignature = JMediaSessionHandlers(jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void_MediaRepeatMode::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void_double::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_bool::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_std__string_std__string::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void::javaobject>, jni::alias_ref<JFunc_void_SessionErrorCode_std__string::javaobject>, jni::alias_ref<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject>, jni::alias_ref<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject>, jni::alias_ref<JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string::javaobject>, jni::alias_ref<JFunc_void_std__string::javaobject>, jni::alias_ref<JFunc_void_std__string_NativeSearchFocus::javaobject>, jni::alias_ref<JFunc_void_std__string::javaobject>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -297,7 +384,13 @@ namespace margelo::nitro::rnmediamediasession {
         JFunc_void_cxx::fromCpp(value.onSleepTimer),
         JFunc_void_cxx::fromCpp(value.onPlaybackResumption),
         JFunc_void_cxx::fromCpp(value.onRevivalRequested),
-        JFunc_void_SessionErrorCode_std__string_cxx::fromCpp(value.onSessionError)
+        JFunc_void_SessionErrorCode_std__string_cxx::fromCpp(value.onSessionError),
+        JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::fromCpp(value.getChildren),
+        JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::fromCpp(value.getMediaItem),
+        JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::fromCpp(value.search),
+        JFunc_void_std__string_cxx::fromCpp(value.playFromMediaId),
+        JFunc_void_std__string_NativeSearchFocus_cxx::fromCpp(value.playFromSearch),
+        JFunc_void_std__string_cxx::fromCpp(value.onCarConnectionChanged)
       );
     }
   };

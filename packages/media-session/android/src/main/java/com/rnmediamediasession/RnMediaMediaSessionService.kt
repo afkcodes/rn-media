@@ -8,14 +8,17 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession.ConnectionResult
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
@@ -26,8 +29,13 @@ import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
+import com.margelo.nitro.core.Promise
 import com.margelo.nitro.rnmediamediasession.AndroidMediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
+import com.margelo.nitro.rnmediamediasession.NativeBrowseItem
+import com.margelo.nitro.rnmediamediasession.NativeBrowseResult
+import com.margelo.nitro.rnmediamediasession.NativeSearchFocus
 import com.margelo.nitro.rnmediamediasession.SessionErrorCode
 import org.json.JSONObject
 
@@ -87,6 +95,37 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * abandoned. Main thread only.
    */
   private var revival: Revival? = null
+
+  /**
+   * Connected controllers media3 classifies as a car, and which kind. Main
+   * thread only (media3's application looper is the main looper here).
+   *
+   * The set — not a boolean — because two can be connected at once (a phone in
+   * an Automotive OS car), and because a disconnect must only clear the
+   * connection when the *last* car goes.
+   */
+  private val carControllers = mutableMapOf<MediaSession.ControllerInfo, String>()
+
+  /**
+   * Parents that were answered from [BrowseCache] because no JS runtime existed
+   * yet, so the browser can be told to ask again once one does. Main thread
+   * only; drained by [flushBrowseRevival].
+   */
+  private val staleBrowseParents = LinkedHashSet<String>()
+
+  /**
+   * The root-children cap the *browser* asked for, when it asked for a smaller
+   * one than the four the TypeScript layer already enforces
+   * (`EXTRAS_KEY_ROOT_CHILDREN_LIMIT`). Main thread only.
+   */
+  private var rootChildrenLimit = DEFAULT_ROOT_CHILDREN_LIMIT
+
+  /** Distinct request codes for error-resolution `PendingIntent`s. */
+  private var resolutionRequestCode = 0
+
+  private val browseCache: BrowseCache by lazy { BrowseCache.of(this) }
+
+  private val artwork: ArtworkRegistry by lazy { ArtworkRegistry.of(this) }
 
   /**
    * A playback resumption in flight.
@@ -368,7 +407,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * request to play. A media-button intent that is *not* a play still revives —
    * the app is being asked for something — but does not claim to be buffering.
    */
-  internal fun beginRevival(startsPlayback: Boolean): Boolean {
+  internal fun beginRevival(startsPlayback: Boolean, promotes: Boolean = true): Boolean {
     val pending = revival ?: return false
 
     if (!pending.started) {
@@ -381,14 +420,28 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       // that track back. The fallback is the same one every other path uses: if
       // the notification could not be built, keep the promise with nothing
       // drawn rather than let the process be killed for it.
-      if (!promoteWithSnapshotNotification(pending.config.android)) promoteThenDemote()
+      //
+      // `promotes = false` is the browse revival (see [onGetChildren]) and is
+      // the one path that must NOT promote: it is triggered by a car *binding*
+      // the service, and a bind makes no `startForegroundService()` promise to
+      // keep. Promoting anyway would be an app starting a foreground service
+      // from the background — refused outright on API 31+
+      // (`ForegroundServiceStartNotAllowedException`) — to show a playback
+      // notification for playback nobody asked for.
+      if (promotes && !promoteWithSnapshotNotification(pending.config.android)) {
+        promoteThenDemote()
+      }
 
       if (!ReactRuntime.startRuntime(this) { onRuntimeReady() }) {
         abandonRevival("ReactHost.start() could not be issued")
         return false
       }
       main.postDelayed(watchdog, REVIVAL_TIMEOUT_MS)
-      Log.i(TAG, "Playback resumption: foreground held, booting the JS runtime.")
+      Log.i(
+        TAG,
+        if (promotes) "Playback resumption: foreground held, booting the JS runtime."
+        else "Car browse: booting the JS runtime (no foreground service; nothing is playing)."
+      )
     }
 
     if (startsPlayback) MediaSessionController.markResuming()
@@ -429,6 +482,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
    * `onPlaybackResumption`.
    */
   internal fun onRevivalComplete(): Boolean {
+    flushBrowseRevival()
     val pending = revival ?: return false
     revival = null
     main.removeCallbacks(watchdog)
@@ -935,16 +989,141 @@ class RnMediaMediaSessionService : MediaLibraryService() {
 
   private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
 
+    /**
+     * Grant this controller what it may have — and, for exactly two kinds of
+     * controller, the one command that can start playback from a browse id.
+     *
+     * `COMMAND_SET_MEDIA_ITEM` is what a browse tap becomes
+     * (`MediaSessionLegacyStub.handleMediaRequest`, media3 1.11.0), and it is
+     * granted **per controller** rather than to everyone: see
+     * [CarControllers.carCommands] for who and why. The base set is media3's
+     * own default for this controller's trust level, so nothing else about the
+     * connection changes — this replaces a default with the same default plus
+     * or minus one command.
+     */
     override fun onConnectAsync(
       session: MediaSession,
       controller: MediaSession.ControllerInfo,
     ): ListenableFuture<ConnectionResult> {
       val snapshot = MediaSessionController.snapshot()
+      val isAuto = session.isAutoCompanionController(controller)
+      val isAutomotive = session.isAutomotiveController(controller)
+
+      CarControllers.carConnection(isAuto, isAutomotive)?.let { kind ->
+        carControllers[controller] = kind
+        refreshCarConnection()
+      }
+
+      val base =
+        if (controller.isTrusted) ConnectionResult.DEFAULT_PLAYER_COMMANDS
+        else ConnectionResult.DEFAULT_UNTRUSTED_PLAYER_COMMANDS
+      val playerCommands = Player.Commands.Builder()
+        .addAll(base)
+        .apply {
+          if (CarControllers.carCommands(isAuto, isAutomotive, controller.isTrusted)) {
+            add(Player.COMMAND_SET_MEDIA_ITEM)
+          } else {
+            remove(Player.COMMAND_SET_MEDIA_ITEM)
+          }
+        }
+        .build()
+
       return Futures.immediateFuture(
         ConnectionResult.AcceptedResultBuilder(session, controller)
           .setAvailableSessionCommands(sessionCommands(snapshot))
+          .setAvailablePlayerCommands(playerCommands)
           .setMediaButtonPreferences(MediaButtons.buttons(this@RnMediaMediaSessionService, snapshot))
           .build()
+      )
+    }
+
+    /** A car unplugged, or any controller went away. */
+    override fun onDisconnected(
+      session: MediaSession,
+      controller: MediaSession.ControllerInfo,
+    ) {
+      if (carControllers.remove(controller) != null) refreshCarConnection()
+    }
+
+    /**
+     * **The fan-in for every browse tap and every voice request.**
+     *
+     * Android Auto's tap on a playable item, Assistant's "play some jazz" and a
+     * trusted controller's `setMediaItem` all arrive here — the legacy stub
+     * funnels `onPlayFromMediaId` / `onPlayFromSearch` / `onPlayFromUri`
+     * through `handleMediaRequest` → `COMMAND_SET_MEDIA_ITEM` →
+     * `Callback.onSetMediaItems` (media3 1.11.0).
+     *
+     * The app is told, and the **current timeline is returned unchanged**. That
+     * is the whole design: this package's player has no playlist of its own to
+     * set, the app owns the queue, and the acknowledgement is the app's next
+     * `setQueue`/`setPlaybackState` broadcast exactly as it is for `play()`
+     * (ARCHITECTURE §9). Returning the controller's item instead would let a
+     * browse tap rewrite the app's playlist behind its back.
+     */
+    override fun onSetMediaItems(
+      mediaSession: MediaSession,
+      controller: MediaSession.ControllerInfo,
+      mediaItems: MutableList<MediaItem>,
+      startIndex: Int,
+      startPositionMs: Long,
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+      val request = mediaItems.firstOrNull()
+      val query = request?.requestMetadata?.searchQuery
+      val mediaId = request?.mediaId.orEmpty()
+      val capabilities = MediaSessionController.browseCapabilities
+
+      // Before anything is dispatched: media3 finishes a media request by
+      // calling `play()` on the player, which would resume the *previous*
+      // track while the app loads the new one. See [MediaRequestLatch].
+      MediaSessionController.armMediaRequest()
+
+      when {
+        query != null -> {
+          if (!capabilities.playFromSearch) {
+            return unsupportedRequest(
+              "voice playback (\"$query\") — this app's MediaHandler has no playFromSearch"
+            )
+          }
+          val focus = focusFrom(request.requestMetadata.extras)
+          MediaSessionController.dispatch(startsPlayback = true) {
+            it.playFromSearch(query, focus)
+          }
+        }
+
+        mediaId.isNotEmpty() && mediaId != MediaItem.DEFAULT_MEDIA_ID -> {
+          MediaSessionController.dispatch(startsPlayback = true) {
+            it.playFromMediaId(mediaId)
+          }
+        }
+
+        // `onPlayFromUri`: media3 advertises `ACTION_PLAY_FROM_URI` alongside
+        // the other two the moment `COMMAND_SET_MEDIA_ITEM` is available
+        // (`convertCommandToPlaybackStateActions`), and there is no handler
+        // method for it — a URI is not a browse id and inventing one would be
+        // worse than saying no.
+        else -> return unsupportedRequest("a play-from-URI request")
+      }
+
+      val snapshot = MediaSessionController.snapshot()
+      val timeline = snapshot.timeline
+      // Nothing queued yet (a car tapping a track in an app that has never
+      // played) — there is no current timeline to preserve, so the honest
+      // answer is "the session ignored the playlist part". The app has the tap
+      // either way, and its broadcast is what starts playback. media3's legacy
+      // path treats a failed future as "the session is free to ignore these
+      // requests" and does nothing else.
+      if (timeline.isEmpty()) {
+        return Futures.immediateFailedFuture(
+          IllegalStateException("No queue to preserve; the app answers this request itself.")
+        )
+      }
+      return Futures.immediateFuture(
+        MediaSession.MediaItemsWithStartPosition(
+          timeline.map { it.toMediaItem() },
+          snapshot.timelineIndex,
+          snapshot.anchor.projectMs(),
+        )
       )
     }
 
@@ -1023,22 +1202,55 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     }
 
     /**
-     * Android Auto / Wear browse root.
+     * The browse root, plus the two hints that decide how the car draws
+     * everything under it.
      *
-     * v1 serves an empty but *valid* tree rather than `ERROR_NOT_SUPPORTED`:
-     * a valid root is what makes Auto and the System UI resumption surface list
-     * the app at all, and returning an error there is indistinguishable from a
-     * crash to the user. The handler methods that would fill it in
-     * (`getChildren`/`getMediaItem`) are reserved on the JS side and not yet
-     * wired — see the spec's "explicitly out of scope for v1".
+     * Read *from* the browser (`params.extras`, which media3 fills from the
+     * root hints): the recommended artwork size and the maximum number of root
+     * children it can show. Written *to* the browser: the default content
+     * style for browsable and playable items, which an individual node can
+     * still override with `BrowseItem.childStyle`.
+     *
+     * Never an error, whatever else is wrong. A valid root is what makes Auto
+     * and the System UI list the app at all, and `onGetLibraryRoot` is in any
+     * case the one library callback media3 exempts from error replication
+     * (`MediaLibrarySessionImpl`, 1.11.0) — an error here is invisible *and*
+     * costly.
      */
     override fun onGetLibraryRoot(
       session: MediaLibrarySession,
       browser: MediaSession.ControllerInfo,
       params: LibraryParams?,
-    ): ListenableFuture<LibraryResult<MediaItem>> =
-      Futures.immediateFuture(LibraryResult.ofItem(browseRoot(), params))
+    ): ListenableFuture<LibraryResult<MediaItem>> {
+      params?.extras?.let { hints ->
+        val size = hints.getInt(MediaConstants.EXTRAS_KEY_MEDIA_ART_SIZE_PIXELS, 0)
+        if (size > 0) artwork.artSizePixels = size
+        val limit = hints.getInt(MediaConstants.EXTRAS_KEY_ROOT_CHILDREN_LIMIT, 0)
+        if (limit > 0) rootChildrenLimit = minOf(limit, DEFAULT_ROOT_CHILDREN_LIMIT)
+      }
+      return Futures.immediateFuture(LibraryResult.ofItem(browseRoot(), rootParams(params)))
+    }
 
+    /**
+     * One screen of the browse tree.
+     *
+     * Three cases, in order:
+     * 1. **A live runtime** — pull from the app, cache the answer, return it.
+     * 2. **No runtime, a car asking** — return the cached answer *now* and boot
+     *    the app behind it, then `notifyChildrenChanged` when it arrives. A car
+     *    that reconnects to a killed app sees its library immediately instead
+     *    of an empty one.
+     * 3. **No runtime, anything else** — the cached answer, and nothing is
+     *    booted. A System UI bind must never start the app (ARCHITECTURE §30);
+     *    that rule is why the revival is gated on
+     *    [CarControllers.carConnection] rather than on `isTrusted`.
+     *
+     * `page`/`pageSize` are ignored on purpose: a legacy browser is served
+     * `page = 0, pageSize = Integer.MAX_VALUE` by media3's own stub, and
+     * Google's guidance is "don't rely on the page or pageSize parameters".
+     * Oversized results are truncated by media3 against the binder limit
+     * (`MediaUtils.truncateListBySize`).
+     */
     override fun onGetChildren(
       session: MediaLibrarySession,
       browser: MediaSession.ControllerInfo,
@@ -1046,27 +1258,469 @@ class RnMediaMediaSessionService : MediaLibraryService() {
       page: Int,
       pageSize: Int,
       params: LibraryParams?,
-    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
-      // "Return an empty list for no children rather than using error codes."
-      Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.of(), params))
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+      val handlers = MediaSessionController.handlers
+        ?: return servedFromCache(session, browser, parentId, page, pageSize, params)
+      return pull(parentId, page, pageSize, params) { handlers.getChildren(parentId) }
+    }
 
+    /**
+     * One node by id. Mirrors [onGetChildren], including the cache and the
+     * car-only revival.
+     *
+     * The root answers itself: media3 asks for it by id while building a
+     * browser's tree, and a round trip into JavaScript for a constant would be
+     * a pointless one.
+     */
     override fun onGetItem(
       session: MediaLibrarySession,
       browser: MediaSession.ControllerInfo,
       mediaId: String,
-    ): ListenableFuture<LibraryResult<MediaItem>> =
+    ): ListenableFuture<LibraryResult<MediaItem>> {
       if (mediaId == ROOT_ID) {
-        Futures.immediateFuture(LibraryResult.ofItem(browseRoot(), null))
-      } else {
-        Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
+        return Futures.immediateFuture(LibraryResult.ofItem(browseRoot(), null))
       }
+      val handlers = MediaSessionController.handlers
+        ?: return Futures.immediateFuture(
+          cachedItem(mediaId)
+            ?.let { LibraryResult.ofItem(it, null) }
+            ?: LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED)
+        )
+      val future = SettableFuture.create<LibraryResult<MediaItem>>()
+      bridge(
+        pull = { handlers.getMediaItem(mediaId) },
+        onFailure = { future.set(LibraryResult.ofError(SessionError.ERROR_UNKNOWN)) },
+      ) { result ->
+        val error = result.error
+        val item = result.items.firstOrNull()
+        future.set(
+          when {
+            error != null -> LibraryResult.ofError(
+              BrowseTree.sessionError(
+                this@RnMediaMediaSessionService,
+                error,
+                nextResolutionRequestCode(),
+              )
+            )
+            item == null -> LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+            else -> LibraryResult.ofItem(BrowseTree.toMediaItem(item, artwork), null)
+          }
+        )
+      }
+      return future
+    }
+
+    /**
+     * A search from the car's search tab.
+     *
+     * Two calls by contract: this one answers "I have results" and then
+     * `notifySearchResultChanged` tells the browser how many, at which point
+     * media3's legacy stub calls [onGetSearchResult] to actually read them
+     * (`MediaLibraryService`, `MediaLibraryServiceLegacyStub`, 1.11.0). The
+     * results are therefore cached under a search key here and served from the
+     * cache there — one pull into JavaScript per query, not two.
+     */
+    override fun onSearch(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      query: String,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<Void>> {
+      if (!MediaSessionController.browseCapabilities.search) {
+        return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
+      }
+      val handlers = MediaSessionController.handlers
+        ?: return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_INVALID_STATE))
+
+      val future = SettableFuture.create<LibraryResult<Void>>()
+      bridge(
+        pull = { handlers.search(query) },
+        onFailure = { future.set(LibraryResult.ofError(SessionError.ERROR_UNKNOWN)) },
+      ) { result ->
+        val error = result.error
+        if (error != null) {
+          future.set(
+            LibraryResult.ofError(
+              BrowseTree.sessionError(
+                this@RnMediaMediaSessionService,
+                error,
+                nextResolutionRequestCode(),
+              )
+            )
+          )
+          return@bridge
+        }
+        // `NativeBrowseResult.items` is a Kotlin `Array` (nitrogen maps a JS
+        // array to one); the cache and the converters speak `List`.
+        browseCache.put(BrowseCache.searchKey(query), result.items.toList())
+        future.set(LibraryResult.ofVoid(params))
+        session.notifySearchResultChanged(browser, query, result.items.size, params)
+      }
+      return future
+    }
+
+    /** The results [onSearch] already fetched. */
+    override fun onGetSearchResult(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      query: String,
+      page: Int,
+      pageSize: Int,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
+      Futures.immediateFuture(
+        LibraryResult.ofItemList(
+          browseCache.get(BrowseCache.searchKey(query)).orEmpty().toMediaItems(page, pageSize),
+          params,
+        )
+      )
+  }
+
+  // MARK: - Browse plumbing
+
+  /**
+   * Bridge one Nitro browse callback into a completion on the main thread.
+   *
+   * ## The double promise is not a typo
+   * A JS callback that returns a value arrives natively as a promise of the
+   * *invocation*, and this one's declared return is itself a `Promise<T>` — so
+   * nitrogen emits `Promise<Promise<NativeBrowseResult>>`
+   * (`nitrogen/generated/android/kotlin/com/margelo/nitro/rnmediamediasession/
+   * MediaSessionHandlers.kt`, and `FunctionType`'s constructor in nitrogen
+   * 0.37.0, which wraps every non-void callback return in a `PromiseType`).
+   * The outer resolves when the JS function returns; the inner when the promise
+   * it returned settles. Both have to be unwrapped, and a rejection of either
+   * is the same failure.
+   *
+   * The hop to [main] is deliberate: Nitro resolves on whichever thread the JS
+   * runtime finished on, and everything downstream — the cache, the session's
+   * `notifyChildrenChanged`, `LibraryResult` — belongs to the media3
+   * application looper.
+   */
+  private inline fun bridge(
+    crossinline pull: () -> Promise<Promise<NativeBrowseResult>>,
+    crossinline onFailure: () -> Unit,
+    crossinline onResult: (NativeBrowseResult) -> Unit,
+  ) {
+    val fail = { error: Throwable ->
+      Log.w(TAG, "A browse pull into JavaScript failed.", error)
+      main.post { onFailure() }
+      Unit
+    }
+    try {
+      pull()
+        .then { inner ->
+          inner
+            .then { result -> main.post { onResult(result) } }
+            .catch { error -> fail(error) }
+          Unit
+        }
+        .catch { error -> fail(error) }
+    } catch (error: Throwable) {
+      // The callback itself threw — a runtime torn down between the null check
+      // and the call. Same outcome as a rejection.
+      fail(error)
+    }
+  }
+
+  /**
+   * A children pull, with the cache write and the root cap.
+   *
+   * The deadline is the honest limit on how long a browser is made to wait for
+   * an app whose handler never answers: past it the cached (or empty) answer is
+   * returned, and a later `invalidateBrowse` still corrects it.
+   */
+  private fun pull(
+    parentId: String,
+    page: Int,
+    pageSize: Int,
+    params: LibraryParams?,
+    invoke: () -> Promise<Promise<NativeBrowseResult>>,
+  ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+    val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
+    val timeout = Runnable {
+      if (!future.isDone) {
+        Log.w(
+          TAG,
+          "getChildren(\"$parentId\") did not answer within ${BROWSE_TIMEOUT_MS} ms; " +
+            "serving the cached list. Browse handlers must answer quickly — a car shows a " +
+            "spinner until they do."
+        )
+        future.set(cachedResult(parentId, page, pageSize, params))
+      }
+    }
+    main.postDelayed(timeout, BROWSE_TIMEOUT_MS)
+
+    bridge(
+      pull = invoke,
+      onFailure = {
+        main.removeCallbacks(timeout)
+        future.set(cachedResult(parentId, page, pageSize, params))
+      },
+    ) { result ->
+      main.removeCallbacks(timeout)
+      val error = result.error
+      if (error != null) {
+        // Deliberately not cached: an error is a statement about *now* (signed
+        // out, out of region), and caching it would outlive the sign-in.
+        future.set(
+          LibraryResult.ofError(
+            BrowseTree.sessionError(this, error, nextResolutionRequestCode())
+          )
+        )
+        return@bridge
+      }
+      val pulled = result.items.toList()
+      val items = if (parentId == ROOT_ID) cappedRoot(pulled) else pulled
+      // The WHOLE list is cached; only the requested window is returned.
+      browseCache.put(parentId, items)
+      future.set(LibraryResult.ofItemList(items.toMediaItems(page, pageSize), params))
+    }
+    return future
+  }
+
+  /**
+   * The root cap the *browser* asked for.
+   *
+   * The four-tab rule and the browsable-only rule are already applied in
+   * TypeScript, once, so both platforms behave identically (`capRootTabs`) and
+   * anything dropped is reported to the app there. This is the second, smaller
+   * cap: a browser that says it can show fewer
+   * (`EXTRAS_KEY_ROOT_CHILDREN_LIMIT`) is describing its own screen, which is
+   * not an app bug and is not reported as one.
+   */
+  private fun cappedRoot(items: List<NativeBrowseItem>): List<NativeBrowseItem> {
+    val browsable = items.filter { it.browsable }
+    if (browsable.size != items.size) {
+      Log.w(
+        TAG,
+        "Dropped ${items.size - browsable.size} non-browsable root item(s): Android Auto's " +
+          "root supports FLAG_BROWSABLE only."
+      )
+    }
+    if (browsable.size <= rootChildrenLimit) return browsable
+    Log.i(
+      TAG,
+      "This browser asked for at most $rootChildrenLimit root children; showing the first " +
+        "$rootChildrenLimit of ${browsable.size}."
+    )
+    return browsable.take(rootChildrenLimit)
+  }
+
+  /**
+   * Answer from the cache because there is no JavaScript to ask — and, when the
+   * asker is a car, start the app so the answer stops being stale.
+   */
+  private fun servedFromCache(
+    session: MediaLibrarySession,
+    browser: MediaSession.ControllerInfo,
+    parentId: String,
+    page: Int,
+    pageSize: Int,
+    params: LibraryParams?,
+  ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+    // Asked of the session rather than looked up in [carControllers], and that
+    // is the point: this decides whether a bind may boot the app, so it must
+    // not depend on a map entry that a `ControllerInfo` identity mismatch
+    // (media3 substitutes one for the notification controller, and legacy
+    // browsers arrive per request) could silently miss. Stateless and total.
+    val isCar = CarControllers.carConnection(
+      isAuto = session.isAutoCompanionController(browser),
+      isAutomotive = session.isAutomotiveController(browser),
+    ) != null
+    if (isCar) {
+      staleBrowseParents.add(parentId)
+      // `startsPlayback = false`: a browse is not a play, so nothing is marked
+      // as resuming and no foreground service is started (see [beginRevival]).
+      beginRevival(startsPlayback = false, promotes = false)
+    }
+    return Futures.immediateFuture(cachedResult(parentId, page, pageSize, params))
+  }
+
+  private fun cachedResult(
+    parentId: String,
+    page: Int,
+    pageSize: Int,
+    params: LibraryParams?,
+  ): LibraryResult<ImmutableList<MediaItem>> = LibraryResult.ofItemList(
+    // Empty rather than an error, always: "return an empty list for no children
+    // rather than using error codes".
+    browseCache.get(parentId).orEmpty().toMediaItems(page, pageSize),
+    params,
+  )
+
+  private fun cachedItem(mediaId: String): MediaItem? {
+    for (key in browseCache.keys()) {
+      val item = browseCache.get(key)?.firstOrNull { it.id == mediaId } ?: continue
+      return BrowseTree.toMediaItem(item, artwork)
+    }
+    return null
+  }
+
+  /**
+   * The requested window of a browse list, converted.
+   *
+   * **Not optional politeness — media3 throws without it.** A result larger
+   * than the browser asked for is rejected by
+   * `MediaLibrarySessionImpl.verifyResultItems`:
+   *
+   * ```java
+   * if (items.size() > pageSize) {
+   *   throw new IllegalStateException("Invalid size=" + items.size() + ", pageSize=" + pageSize);
+   * }
+   * ```
+   *
+   * (media3 1.11.0, on the session's application thread, i.e. uncatchable by
+   * the app.) Legacy browsers — Android Auto among them — are always served
+   * `page = 0, pageSize = Integer.MAX_VALUE` by media3's own stub, so this is
+   * inert for them; a modern `MediaBrowser` that pages for real would
+   * otherwise take the session down. Google's "don't rely on the page or
+   * pageSize parameters" is advice about *content*, not permission to ignore
+   * the contract.
+   *
+   * The whole list is what gets cached; only this window is returned.
+   */
+  private fun List<NativeBrowseItem>.toMediaItems(
+    page: Int,
+    pageSize: Int,
+  ): ImmutableList<MediaItem> {
+    // `Long`, because `page * pageSize` overflows for the `Integer.MAX_VALUE`
+    // page size every legacy browser is given.
+    val from = page.toLong().coerceAtLeast(0L) * pageSize.toLong().coerceAtLeast(0L)
+    if (from >= size) return ImmutableList.of()
+    val window = drop(from.toInt()).take(pageSize.coerceAtLeast(0))
+    return ImmutableList.copyOf(window.map { BrowseTree.toMediaItem(it, artwork) })
+  }
+
+  /**
+   * Tell every browser that was served from the cache during a revival to ask
+   * again, now that the app is up. Main thread only.
+   */
+  private fun flushBrowseRevival() {
+    if (staleBrowseParents.isEmpty()) return
+    val session = session ?: return
+    val parents = staleBrowseParents.toList()
+    staleBrowseParents.clear()
+    for (parent in parents) {
+      session.notifyChildrenChanged(parent, browseCache.get(parent)?.size ?: 0, null)
+    }
+    Log.i(TAG, "Browse: refreshed ${parents.size} parent(s) served from cache during revival.")
+  }
+
+  /**
+   * The app says something under `parentId` changed. Main thread only.
+   *
+   * Evicting is the load-bearing half — `notifyChildrenChanged` makes a browser
+   * ask again, and it must not be answered from the very cache the app just
+   * said was wrong.
+   */
+  internal fun invalidateBrowse(parentId: String?) {
+    if (parentId != null) {
+      browseCache.evict(parentId)
+      session?.notifyChildrenChanged(parentId, 0, null)
+      return
+    }
+    val keys = browseCache.keys()
+    browseCache.clear()
+    val session = session ?: return
+    for (key in keys) {
+      // A search result is not a browse parent; there is no subscription to
+      // notify and `notifySearchResultChanged` needs the browser that asked.
+      if (BrowseCache.isSearchKey(key)) continue
+      session.notifyChildrenChanged(key, 0, null)
+    }
+    if (!keys.contains(ROOT_ID)) session.notifyChildrenChanged(ROOT_ID, 0, null)
+  }
+
+  /** Main thread only. Recomputed from the connected controllers. */
+  private fun refreshCarConnection() {
+    var kind = CarControllers.NONE
+    for (value in carControllers.values) {
+      kind = CarControllers.strongerConnection(kind, value)
+    }
+    MediaSessionController.updateCarConnection(kind)
+  }
+
+  private fun nextResolutionRequestCode(): Int {
+    resolutionRequestCode += 1
+    return resolutionRequestCode
+  }
+
+  private fun unsupportedRequest(
+    what: String
+  ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+    Log.w(TAG, "Refused $what.")
+    return Futures.immediateFailedFuture(UnsupportedOperationException(what))
+  }
+
+  /**
+   * A voice query's focus, read from the extras Assistant sends alongside it.
+   *
+   * The keys are `MediaStore`'s own; the classification is
+   * [CarControllers.searchFocus], which is pure and tested.
+   */
+  @Suppress("DEPRECATION") // `MediaStore.EXTRA_MEDIA_PLAYLIST`; see below.
+  private fun focusFrom(extras: Bundle?): NativeSearchFocus = CarControllers.searchFocus(
+    focus = extras?.getString(MediaStore.EXTRA_MEDIA_FOCUS),
+    artist = extras?.getString(MediaStore.EXTRA_MEDIA_ARTIST),
+    album = extras?.getString(MediaStore.EXTRA_MEDIA_ALBUM),
+    title = extras?.getString(MediaStore.EXTRA_MEDIA_TITLE),
+    genre = extras?.getString(MediaStore.EXTRA_MEDIA_GENRE),
+    // Deprecated along with the `MediaStore.Audio.Playlists` table, and still
+    // the key Assistant fills for a playlist query — see `CarControllers`.
+    playlist = extras?.getString(MediaStore.EXTRA_MEDIA_PLAYLIST),
+  )
+
+  /**
+   * The root's `LibraryParams`, carrying the browse defaults for the whole
+   * tree.
+   *
+   * media3 copies these into the browser's root hints
+   * (`LegacyConversions.convertToRootHints`), which is how Android Auto learns
+   * the app's default content style. A per-node `BrowseItem.childStyle` still
+   * wins for that node's children.
+   */
+  private fun rootParams(request: LibraryParams?): LibraryParams {
+    val extras = Bundle()
+    extras.putInt(
+      MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+      MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+    )
+    extras.putInt(
+      MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+      MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM,
+    )
+    return LibraryParams.Builder()
+      .setExtras(extras)
+      .setRecent(request?.isRecent == true)
+      .setOffline(request?.isOffline == true)
+      .setSuggested(request?.isSuggested == true)
+      .build()
   }
 
   // MARK: - Helpers
 
+  /**
+   * What a controller may ask the *session* for — and, for browsers, whether
+   * search exists at all.
+   *
+   * Removing `COMMAND_CODE_LIBRARY_SEARCH` is not a refusal, it is the
+   * advertisement: media3's legacy stub computes
+   * `android.media.browse.SEARCH_SUPPORTED` from exactly this
+   * (`isSessionCommandAvailable(controller, COMMAND_CODE_LIBRARY_SEARCH)` in
+   * `MediaLibraryServiceLegacyStub.onGetRoot`, 1.11.0), and that key alone is
+   * what makes Android Auto draw or hide its search tab. Leaving the command in
+   * for an app with no `search` handler would give the car a search box that
+   * can only ever return nothing.
+   */
   private fun sessionCommands(snapshot: Snapshot): SessionCommands =
     ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
-      .apply { MediaButtons.sessionCommands(snapshot).forEach { add(it) } }
+      .apply {
+        MediaButtons.sessionCommands(snapshot).forEach { add(it) }
+        if (!MediaSessionController.browseCapabilities.search) {
+          remove(SessionCommand.COMMAND_CODE_LIBRARY_SEARCH)
+        }
+      }
       .build()
 
   private fun browseRoot(): MediaItem =
@@ -1309,6 +1963,28 @@ class RnMediaMediaSessionService : MediaLibraryService() {
      * this has a startup problem no timeout will fix.
      */
     private const val REVIVAL_TIMEOUT_MS = 10_000L
+
+    /**
+     * The four-tab root cap, and the default when a browser sends no
+     * `EXTRAS_KEY_ROOT_CHILDREN_LIMIT` hint.
+     *
+     * Google, on the content hierarchy: *"expect this number to be four"*. The
+     * same number is enforced in TypeScript (`capRootTabs`) so CarPlay behaves
+     * identically; this is the floor a browser can only lower.
+     */
+    private const val DEFAULT_ROOT_CHILDREN_LIMIT = 4
+
+    /**
+     * How long a browse pull may keep a browser waiting before the cached
+     * answer is served instead.
+     *
+     * Generous next to [BroadcastPlayer]'s 3 s command deadline, because this
+     * one covers a real app call — a library query, a network round trip —
+     * rather than a state broadcast. Short enough that a car never sits on a
+     * spinner: Android Auto's own patience is not documented, and being the
+     * thing that gives up first is the only way to control what the user sees.
+     */
+    private const val BROWSE_TIMEOUT_MS = 5_000L
 
     /**
      * Flatten a `Bundle` into a JSON object string for the JS `customAction`

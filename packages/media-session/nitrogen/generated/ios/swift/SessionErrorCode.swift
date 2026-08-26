@@ -31,6 +31,10 @@ public extension SessionErrorCode {
         self = .iconnotfound
       case "localAudioSlotUnavailable":
         self = .localaudioslotunavailable
+      case "playFromMediaIdUnhandled":
+        self = .playfrommediaidunhandled
+      case "browseRootRejected":
+        self = .browserootrejected
       default:
         return nil
     }
@@ -55,6 +59,10 @@ public extension SessionErrorCode {
         return "iconNotFound"
       case .localaudioslotunavailable:
         return "localAudioSlotUnavailable"
+      case .playfrommediaidunhandled:
+        return "playFromMediaIdUnhandled"
+      case .browserootrejected:
+        return "browseRootRejected"
     }
   }
 }

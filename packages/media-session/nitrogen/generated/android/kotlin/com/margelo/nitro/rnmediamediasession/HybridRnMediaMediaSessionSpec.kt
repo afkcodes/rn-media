@@ -77,6 +77,18 @@ abstract class HybridRnMediaMediaSessionSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun getSleepTimer(): NativeSleepTimerState?
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setBrowseCapabilities(caps: NativeBrowseCapabilities): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun invalidateBrowse(parentId: String?): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun getCarConnection(): String
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

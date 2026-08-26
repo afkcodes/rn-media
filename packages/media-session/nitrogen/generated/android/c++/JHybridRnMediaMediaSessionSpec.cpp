@@ -23,6 +23,20 @@ namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
 namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 // Forward declaration of `SessionErrorCode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class SessionErrorCode; }
+// Forward declaration of `NativeBrowseResult` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseResult; }
+// Forward declaration of `NativeBrowseItem` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseItem; }
+// Forward declaration of `BrowseStyle` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseStyle; }
+// Forward declaration of `BrowseMediaType` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseMediaType; }
+// Forward declaration of `NativeBrowseError` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseError; }
+// Forward declaration of `BrowseErrorCode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseErrorCode; }
+// Forward declaration of `NativeSearchFocus` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSearchFocus; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
 // Forward declaration of `MediaPlaybackStatus` to properly resolve imports.
@@ -41,6 +55,8 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
 // Forward declaration of `RemoteVolumeControl` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; }
+// Forward declaration of `NativeBrowseCapabilities` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseCapabilities; }
 
 #include <NitroModules/Promise.hpp>
 #include <NitroModules/JPromise.hpp>
@@ -50,11 +66,11 @@ namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; 
 #include "JNativeSleepTimerState.hpp"
 #include "SleepTimerMode.hpp"
 #include "JSleepTimerMode.hpp"
+#include <string>
 #include "MediaSessionConfig.hpp"
 #include "JMediaSessionConfig.hpp"
 #include "AndroidMediaSessionConfig.hpp"
 #include "JAndroidMediaSessionConfig.hpp"
-#include <string>
 #include "IosMediaSessionConfig.hpp"
 #include "JIosMediaSessionConfig.hpp"
 #include <vector>
@@ -72,6 +88,23 @@ namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; 
 #include "SessionErrorCode.hpp"
 #include "JFunc_void_SessionErrorCode_std__string.hpp"
 #include "JSessionErrorCode.hpp"
+#include "NativeBrowseResult.hpp"
+#include "JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string.hpp"
+#include "JNativeBrowseResult.hpp"
+#include "NativeBrowseItem.hpp"
+#include "JNativeBrowseItem.hpp"
+#include "BrowseStyle.hpp"
+#include "JBrowseStyle.hpp"
+#include "BrowseMediaType.hpp"
+#include "JBrowseMediaType.hpp"
+#include "NativeBrowseError.hpp"
+#include "JNativeBrowseError.hpp"
+#include "BrowseErrorCode.hpp"
+#include "JBrowseErrorCode.hpp"
+#include "JFunc_void_std__string.hpp"
+#include "NativeSearchFocus.hpp"
+#include "JFunc_void_std__string_NativeSearchFocus.hpp"
+#include "JNativeSearchFocus.hpp"
 #include "NativePlaybackState.hpp"
 #include "JNativePlaybackState.hpp"
 #include "MediaPlaybackStatus.hpp"
@@ -91,6 +124,8 @@ namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; 
 #include "JNativeRemotePlayback.hpp"
 #include "RemoteVolumeControl.hpp"
 #include "JRemoteVolumeControl.hpp"
+#include "NativeBrowseCapabilities.hpp"
+#include "JNativeBrowseCapabilities.hpp"
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -205,6 +240,19 @@ namespace margelo::nitro::rnmediamediasession {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<JNativeSleepTimerState>()>("getSleepTimer");
     auto __result = method(_javaPart);
     return __result != nullptr ? std::make_optional(__result->toCpp()) : std::nullopt;
+  }
+  void JHybridRnMediaMediaSessionSpec::setBrowseCapabilities(const NativeBrowseCapabilities& caps) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<JNativeBrowseCapabilities> /* caps */)>("setBrowseCapabilities");
+    method(_javaPart, JNativeBrowseCapabilities::fromCpp(caps));
+  }
+  void JHybridRnMediaMediaSessionSpec::invalidateBrowse(const std::optional<std::string>& parentId) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<jni::JString> /* parentId */)>("invalidateBrowse");
+    method(_javaPart, parentId.has_value() ? jni::make_jstring(parentId.value()) : nullptr);
+  }
+  std::string JHybridRnMediaMediaSessionSpec::getCarConnection() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<jni::JString>()>("getCarConnection");
+    auto __result = method(_javaPart);
+    return __result->toStdString();
   }
 
 } // namespace margelo::nitro::rnmediamediasession

@@ -3,6 +3,16 @@ export type { MediaSessionErrorCode } from './errors'
 
 export { BaseMediaHandler, CompositeMediaHandler } from './handler'
 
+export {
+  BROWSE_ROOT,
+  BrowseError,
+  capRootTabs,
+  isBrowseError,
+  MAX_ROOT_TABS,
+} from './browse'
+
+export { useCarConnection } from './hooks/useCarConnection'
+
 export { QueueHandler, withQueueHandling } from './queue-handler'
 export type {
   QueueBroadcaster,
@@ -53,6 +63,10 @@ export {
 } from './validate'
 
 export type {
+  BrowseItem,
+  BrowseMediaType,
+  BrowseStyle,
+  CarConnection,
   MediaCapability,
   MediaControl,
   MediaCustomAction,
@@ -65,6 +79,7 @@ export type {
   PlaybackState,
   PositionAnchor,
   RemotePlayback,
+  SearchFocus,
   RemoteVolumeControl,
   RemoteVolumeDirection,
   SessionError,
@@ -76,6 +91,7 @@ export type {
 
 export type {
   AndroidMediaSessionConfig,
+  BrowseErrorCode,
   IosMediaSessionConfig,
   MediaSessionConfig,
   MediaSessionHandlers,

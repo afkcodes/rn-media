@@ -89,4 +89,19 @@ class HybridRnMediaMediaSession : HybridRnMediaMediaSessionSpec() {
 
   override fun getSleepTimer(): NativeSleepTimerState? =
     MediaSessionController.sleepTimerState()
+
+  override fun setBrowseCapabilities(caps: NativeBrowseCapabilities) {
+    MediaSessionController.setBrowseCapabilities(caps)
+  }
+
+  override fun invalidateBrowse(parentId: String?) {
+    MediaSessionController.invalidateBrowse(parentId)
+  }
+
+  /**
+   * Synchronous by contract — a field read, no hop, no binder call. The TS
+   * layer caches the widened value; this is what it reads at `init` and what a
+   * direct `getCarConnection()` answers.
+   */
+  override fun getCarConnection(): String = MediaSessionController.carConnection
 }
