@@ -25,6 +25,8 @@ namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
 // Forward declaration of `NativeSleepTimerState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
+// Forward declaration of `NativeBrowseCapabilities` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseCapabilities; }
 
 #include <NitroModules/Promise.hpp>
 #include "MediaSessionConfig.hpp"
@@ -36,6 +38,7 @@ namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 #include <string>
 #include "NativeRemotePlayback.hpp"
 #include "NativeSleepTimerState.hpp"
+#include "NativeBrowseCapabilities.hpp"
 
 namespace margelo::nitro::rnmediamediasession {
 
@@ -80,6 +83,9 @@ namespace margelo::nitro::rnmediamediasession {
       virtual void cancelSleepTimer() = 0;
       virtual std::optional<double> getSleepTimerRemaining() = 0;
       virtual std::optional<NativeSleepTimerState> getSleepTimer() = 0;
+      virtual void setBrowseCapabilities(const NativeBrowseCapabilities& caps) = 0;
+      virtual void invalidateBrowse(const std::optional<std::string>& parentId) = 0;
+      virtual std::string getCarConnection() = 0;
 
     protected:
       // Hybrid Setup

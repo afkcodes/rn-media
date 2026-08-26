@@ -12,6 +12,7 @@ import com.margelo.nitro.rnmediamediasession.AndroidMediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaPlaybackStatus
 import com.margelo.nitro.rnmediamediasession.MediaSessionConfig
 import com.margelo.nitro.rnmediamediasession.MediaSessionHandlers
+import com.margelo.nitro.rnmediamediasession.NativeBrowseCapabilities
 import com.margelo.nitro.rnmediamediasession.NativeMediaItem
 import com.margelo.nitro.rnmediamediasession.NativePlaybackState
 import com.margelo.nitro.rnmediamediasession.NativeRemotePlayback
@@ -76,6 +77,35 @@ internal object MediaSessionController : CommandDispatcher {
 
   @Volatile
   private var current: Snapshot = Snapshot.EMPTY
+
+  /**
+   * What the app's `MediaHandler` can actually answer, declared by the TS layer
+   * at `init` — before `initialize`, because a browser can connect the instant
+   * the session exists and what it is granted is decided per connection.
+   *
+   * Defaults to "neither", which is the safe direction: an app that never
+   * declares gets a car with no search tab rather than a search tab that
+   * answers nothing.
+   *
+   * `@Volatile`: written on the JS thread, read on the media3 application
+   * looper (`onConnectAsync`, `onSearch`).
+   */
+  @Volatile
+  var browseCapabilities: NativeBrowseCapabilities =
+    NativeBrowseCapabilities(search = false, playFromSearch = false)
+    private set
+
+  /**
+   * Which car, if any, is currently driving this session — the value behind
+   * `getCarConnection()` and `useCarConnection()`.
+   *
+   * Maintained by the service from the set of connected controllers, kept here
+   * because the service is created and destroyed by the OS while this object
+   * and the JS runtime outlive it.
+   */
+  @Volatile
+  var carConnection: String = CarControllers.NONE
+    private set
 
   /** Main thread only. */
   private var player: BroadcastPlayer? = null
@@ -327,6 +357,10 @@ internal object MediaSessionController : CommandDispatcher {
       serviceRequested = false
       player = null
       androidConfig = null
+      // The session every car controller was connected to is gone. Its
+      // `onDisconnected` callbacks arrive after the release and would find no
+      // handlers anyway, so the fact is recorded here rather than inferred.
+      carConnection = CarControllers.NONE
       onDone()
     }
   }
@@ -522,6 +556,54 @@ internal object MediaSessionController : CommandDispatcher {
    */
   fun notifyTaskRemoved() {
     handlers?.onTaskRemoved()
+  }
+
+  // MARK: - Car / browse
+
+  /** Called from the JS thread, before `initialize`. */
+  fun setBrowseCapabilities(capabilities: NativeBrowseCapabilities) {
+    browseCapabilities = capabilities
+  }
+
+  /**
+   * A car connected or disconnected. Main thread only (the service computes it
+   * from the controllers media3 hands it).
+   *
+   * Only a *change* is reported, so a second controller from the same car — the
+   * Auto companion connects more than one — does not produce a second callback.
+   */
+  fun updateCarConnection(next: String) {
+    if (next == carConnection) return
+    carConnection = next
+    handlers?.onCarConnectionChanged(next)
+  }
+
+  /** See [MediaRequestLatch]. Main thread only. */
+  fun armMediaRequest() {
+    player?.armMediaRequest()
+  }
+
+  /**
+   * The app says a browse node changed. Called from the JS thread; the cache
+   * and the session both belong to the main thread.
+   *
+   * Deliberately does its work even with no service: the cache outlives the
+   * service (it is the thing a car reads when there is no runtime at all), so
+   * an app that syncs its library while nothing is connected must still be able
+   * to throw the stale answer away.
+   */
+  fun invalidateBrowse(parentId: String?) {
+    val context = appContext
+    main.post {
+      val service = this.service
+      if (service != null) {
+        service.invalidateBrowse(parentId)
+        return@post
+      }
+      if (context == null) return@post
+      val cache = BrowseCache.of(context)
+      if (parentId == null) cache.clear() else cache.evict(parentId)
+    }
   }
 
   // MARK: - Sleep timer

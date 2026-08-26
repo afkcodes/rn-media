@@ -1,6 +1,7 @@
 import { createRunOncePlugin, type ConfigPlugin } from 'expo/config-plugins'
 
 import { withBackgroundAudio } from './withBackgroundAudio'
+import { withCarPlay } from './withCarPlay'
 import { withMediaButtonReceiver } from './withMediaButtonReceiver'
 import { withAndroidNotificationIcon } from './withNotificationIcon'
 
@@ -44,6 +45,27 @@ export interface MediaSessionPluginProps {
    * @default false
    */
   readonly playbackResumption?: boolean
+
+  /**
+   * Make the app a CarPlay **audio** app: adds `UIApplicationSceneManifest`
+   * (this package's CarPlay and phone-window scene delegates) to `Info.plist`
+   * and `com.apple.developer.carplay-audio` to the entitlements.
+   *
+   * Off by default, and deliberately so: the scene manifest changes how *every*
+   * launch of the app works on every device, car or no car. Adopting it is the
+   * app's decision, exactly as `playbackResumption` is on Android.
+   *
+   * The key alone is enough for the CarPlay simulator (I/O → External Displays
+   * → CarPlay). A real head unit additionally needs Apple to grant the
+   * entitlement on your developer account — a request only you can make:
+   * https://developer.apple.com/documentation/carplay/requesting-carplay-entitlements
+   *
+   * Bare (non-prebuild) projects add the same two snippets by hand — see the
+   * package README.
+   *
+   * @default false
+   */
+  readonly carPlay?: boolean
 }
 
 const withRnMediaMediaSession: ConfigPlugin<MediaSessionPluginProps | void> = (
@@ -52,11 +74,13 @@ const withRnMediaMediaSession: ConfigPlugin<MediaSessionPluginProps | void> = (
 ) => {
   const iconPath = props ? props.androidNotificationIcon : undefined
   const playbackResumption = props ? props.playbackResumption === true : false
+  const carPlay = props ? props.carPlay === true : false
 
   const withAudio = withBackgroundAudio(config)
+  const withScenes = carPlay ? withCarPlay(withAudio) : withAudio
   const withReceiver = playbackResumption
-    ? withMediaButtonReceiver(withAudio)
-    : withAudio
+    ? withMediaButtonReceiver(withScenes)
+    : withScenes
 
   return iconPath === undefined
     ? withReceiver
@@ -78,9 +102,11 @@ export default createRunOncePlugin(
 export {
   withRnMediaMediaSession,
   withBackgroundAudio,
+  withCarPlay,
   withMediaButtonReceiver,
   withAndroidNotificationIcon,
 }
+export { applyCarPlaySceneManifest } from './withCarPlay'
 export {
   resolveDrawableTarget,
   type DrawableTarget,

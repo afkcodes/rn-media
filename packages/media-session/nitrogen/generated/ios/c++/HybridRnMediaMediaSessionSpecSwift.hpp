@@ -24,6 +24,20 @@ namespace margelo::nitro::rnmediamediasession { struct MediaSessionHandlers; }
 namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
 // Forward declaration of `SessionErrorCode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class SessionErrorCode; }
+// Forward declaration of `NativeBrowseResult` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseResult; }
+// Forward declaration of `NativeBrowseItem` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseItem; }
+// Forward declaration of `BrowseStyle` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseStyle; }
+// Forward declaration of `BrowseMediaType` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseMediaType; }
+// Forward declaration of `NativeBrowseError` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseError; }
+// Forward declaration of `BrowseErrorCode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseErrorCode; }
+// Forward declaration of `NativeSearchFocus` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSearchFocus; }
 // Forward declaration of `NativePlaybackState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativePlaybackState; }
 // Forward declaration of `MediaPlaybackStatus` to properly resolve imports.
@@ -46,6 +60,8 @@ namespace margelo::nitro::rnmediamediasession { enum class RemoteVolumeControl; 
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 // Forward declaration of `SleepTimerMode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
+// Forward declaration of `NativeBrowseCapabilities` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseCapabilities; }
 
 #include <NitroModules/Promise.hpp>
 #include "MediaSessionConfig.hpp"
@@ -58,6 +74,13 @@ namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 #include <functional>
 #include "MediaRepeatMode.hpp"
 #include "SessionErrorCode.hpp"
+#include "NativeBrowseResult.hpp"
+#include "NativeBrowseItem.hpp"
+#include "BrowseStyle.hpp"
+#include "BrowseMediaType.hpp"
+#include "NativeBrowseError.hpp"
+#include "BrowseErrorCode.hpp"
+#include "NativeSearchFocus.hpp"
 #include "NativePlaybackState.hpp"
 #include "MediaPlaybackStatus.hpp"
 #include "PositionAnchor.hpp"
@@ -70,6 +93,7 @@ namespace margelo::nitro::rnmediamediasession { enum class SleepTimerMode; }
 #include "RemoteVolumeControl.hpp"
 #include "NativeSleepTimerState.hpp"
 #include "SleepTimerMode.hpp"
+#include "NativeBrowseCapabilities.hpp"
 
 #include "RnMediaMediaSession-Swift-Cxx-Umbrella.hpp"
 
@@ -195,6 +219,26 @@ namespace margelo::nitro::rnmediamediasession {
     }
     inline std::optional<NativeSleepTimerState> getSleepTimer() override {
       auto __result = _swiftPart.getSleepTimer();
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+      auto __value = std::move(__result.value());
+      return __value;
+    }
+    inline void setBrowseCapabilities(const NativeBrowseCapabilities& caps) override {
+      auto __result = _swiftPart.setBrowseCapabilities(std::forward<decltype(caps)>(caps));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void invalidateBrowse(const std::optional<std::string>& parentId) override {
+      auto __result = _swiftPart.invalidateBrowse(parentId);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline std::string getCarConnection() override {
+      auto __result = _swiftPart.getCarConnection();
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }

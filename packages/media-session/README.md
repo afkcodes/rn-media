@@ -104,6 +104,8 @@ never discovers a no-op at runtime. Anything not listed here behaves identically
 | `setRemotePlayback(...)` | hardware volume keys drive the other device | accepted, changes nothing | iOS gives an app no way to take over the volume buttons — see [iOS: a documented no-op](#ios-a-documented-no-op) |
 | `android.*` config, `onRevivalRequested`, `MediaHandler.onTaskRemoved`, `MediaHandler.onPlaybackResumption` | the foreground service, its notification and its revival | not applicable | iOS has no service, and a terminated iOS app stays terminated — see [The platform story](#the-platform-story-read-this-before-why-is-it-android-only) |
 | `ios.supportedPlaybackRates`, `ios.artworkCacheSize` | not applicable | the lock screen's rate list; the decoded-artwork cache | media3 takes an arbitrary float and draws no rate control, and owns its own artwork cache |
+| `MediaHandler.search` | Android Auto's search tab, and the `SEARCH_SUPPORTED` flag that draws it | **never called** | CarPlay audio apps have no search template — there is no `CPSearchTemplate` outside the navigation entitlement. A missing surface, not a missing feature |
+| `BrowseItem.childStyle`, `group` | Android Auto content style (list / grid / category) and group headings | `childStyle` ignored, `group` becomes a `CPListSection` header | a `CPListTemplate` is always a list; there is no grid |
 
 Two things people expect to be on this list and are not, because they were
 fixed rather than documented:
@@ -1073,7 +1075,261 @@ What that does **not** cover:
   Force-quitting from the app switcher kills everything — that is iOS policy,
   not a bug here.
 - `skipToQueueItem` and custom actions have no iOS remote surface. They still
-  work from your own UI.
+  work from your own UI — and, since CarPlay landed, from the car's Up Next
+  list.
+
+## Android Auto
+
+Nothing to install and nothing to declare: this package ships the
+`com.google.android.gms.car.application` meta-data and the `automotive_app_desc`
+XML that Android Auto's launcher looks for, so an app that depends on it is
+already listed in the car. What you add is the tree.
+
+```ts
+import { BaseMediaHandler, BROWSE_ROOT, BrowseError } from '@rn-media/media-session'
+import type { BrowseItem, SearchFocus } from '@rn-media/media-session'
+
+class Handler extends BaseMediaHandler {
+  async getChildren(parentId: string): Promise<BrowseItem[]> {
+    if (parentId === BROWSE_ROOT) {
+      // The car's tabs: at most four, all browsable (see below).
+      return [
+        { id: 'library', title: 'Library', browsable: true },
+        { id: 'albums', title: 'Albums', browsable: true, childStyle: 'grid' },
+      ]
+    }
+    return loadChildren(parentId)
+  }
+
+  async getMediaItem(id: string): Promise<BrowseItem | undefined> {
+    return loadOne(id)
+  }
+
+  // A tap in the car. Build the queue, broadcast it, play — exactly like
+  // `play()`: the app's next broadcast is the acknowledgement.
+  playFromMediaId(id: string): void {
+    void this.playAlbumOrTrack(id)
+  }
+
+  // Optional. Its *absence* is advertised: without it, voice playback is
+  // answered `ERROR_NOT_SUPPORTED` instead of playing something arbitrary.
+  playFromSearch(query: string, focus: SearchFocus): void { … }
+
+  // Optional. Without it Android Auto hides its search tab entirely
+  // (`SEARCH_SUPPORTED=false`) rather than showing one that answers nothing.
+  async search(query: string): Promise<BrowseItem[]> { … }
+}
+```
+
+### The four rules the car imposes
+
+1. **The root is at most four browsable items.** Google: *"expect this number to
+   be four"*, and the root supports `FLAG_BROWSABLE` only. Extra or playable
+   root entries are **dropped, never silently**: the drop is reported on
+   `onSessionError` as `browseRootRejected`, naming each one. The same cap runs
+   on iOS, from the same function, so a tree that works in one car works in the
+   other.
+2. **Artwork must be `content://`.** Set `artworkUri` to an ordinary
+   `https://` URL and this package rewrites it to a `content://` served by its
+   own provider — download, downscale to the browser's requested size, cache,
+   all handled. `file://`, `content://` and `android.resource://` pass through.
+   Only URLs your own browse tree registered are ever served.
+3. **A browse error is a screen, not an exception.** Throw (or reject with) a
+   `BrowseError` and the car draws its sign-in / upgrade screen, with an
+   optional button that deep-links back into your app:
+
+   ```ts
+   throw new BrowseError('authenticationExpired', 'Sign in to continue.', {
+     label: 'Sign in',
+     url: 'myapp://signin',
+   })
+   ```
+
+   Two of the five codes reach a *legacy* browser's screen — Android Auto is one
+   — because media3 replicates only those two into the platform playback state:
+   `authenticationExpired` and `parentalControlRestricted`. The other three are
+   returned faithfully and render as an empty list there; CarPlay draws all
+   five. Use `authenticationExpired` for anything that needs a button.
+4. **A tap is not a `play`.** It arrives as `playFromMediaId(id)` and nothing
+   else — the duplicate `play()` media3 synthesises after a browse tap is
+   swallowed, so your handler is not asked to resume the *previous* track while
+   it loads the new one.
+
+### Telling the car something changed
+
+```ts
+service.invalidateBrowse('albums')  // or omit the id for "everything"
+```
+
+Evicts the cached answer and makes every connected browser ask again. Cheap and
+safe with no car connected.
+
+### While the app is not running
+
+A car that reconnects to an app the OS killed is answered **from a native cache**
+(64 nodes / 2 MB, on disk) rather than with an empty library — and, because the
+asker is a car, the JS runtime is started behind it and every parent served from
+cache is refreshed the moment your handler exists. A System UI bind never starts
+your app; only a car does.
+
+Cold browse needs `android.playbackResumption: true`, for the same reason
+playback resumption does: with no JavaScript in the process, the persisted
+mirror is the only thing that can build a session at all.
+
+### Is a car connected?
+
+```ts
+const car = useCarConnection()   // { kind: 'none' | 'androidAuto' | 'automotiveOs' | 'carPlay' }
+```
+
+`MediaService.getCarConnection()` is the synchronous twin. Both are fed by
+native: the Auto companion (`com.google.android.projection.gearhead`) and
+Automotive OS (`com.android.car.media`, `com.android.car.carlauncher`) on
+Android, a connected CarPlay scene on iOS.
+
+### Testing it
+
+The Desktop Head Unit runs on Linux and macOS
+(`$ANDROID_HOME/extras/google/auto/desktop-head-unit`). On the phone: Android
+Auto → About → tap the header 10× to unlock developer mode → ⋮ → *Start head
+unit server*. Then `adb forward tcp:5277 tcp:5277` and run the DHU.
+
+## CarPlay
+
+Your browse tree — the same `getChildren` / `playFromMediaId` handler Android
+Auto uses — rendered as CarPlay tabs and lists, plus the system Now Playing
+screen you already feed through `MPNowPlayingInfoCenter`.
+
+You write **one** handler. Nothing below is iOS-specific application code.
+
+```ts
+class Handler extends BaseMediaHandler {
+  async getChildren(parentId: string): Promise<BrowseItem[]> {
+    if (parentId === BROWSE_ROOT) {
+      // ≤ 4 browsable items: these become the car's tabs.
+      return [
+        { id: 'albums', title: 'Albums', browsable: true },
+        { id: 'artists', title: 'Artists', browsable: true },
+      ]
+    }
+    return loadChildren(parentId)
+  }
+
+  playFromMediaId(id: string) {
+    // Build the queue, broadcast it, play. Exactly like `play()`.
+  }
+}
+```
+
+### Two things your app must declare
+
+CarPlay only connects to a **scene-based** app, and it is a managed capability.
+Both are app-level declarations a library cannot merge for you.
+
+With Expo, set `carPlay: true` on the config plugin (see
+[Options](#options)) and re-run `npx expo prebuild --clean`. For a bare project,
+paste these two yourself.
+
+`ios/<YourApp>/Info.plist`:
+
+```xml
+<key>UIApplicationSceneManifest</key>
+<dict>
+  <key>UIApplicationSupportsMultipleScenes</key>
+  <true/>
+  <key>UISceneConfigurations</key>
+  <dict>
+    <key>CPTemplateApplicationSceneSessionRoleApplication</key>
+    <array>
+      <dict>
+        <key>UISceneClassName</key>
+        <string>CPTemplateApplicationScene</string>
+        <key>UISceneConfigurationName</key>
+        <string>RnMediaCarPlay</string>
+        <key>UISceneDelegateClassName</key>
+        <string>RnMediaCarPlaySceneDelegate</string>
+      </dict>
+    </array>
+    <key>UIWindowSceneSessionRoleApplication</key>
+    <array>
+      <dict>
+        <key>UISceneClassName</key>
+        <string>UIWindowScene</string>
+        <key>UISceneConfigurationName</key>
+        <string>RnMediaPhone</string>
+        <key>UISceneDelegateClassName</key>
+        <string>RnMediaWindowSceneDelegate</string>
+      </dict>
+    </array>
+  </dict>
+</dict>
+```
+
+`ios/<YourApp>/<YourApp>.entitlements`:
+
+```xml
+<key>com.apple.developer.carplay-audio</key>
+<true/>
+```
+
+Both scene delegates ship in this pod; you write no Swift. `RnMediaCarPlaySceneDelegate`
+is the head unit. `RnMediaWindowSceneDelegate` is the **phone**, and it is there
+because adopting scenes is all-or-nothing: the window your `AppDelegate` builds
+React Native into is attached to no scene, so iOS never shows it and the app
+launches to black. The shim re-parents that window's root view controller into a
+scene-owned window. It disappears when the tested React Native version reaches
+**0.88**, whose `RCTReactNativeFactory` gains
+`startReactNativeWithModuleName:inWindow:connectionOptions:` — the scene-aware
+entry point that makes re-parenting unnecessary. 0.87.1 does not have it.
+
+If your app already declares its own `UIWindowSceneSessionRoleApplication`
+delegate, the plugin leaves it alone: you own your startup, and the shim is only
+for apps that have none.
+
+### Testing it
+
+- **Simulator**: the Info.plist key alone is enough. Run the app, then
+  I/O → External Displays → CarPlay.
+- **A real head unit** additionally needs Apple to grant
+  `com.apple.developer.carplay-audio` on your developer account — a per-app
+  request only you can make:
+  [Requesting CarPlay entitlements](https://developer.apple.com/documentation/carplay/requesting-carplay-entitlements).
+
+### What the car shows
+
+| `BrowseItem` field | CarPlay |
+| --- | --- |
+| `browsable` at `BROWSE_ROOT` | a tab (≤ 4; the car reports the real limit) |
+| `browsable` elsewhere | a row with a chevron that pushes a child list |
+| `playable` | a tap calls `playFromMediaId` and shows Now Playing |
+| both | plays **and** opens the list, like Apple's own music app |
+| `title` / `subtitle` | the row's two lines |
+| `artworkUri` | the row's image, downloaded and scaled to the car's `maximumImageSize` |
+| `group` | contiguous rows sharing it get one section heading |
+| `explicit` | the explicit-content badge |
+| `completion` | the podcast-style progress bar |
+| `childStyle`, `mediaType` | ignored — Android content-style hints with no CarPlay equivalent |
+
+Nesting is capped at five levels, which is Apple's limit for non-food apps. A
+`BrowseError` thrown from `getChildren` becomes a modal alert carrying your
+message, with your `resolution.label` opening `resolution.url` **on the phone**
+— signing in is not something a head unit can do.
+
+The Now Playing screen gains a repeat, shuffle or rate button for each of
+`setRepeatMode` / `setShuffle` / `setRate` you advertise in `capabilities`, and
+an Up Next list — your broadcast queue, tapping through to `skipToQueueItem` —
+whenever the queue has more than one entry.
+
+### Two parity notes
+
+- **`search` is never called on iOS.** CarPlay audio apps have no search
+  template: the vocabulary Apple gives them is list / grid / tab bar / now
+  playing / alert, and none of them takes a query. This is a missing *surface*,
+  not a missing feature — there is nothing in the car to type into. Voice on iOS
+  arrives through `INPlayMediaIntent` (a Siri integration, not shipped yet).
+- **`useCarConnection()` reports `{ kind: 'carPlay' }`** while a head unit is
+  showing your templates, and `{ kind: 'none' }` otherwise, exactly as it
+  reports `androidAuto` / `automotiveOs` on the other platform.
 
 ## Expo config plugin
 
@@ -1108,7 +1364,7 @@ directly and through another library) applies it once.
 
 ### Options
 
-Everything above needs no options. Two are available:
+Everything above needs no options. Three are available:
 
 ```json
 {
@@ -1116,7 +1372,8 @@ Everything above needs no options. Two are available:
     "plugins": [
       ["@rn-media/media-session", {
         "androidNotificationIcon": "./assets/ic_notification.xml",
-        "playbackResumption": true
+        "playbackResumption": true,
+        "carPlay": true
       }]
     ]
   }
@@ -1151,10 +1408,25 @@ nothing but change how media buttons are routed.
 - The mod is idempotent — a receiver you already declared is left exactly as it
   is, so repeated prebuilds and a hand-written declaration both stay put.
 
+`carPlay` — makes the app a [CarPlay](#carplay) audio app: writes
+`UIApplicationSceneManifest` (this package's two scene delegates) into
+`Info.plist` and `com.apple.developer.carplay-audio` into the entitlements. Off
+by default, because the scene manifest changes how *every* launch of the app
+works on every device, car or no car — adopting it is your decision, exactly as
+`playbackResumption` is on Android.
+
+- A scene role you already declare is left exactly as it is, so an app with its
+  own window-scene delegate keeps its own startup and repeated prebuilds are a
+  no-op.
+- The entitlement key is enough for the CarPlay simulator; a real head unit
+  needs Apple to grant it on your account. See [CarPlay](#carplay).
+
 Bare React Native projects do not need the plugin at all: add
 `UIBackgroundModes` to `Info.plist`, paste the `MediaButtonReceiver` block
-above into `android/app/src/main/AndroidManifest.xml`, and drop the drawable
-into `android/app/src/main/res` yourself.
+above into `android/app/src/main/AndroidManifest.xml`, the two
+[CarPlay](#two-things-your-app-must-declare) snippets into your `Info.plist` and
+`.entitlements`, and drop the drawable into `android/app/src/main/res`
+yourself.
 
 ## Development
 

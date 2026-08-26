@@ -366,11 +366,16 @@ loudness-aware fade points recorded as the only worthwhile revisit).
 **Feature queue (owner-approved 2026-08-12, work resumes tomorrow):**
 1. **React Native 0.87 bump** — currency window closes ~2026-08-25. Contained:
    notes → bump → codegen idempotency → suites → device smoke.
-2. **Android Auto** (flagship next feature) + CarPlay-symmetric API design.
-   Browse tree over the existing media3 MediaLibraryService
-   (onGetChildren/onGetItem fan-in to a JS handler, mirroring the command
-   fan-in); validate on Google's Desktop Head Unit (runs on Linux). CarPlay
-   half implemented when Apple hardware exists (resumption precedent).
+2. **Android Auto + CarPlay — SHIPPED 2026-08-27** (`docs/specs/car.md`,
+   ARCHITECTURE §31). One handler (`getChildren`/`getMediaItem`/`playFromMediaId`/
+   `playFromSearch`/`search`) behind media3's `MediaLibrarySession` and CarPlay's
+   templates; native browse cache; artwork `ContentProvider`; per-controller
+   `COMMAND_SET_MEDIA_ITEM`. Pending: DHU device pass (owner taps), CarPlay
+   Simulator pass (Apple hardware). Follow-ups: custom browse actions
+   (`setCommandButtonsForMediaItems`), a browse-only session so cold browse does
+   not require `playbackResumption`, Siri `INPlayMediaIntent`, `getMediaItem`
+   on iOS, an XCTest target for the pure Swift, RN 0.88 scene entrypoint
+   replacing the phone-window shim.
 3. **`@rn-media/downloads`** — offline playback package. Design key: it ships
    as a source resolver (local file when downloaded, CDN otherwise) — zero
    player changes. Scope: WorkManager/URLSession backends, storage/eviction,

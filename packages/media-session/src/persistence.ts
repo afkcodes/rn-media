@@ -5,6 +5,7 @@ import {
   validateQueue,
 } from './validate'
 import type {
+  CarConnection,
   MediaItem,
   MediaServiceApi,
   PlaybackState,
@@ -531,6 +532,16 @@ export function withPersistence(
     },
     getSleepTimer(): SleepTimerState | undefined {
       return service.getSleepTimer()
+    },
+
+    // Browse is not persisted state: the tree is pulled from the handler on
+    // demand and cached natively, so these two pass straight through.
+    invalidateBrowse(parentId?: string): void {
+      service.invalidateBrowse(parentId)
+    },
+
+    getCarConnection(): CarConnection {
+      return service.getCarConnection()
     },
 
     flush(): Promise<void> {

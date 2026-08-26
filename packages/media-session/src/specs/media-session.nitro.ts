@@ -319,6 +319,35 @@ export type SessionErrorCode =
    * hardware buttons over at all, so it has no such opt-in to fail.
    */
   | 'localAudioSlotUnavailable'
+  /**
+   * A car, a voice assistant or any other browser asked to play a browse item
+   * and the app's handler did not implement `playFromMediaId`, so the tap
+   * produced *nothing* — the exact silent no-op class ARCHITECTURE §27 exists
+   * to make impossible.
+   *
+   * Reported by the **TS** layer (`BaseMediaHandler`'s default), not by native:
+   * native cannot tell a deliberate no-op from a missing implementation, and
+   * the default lives in `BaseMediaHandler` where the omission actually is.
+   * An app that ships a browse tree without `playFromMediaId` is a tree whose
+   * every leaf is dead; this is the line in logcat that says so.
+   */
+  | 'playFromMediaIdUnhandled'
+  /**
+   * Root tabs were dropped from `getChildren(BROWSE_ROOT)`.
+   *
+   * Android Auto's root accepts at most four entries and only browsable ones
+   * ("expect this number to be four"; supported flags are `FLAG_BROWSABLE`
+   * only — developer.android.com/training/cars/media/create-media-browser/content-hierarchy),
+   * and CarPlay caps the tab bar at `CPTabBarTemplate.maximumTabCount`. A root
+   * that violates either is capped rather than rejected — the car still works —
+   * but the capping is announced here, because a tab that silently vanishes on
+   * a head unit the developer does not own is undiagnosable otherwise.
+   *
+   * The message names every dropped item and why (`not browsable` / `over the
+   * N-tab limit`). Emitted by the TS layer on both platforms, from the same
+   * pure function, so the two platforms cannot disagree about what was dropped.
+   */
+  | 'browseRootRejected'
 
 /**
  * Which shape of sleep timer is armed. See
@@ -969,6 +998,173 @@ export interface NativeSleepTimerState {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                                   Browse                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How a browsable item's **children** are laid out by the car.
+ *
+ * Android Auto content style (`android.media.browse.CONTENT_STYLE_*_HINT`,
+ * re-exported publicly as `androidx.media3.session.MediaConstants.
+ * EXTRAS_KEY_CONTENT_STYLE_{BROWSABLE,PLAYABLE}`): `list` = 1, `grid` = 2,
+ * `categoryList` = 3, `categoryGrid` = 4. CarPlay has no equivalent — a
+ * `CPListTemplate` is always a list — so this is advisory there and ignored.
+ */
+export type BrowseStyle = 'list' | 'grid' | 'categoryList' | 'categoryGrid'
+
+/**
+ * What a browse node *is*, semantically.
+ *
+ * Both cars pick icons, placeholder art and (on Automotive OS) whole layouts
+ * from this. Maps to media3's `MediaMetadata.MEDIA_TYPE_*` constants, which is
+ * why the folder members are spelled the way they are.
+ */
+export type BrowseMediaType =
+  | 'mixed'
+  | 'music'
+  | 'podcastEpisode'
+  | 'radioStation'
+  | 'audiobookChapter'
+  | 'folderAlbums'
+  | 'folderArtists'
+  | 'folderGenres'
+  | 'folderPlaylists'
+  | 'folderPodcasts'
+  | 'folderRadioStations'
+  | 'folderMixed'
+
+/**
+ * Why a browse request could not be answered.
+ *
+ * Only the first two reach a legacy browser's *screen*: media3 replicates a
+ * `LibraryResult` error into the platform playback state for
+ * `ERROR_SESSION_AUTHENTICATION_EXPIRED` and
+ * `ERROR_SESSION_PREMIUM_ACCOUNT_REQUIRED` and no others
+ * (`MediaLibraryService.LIBRARY_ERROR_REPLICATION_MODE_NON_FATAL`, media3
+ * 1.11.0) — the rest are still returned honestly, they just render as an
+ * empty list on Android Auto. CarPlay draws all five as a `CPAlertTemplate`.
+ */
+export type BrowseErrorCode =
+  | 'authenticationExpired'
+  | 'premiumAccountRequired'
+  | 'notAvailableInRegion'
+  | 'parentalControlRestricted'
+  | 'notSupported'
+
+/**
+ * One node of the car browse tree, flattened for the bridge.
+ *
+ * The public `BrowseItem` has optional booleans with documented defaults; this
+ * is the resolved form — the TS layer applies the defaults exactly once, so
+ * neither platform has to invent them.
+ */
+export interface NativeBrowseItem {
+  /**
+   * Opaque, stable, unique across the whole tree. Handed straight back to
+   * {@link MediaSessionHandlers.getChildren} and
+   * {@link MediaSessionHandlers.playFromMediaId}; never parsed natively.
+   */
+  id: string
+  title: string
+  subtitle?: string
+  /**
+   * Already **converted for the platform** by the time it gets here: an
+   * `https://` URI has been rewritten to `content://<applicationId>.rnmedia.artwork/<hash>`
+   * on Android, because Android Auto accepts only `content://` and
+   * `android.resource://` for browse artwork
+   * (…/training/cars/media/create-media-browser/media-artwork). `file://`,
+   * `content://` and `android.resource://` pass through untouched; iOS takes
+   * the URI as-is.
+   */
+  artworkUri?: string
+  /** Opens a child list. */
+  browsable: boolean
+  /** Starts playback through {@link MediaSessionHandlers.playFromMediaId}. */
+  playable: boolean
+  /** How *this* item's children render. */
+  childStyle?: BrowseStyle
+  /** Contiguous items sharing a group render under one heading. */
+  group?: string
+  /**
+   * `BrowseItem.explicit`, renamed for the bridge — and it has to be.
+   *
+   * `explicit` is a C++ keyword, and nitrogen emits a struct field name
+   * verbatim into `nitrogen/generated/shared/c++/NativeBrowseItem.hpp`; the
+   * field compiled fine through Kotlin and Swift and broke the NDK build with
+   * `'explicit' can only appear on non-static member functions`. The same
+   * hazard the enum-member note on {@link MediaPlaybackStatus} describes, one
+   * level up: a *field* name must also avoid the three languages' keywords.
+   * The public API keeps `explicit`; the TS layer renames it here.
+   */
+  isExplicit: boolean
+  /** Podcast-style progress, `0..1`. `1` renders as "played". */
+  completion?: number
+  mediaType: BrowseMediaType
+}
+
+/**
+ * The error half of a {@link NativeBrowseResult}.
+ *
+ * A named interface because nitrogen cannot generate an anonymous object type
+ * (https://nitro.margelo.com/docs/types/structs).
+ */
+export interface NativeBrowseError {
+  code: BrowseErrorCode
+  message: string
+  /** Optional resolution button, e.g. `"Sign in"`. Both halves or neither. */
+  resolutionLabel?: string
+  /** Deep link the app handles, opened by the phone when the button is hit. */
+  resolutionUrl?: string
+}
+
+/**
+ * The answer to a browse pull — children, one item, or search results.
+ *
+ * One shape for all three so the native side has one bridge, one cache format
+ * and one error path. `items` is empty *and* `error` is unset for "no children"
+ * — Google's explicit guidance is to return an empty list rather than an error
+ * code when a node simply has nothing under it.
+ */
+export interface NativeBrowseResult {
+  items: NativeBrowseItem[]
+  /** Set **instead of** items, to draw the car's sign-in / upgrade screen. */
+  error?: NativeBrowseError
+}
+
+/**
+ * What the app can answer, so the session can advertise it truthfully.
+ *
+ * Android Auto reads `android.media.browse.SEARCH_SUPPORTED` out of the root
+ * hints, and media3's legacy stub computes that key from whether
+ * `COMMAND_CODE_LIBRARY_SEARCH` is available to *that* browser — so "the app
+ * has no search" has to be expressed by removing the command, not by failing
+ * the call. Same for voice: without `playFromSearch` a query is answered
+ * `ERROR_NOT_SUPPORTED` instead of silently playing something arbitrary.
+ */
+export interface NativeBrowseCapabilities {
+  search: boolean
+  playFromSearch: boolean
+}
+
+/**
+ * What a voice query was *about*, when the assistant could classify it.
+ *
+ * Android delivers this as `android.intent.extra.focus` plus the matching
+ * `MediaStore.EXTRA_MEDIA_*` extras on `onPlayFromSearch`. `kind` is a plain
+ * string rather than a union because it is parsed from a MIME type that the
+ * platform may extend; the TS layer narrows it to `SearchFocus['kind']` and
+ * falls back to `'any'`.
+ */
+export interface NativeSearchFocus {
+  kind: string
+  artist?: string
+  album?: string
+  title?: string
+  genre?: string
+  playlist?: string
+}
+
+/* -------------------------------------------------------------------------- */
 /*                              Handler callbacks                             */
 /* -------------------------------------------------------------------------- */
 
@@ -1143,6 +1339,63 @@ export interface MediaSessionHandlers {
    * one, the fix. Never a bare exception `toString()`.
    */
   onSessionError: (code: SessionErrorCode, message: string) => void
+
+  /* --------------------------------- Browse -------------------------------- */
+
+  /**
+   * Children of a browsable node. The root asks with the exported
+   * `BROWSE_ROOT` id.
+   *
+   * The one place in this struct where native **waits on JS**, and it is
+   * allowed to: `onGetChildren` is documented as asynchronous (media3 returns
+   * a `ListenableFuture`) and the browser — not the user's finger — is the
+   * thing kept waiting. Everything that is a *command* still returns `void`.
+   *
+   * A returning callback arrives natively as a Nitro `Promise<T>` callable
+   * from any thread (`Promise.kt` / `Promise.swift`, 0.37.0), which is what
+   * lets the media3 application looper bridge it into a `ListenableFuture`
+   * without a hop through the main thread.
+   */
+  getChildren: (parentId: string) => Promise<NativeBrowseResult>
+  /**
+   * One item by id — Android's `onGetItem`, CarPlay's refresh of a row.
+   *
+   * Returns the same result shape carrying **0 or 1** items, rather than an
+   * optional item, so the error half is available here too (a locked item
+   * should say "premium required", not "does not exist").
+   */
+  getMediaItem: (id: string) => Promise<NativeBrowseResult>
+  /**
+   * Browsable search results for the car's search tab.
+   *
+   * Never invoked on iOS: CarPlay audio apps have no search template at all
+   * (there is no `CPSearchTemplate` outside the navigation entitlement), so
+   * the car has no surface to type into. Not a parity gap — a missing surface.
+   */
+  search: (query: string) => Promise<NativeBrowseResult>
+  /**
+   * A car, a head unit or an assistant asked to play a browse item.
+   *
+   * `void`, like `play`: the acknowledgement is the app's next `setQueue` /
+   * `setPlaybackState` broadcast (ARCHITECTURE §9). On Android this arrives
+   * through `MediaSession.Callback.onSetMediaItems`, which is where every
+   * legacy `onPlayFromMediaId` lands (`MediaSessionLegacyStub`, media3 1.11.0).
+   */
+  playFromMediaId: (id: string) => void
+  /**
+   * "Play some jazz." `query` may be empty — Assistant's bare "play music" —
+   * which means *resume, or pick something*.
+   */
+  playFromSearch: (query: string, focus: NativeSearchFocus) => void
+  /**
+   * A car connected or disconnected: `'none' | 'androidAuto' | 'automotiveOs'
+   * | 'carPlay'`.
+   *
+   * A plain string rather than a union because it is the same value
+   * {@link RnMediaMediaSession.getCarConnection} returns, and the TS layer
+   * widens both into the `CarConnection` discriminated union in one place.
+   */
+  onCarConnectionChanged: (kind: string) => void
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1364,4 +1617,45 @@ export interface RnMediaMediaSession extends HybridObject<{
    * synchronous cheapness.
    */
   getSleepTimer(): NativeSleepTimerState | undefined
+
+  /* --------------------------------- Browse -------------------------------- */
+
+  /**
+   * Declare which browse capabilities the app's handler actually implements.
+   *
+   * Called by the TS layer at `initialize` and whenever the handler is
+   * replaced. Android turns `search: false` into the *removal* of
+   * `COMMAND_CODE_LIBRARY_SEARCH` from the session commands granted to
+   * browsers, which is the only thing that makes media3's legacy stub
+   * advertise `android.media.browse.SEARCH_SUPPORTED = false` — Android Auto
+   * hides its search tab from that key alone. iOS has no search surface, so
+   * this is recorded and otherwise unused there.
+   */
+  setBrowseCapabilities(caps: NativeBrowseCapabilities): void
+
+  /**
+   * The children of `parentId` changed — a download finished, a library synced,
+   * the user signed in.
+   *
+   * Evicts the native browse cache entry and tells every connected browser:
+   * Android calls `MediaLibrarySession.notifyChildrenChanged`, iOS re-fetches
+   * and re-sections any visible template showing that parent. Omit `parentId`
+   * to mean "everything", which evicts the whole cache and notifies for every
+   * parent that was in it plus the root.
+   */
+  invalidateBrowse(parentId?: string): void
+
+  /**
+   * Is a car connected right now — `'none' | 'androidAuto' | 'automotiveOs' |
+   * 'carPlay'`.
+   *
+   * Synchronous and cheap (a field read). Android derives it from the set of
+   * connected controllers media3 classifies as the Auto companion
+   * (`com.google.android.projection.gearhead`) or Automotive OS
+   * (`com.android.car.media`, `com.android.car.carlauncher`); iOS from whether
+   * a `CPTemplateApplicationScene` is connected. The reactive twin is the
+   * `useCarConnection()` hook, fed by
+   * {@link MediaSessionHandlers.onCarConnectionChanged}.
+   */
+  getCarConnection(): string
 }

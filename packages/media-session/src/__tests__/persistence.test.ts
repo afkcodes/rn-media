@@ -213,6 +213,8 @@ describe('save → restore round trip', () => {
       setSleepTimerToTrackEnd: () => {},
       cancelSleepTimer: () => {},
       getSleepTimerRemaining: () => undefined,
+      invalidateBrowse: () => {},
+      getCarConnection: () => ({ kind: 'none' }) as const,
       getSleepTimer: () => undefined,
       stopService: () => Promise.resolve(),
     }

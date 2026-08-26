@@ -780,17 +780,24 @@ describe('session error severity', () => {
     'metadataMismatch',
     'iconNotFound',
     'localAudioSlotUnavailable',
+    'playFromMediaIdUnhandled',
+    'browseRootRejected',
   ]
 
   it('grades every code, and grades nothing that is not a code', () => {
     expect(Object.keys(SESSION_ERROR_SEVERITY).sort()).toEqual([...ALL].sort())
   })
 
-  it('reserves fatal for the two failures that end background playback', () => {
+  it('reserves fatal for the failures that lose the user a gesture', () => {
     const fatal = ALL.filter((code) => SESSION_ERROR_SEVERITY[code] === 'fatal')
     expect(fatal).toEqual([
+      // Background playback is gone, and the resumption the user pressed
+      // produced nothing.
       'backgroundPlaybackUnavailable',
       'playbackResumptionFailed',
+      // A car tapped a browse item and nothing at all happened: the same class
+      // of loss, on a surface the developer cannot see.
+      'playFromMediaIdUnhandled',
     ])
   })
 

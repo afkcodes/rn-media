@@ -22,6 +22,9 @@
 #include "JFunc_void_bool.hpp"
 #include "JFunc_void_std__string_std__string.hpp"
 #include "JFunc_void_SessionErrorCode_std__string.hpp"
+#include "JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string.hpp"
+#include "JFunc_void_std__string.hpp"
+#include "JFunc_void_std__string_NativeSearchFocus.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 
 namespace margelo::nitro::rnmediamediasession {
@@ -53,6 +56,9 @@ void registerAllNatives() {
   margelo::nitro::rnmediamediasession::JFunc_void_bool_cxx::registerNatives();
   margelo::nitro::rnmediamediasession::JFunc_void_std__string_std__string_cxx::registerNatives();
   margelo::nitro::rnmediamediasession::JFunc_void_SessionErrorCode_std__string_cxx::registerNatives();
+  margelo::nitro::rnmediamediasession::JFunc_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_cxx::registerNatives();
+  margelo::nitro::rnmediamediasession::JFunc_void_std__string_cxx::registerNatives();
+  margelo::nitro::rnmediamediasession::JFunc_void_std__string_NativeSearchFocus_cxx::registerNatives();
 
   // Register Nitro Hybrid Objects
   HybridObjectRegistry::registerHybridObjectConstructor(

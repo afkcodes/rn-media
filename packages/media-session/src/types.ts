@@ -455,16 +455,195 @@ export interface MediaHandler {
    */
   onSessionError?(error: SessionError): void | Promise<void>
 
-  /* --- Android Auto / CarPlay browse: reserved, not wired to native in v1 --- */
+  /* ------------------------- Android Auto / CarPlay ------------------------- */
 
   /**
-   * Reserved for the media3 browse tree (`MediaLibraryService`). Not invoked in
-   * v1 — the native `MediaLibrarySession.Callback` returns an empty root.
+   * The children of a browsable node — one screen of the car's browse tree.
+   *
+   * Called with `BROWSE_ROOT` for the **root tabs**, then with whatever `id`
+   * the user drilled into. The car hands ids back verbatim; nothing native
+   * parses them.
+   *
+   * Unlike every other method here this one is *awaited*: a browser expects an
+   * answer (media3 returns a `ListenableFuture`, CarPlay fills a list after the
+   * push), and it is the browser being kept waiting, not a finger on a button.
+   * Answer fast anyway — Android Auto shows a spinner until you do.
+   *
+   * Return `[]` for "this node has nothing under it" — Google's own guidance is
+   * to prefer an empty list over an error code. Throw (or reject with) a
+   * {@link BrowseError} for "I cannot answer this": a sign-in screen instead of
+   * an empty one.
+   *
+   * The root is capped at four browsable tabs on both platforms
+   * (`BROWSE_ROOT`), and anything dropped is reported on the session-error
+   * channel as `browseRootRejected` rather than vanishing.
    */
-  getChildren(parentId: string): Promise<MediaItem[]>
-  /** Reserved. See {@link getChildren}. */
-  getMediaItem(id: string): Promise<MediaItem | undefined>
+  getChildren(parentId: string): Promise<BrowseItem[]>
+  /**
+   * One browse node by id — Android's `onGetItem`, CarPlay refreshing a row.
+   *
+   * `undefined` means "no such item", which the car renders as a missing row
+   * rather than an error. Throw a {@link BrowseError} for "it exists and you
+   * may not have it".
+   */
+  getMediaItem(id: string): Promise<BrowseItem | undefined>
+  /**
+   * A car, a head unit or an assistant asked to **play** a browse item.
+   *
+   * Build the queue around `id`, broadcast it, start playback — the same
+   * acknowledge-by-broadcast contract as {@link play}: nothing on any surface
+   * moves until the app's next `setQueue`/`setPlaybackState` says so.
+   *
+   * Not optional, and deliberately: a browse tree whose leaves do nothing when
+   * tapped is the purest silent no-op in this package. `BaseMediaHandler`'s
+   * default therefore reports `playFromMediaIdUnhandled` on the session-error
+   * channel instead of returning quietly.
+   */
+  playFromMediaId(id: string): void | Promise<void>
+  /**
+   * "Play some jazz" — a voice query from Assistant or the head unit's mic.
+   *
+   * `query` may be `''`, which is Assistant's bare "play music": resume, or
+   * pick something. `focus` carries what the assistant managed to classify
+   * (artist, album, genre…), and is `{ kind: 'any' }` when it classified
+   * nothing.
+   *
+   * **Optional, and the absence is advertised**: a handler without this method
+   * makes the session answer voice playback requests with
+   * `ERROR_NOT_SUPPORTED` rather than playing something arbitrary.
+   */
+  playFromSearch?(query: string, focus: SearchFocus): void | Promise<void>
+  /**
+   * Browsable results for the car's **search tab**.
+   *
+   * **Optional, and the absence is advertised**: without it the session drops
+   * `COMMAND_CODE_LIBRARY_SEARCH` from what browsers may use, which is the only
+   * thing that makes media3's legacy stub publish
+   * `android.media.browse.SEARCH_SUPPORTED = false` — and that key alone is
+   * what hides Android Auto's search tab.
+   *
+   * Never called on iOS: CarPlay audio apps have no search template, so there
+   * is no surface to type into. A missing surface, not a missing feature.
+   */
+  search?(query: string): Promise<BrowseItem[]>
 }
+
+/* -------------------------------------------------------------------------- */
+/*                        Android Auto / CarPlay browse                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One node of the car browse tree.
+ *
+ * A node may be **both** browsable and playable — an album that opens *and*
+ * plays. media3 and CarPlay both allow it; Android Auto's *root* does not (see
+ * {@link BROWSE_ROOT}).
+ */
+export interface BrowseItem {
+  /**
+   * Opaque, stable and unique across the whole tree.
+   *
+   * Android Auto and CarPlay hand it straight back to {@link
+   * MediaHandler.getChildren} and {@link MediaHandler.playFromMediaId}, so it
+   * is the app's own key — a track id, a `album:1234`, a JSON blob if you must.
+   * It must not be empty: media3 rejects a browse item with an empty media id.
+   */
+  id: string
+  title: string
+  subtitle?: string
+  /**
+   * `https://`, `file://`, `content://` or `android.resource://`.
+   *
+   * Android Auto accepts **only** `content://` and `android.resource://` for
+   * browse artwork, so an `https://` URI is rewritten to a `content://` served
+   * by this package's own provider — the download, the downscale and the cache
+   * are handled for you. Nothing to do differently on iOS, which fetches the
+   * URI itself.
+   */
+  artworkUri?: string
+  /**
+   * Opens a child list — `getChildren(id)` is called when it is tapped.
+   *
+   * @default false
+   */
+  browsable?: boolean
+  /**
+   * Starts playback — `playFromMediaId(id)` is called when it is tapped.
+   *
+   * @default false
+   */
+  playable?: boolean
+  /**
+   * How **this item's children** are laid out. Android Auto content style;
+   * CarPlay draws a list either way and ignores it.
+   */
+  childStyle?: BrowseStyle
+  /**
+   * Contiguous items that share a `group` are drawn under one heading.
+   *
+   * Contiguous is load-bearing: both cars group *runs*, not sets, so
+   * `[a, a, b, a]` renders three headings.
+   */
+  group?: string
+  /** Explicit-content badge. @default false */
+  explicit?: boolean
+  /**
+   * Podcast-style progress, `0..1`. `1` renders as "played", anything between
+   * `0` and `1` as a partial progress bar, `0` (and omitted) as untouched.
+   */
+  completion?: number
+  /**
+   * What this node *is*. Both cars pick icons, placeholder art and — on
+   * Automotive OS — whole layouts from it.
+   *
+   * @default 'mixed'
+   */
+  mediaType?: BrowseMediaType
+}
+
+/**
+ * How a browsable item's children render. See {@link BrowseItem.childStyle}.
+ */
+export type BrowseStyle = 'list' | 'grid' | 'categoryList' | 'categoryGrid'
+
+/** The semantic type of a browse node. See {@link BrowseItem.mediaType}. */
+export type BrowseMediaType =
+  | 'mixed'
+  | 'music'
+  | 'podcastEpisode'
+  | 'radioStation'
+  | 'audiobookChapter'
+  | 'folderAlbums'
+  | 'folderArtists'
+  | 'folderGenres'
+  | 'folderPlaylists'
+  | 'folderPodcasts'
+  | 'folderRadioStations'
+  | 'folderMixed'
+
+/**
+ * What a voice query was about, when the assistant could classify it.
+ *
+ * Android delivers this alongside the query on `onPlayFromSearch`
+ * (`android.intent.extra.focus` plus the matching `MediaStore.EXTRA_MEDIA_*`
+ * extras). Nothing is guaranteed: `{ kind: 'any' }` with no fields is what a
+ * plain "play something" produces, and every field is independent of `kind`.
+ */
+export interface SearchFocus {
+  kind: 'any' | 'artist' | 'album' | 'title' | 'genre' | 'playlist'
+  artist?: string
+  album?: string
+  title?: string
+  genre?: string
+  playlist?: string
+}
+
+/** Where playback is being controlled from. See {@link MediaServiceApi.getCarConnection}. */
+export type CarConnection =
+  | { kind: 'none' }
+  | { kind: 'androidAuto' }
+  | { kind: 'automotiveOs' }
+  | { kind: 'carPlay' }
 
 /** Configuration accepted by `MediaService.init`. */
 export interface MediaServiceConfig {
@@ -844,6 +1023,30 @@ export interface MediaServiceApi {
    * ```
    */
   getSleepTimer(): SleepTimerState | undefined
+
+  /* ------------------------- Android Auto / CarPlay ------------------------- */
+
+  /**
+   * The children of `parentId` changed — a download finished, a library synced,
+   * the user signed in.
+   *
+   * Evicts the cached answer and tells every connected browser to ask again:
+   * Android calls `MediaLibrarySession.notifyChildrenChanged`, iOS re-fetches
+   * and re-sections any visible template showing that parent. Omit `parentId`
+   * for "everything changed", which evicts the whole cache and notifies for
+   * every parent in it plus the root.
+   *
+   * Cheap and safe to call when nothing is listening: with no car connected it
+   * is a cache eviction and nothing else.
+   */
+  invalidateBrowse(parentId?: string): void
+  /**
+   * Is a car connected right now?
+   *
+   * Synchronous and cheap. The reactive twin is `useCarConnection()` from
+   * `@rn-media/media-session/hooks`, which re-renders on every transition.
+   */
+  getCarConnection(): CarConnection
 }
 
 export type {

@@ -10,6 +10,12 @@
 // Forward declarations of C++ defined types
 // Forward declaration of `AndroidMediaSessionConfig` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct AndroidMediaSessionConfig; }
+// Forward declaration of `BrowseErrorCode` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseErrorCode; }
+// Forward declaration of `BrowseMediaType` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseMediaType; }
+// Forward declaration of `BrowseStyle` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { enum class BrowseStyle; }
 // Forward declaration of `HybridRnMediaMediaSessionSpec` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { class HybridRnMediaMediaSessionSpec; }
 // Forward declaration of `IosMediaSessionConfig` to properly resolve imports.
@@ -22,10 +28,18 @@ namespace margelo::nitro::rnmediamediasession { enum class MediaControl; }
 namespace margelo::nitro::rnmediamediasession { struct MediaCustomAction; }
 // Forward declaration of `MediaRepeatMode` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { enum class MediaRepeatMode; }
+// Forward declaration of `NativeBrowseError` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseError; }
+// Forward declaration of `NativeBrowseItem` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseItem; }
+// Forward declaration of `NativeBrowseResult` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeBrowseResult; }
 // Forward declaration of `NativeMediaItem` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeMediaItem; }
 // Forward declaration of `NativeRemotePlayback` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeRemotePlayback; }
+// Forward declaration of `NativeSearchFocus` to properly resolve imports.
+namespace margelo::nitro::rnmediamediasession { struct NativeSearchFocus; }
 // Forward declaration of `NativeSleepTimerState` to properly resolve imports.
 namespace margelo::nitro::rnmediamediasession { struct NativeSleepTimerState; }
 // Forward declaration of `RemoteVolumeControl` to properly resolve imports.
@@ -41,14 +55,21 @@ namespace RnMediaMediaSession { class HybridRnMediaMediaSessionSpec_cxx; }
 
 // Include C++ defined types
 #include "AndroidMediaSessionConfig.hpp"
+#include "BrowseErrorCode.hpp"
+#include "BrowseMediaType.hpp"
+#include "BrowseStyle.hpp"
 #include "HybridRnMediaMediaSessionSpec.hpp"
 #include "IosMediaSessionConfig.hpp"
 #include "MediaCapability.hpp"
 #include "MediaControl.hpp"
 #include "MediaCustomAction.hpp"
 #include "MediaRepeatMode.hpp"
+#include "NativeBrowseError.hpp"
+#include "NativeBrowseItem.hpp"
+#include "NativeBrowseResult.hpp"
 #include "NativeMediaItem.hpp"
 #include "NativeRemotePlayback.hpp"
+#include "NativeSearchFocus.hpp"
 #include "NativeSleepTimerState.hpp"
 #include "RemoteVolumeControl.hpp"
 #include "SessionErrorCode.hpp"
@@ -322,6 +343,182 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
     return Func_void_SessionErrorCode_std__string_Wrapper(std::move(value));
   }
   
+  // pragma MARK: std::optional<BrowseStyle>
+  /**
+   * Specialized version of `std::optional<BrowseStyle>`.
+   */
+  using std__optional_BrowseStyle_ = std::optional<BrowseStyle>;
+  inline std::optional<BrowseStyle> create_std__optional_BrowseStyle_(const BrowseStyle& value) noexcept {
+    return std::optional<BrowseStyle>(value);
+  }
+  inline bool has_value_std__optional_BrowseStyle_(const std::optional<BrowseStyle>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline BrowseStyle get_std__optional_BrowseStyle_(const std::optional<BrowseStyle>& optional) noexcept {
+    return optional.value();
+  }
+  
+  // pragma MARK: std::vector<NativeBrowseItem>
+  /**
+   * Specialized version of `std::vector<NativeBrowseItem>`.
+   */
+  using std__vector_NativeBrowseItem_ = std::vector<NativeBrowseItem>;
+  inline std::vector<NativeBrowseItem> create_std__vector_NativeBrowseItem_(size_t size) noexcept {
+    std::vector<NativeBrowseItem> vector;
+    vector.reserve(size);
+    return vector;
+  }
+  
+  // pragma MARK: std::optional<NativeBrowseError>
+  /**
+   * Specialized version of `std::optional<NativeBrowseError>`.
+   */
+  using std__optional_NativeBrowseError_ = std::optional<NativeBrowseError>;
+  inline std::optional<NativeBrowseError> create_std__optional_NativeBrowseError_(const NativeBrowseError& value) noexcept {
+    return std::optional<NativeBrowseError>(value);
+  }
+  inline bool has_value_std__optional_NativeBrowseError_(const std::optional<NativeBrowseError>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline NativeBrowseError get_std__optional_NativeBrowseError_(const std::optional<NativeBrowseError>& optional) noexcept {
+    return optional.value();
+  }
+  
+  // pragma MARK: std::shared_ptr<Promise<NativeBrowseResult>>
+  /**
+   * Specialized version of `std::shared_ptr<Promise<NativeBrowseResult>>`.
+   */
+  using std__shared_ptr_Promise_NativeBrowseResult__ = std::shared_ptr<Promise<NativeBrowseResult>>;
+  inline std::shared_ptr<Promise<NativeBrowseResult>> create_std__shared_ptr_Promise_NativeBrowseResult__() noexcept {
+    return Promise<NativeBrowseResult>::create();
+  }
+  inline PromiseHolder<NativeBrowseResult> wrap_std__shared_ptr_Promise_NativeBrowseResult__(std::shared_ptr<Promise<NativeBrowseResult>> promise) noexcept {
+    return PromiseHolder<NativeBrowseResult>(std::move(promise));
+  }
+  
+  // pragma MARK: std::function<void(const NativeBrowseResult& /* result */)>
+  /**
+   * Specialized version of `std::function<void(const NativeBrowseResult&)>`.
+   */
+  using Func_void_NativeBrowseResult = std::function<void(const NativeBrowseResult& /* result */)>;
+  /**
+   * Wrapper class for a `std::function<void(const NativeBrowseResult& / * result * /)>`, this can be used from Swift.
+   */
+  class Func_void_NativeBrowseResult_Wrapper final {
+  public:
+    explicit Func_void_NativeBrowseResult_Wrapper(std::function<void(const NativeBrowseResult& /* result */)>&& func): _function(std::make_unique<std::function<void(const NativeBrowseResult& /* result */)>>(std::move(func))) {}
+    inline void call(NativeBrowseResult result) const noexcept {
+      _function->operator()(result);
+    }
+  private:
+    std::unique_ptr<std::function<void(const NativeBrowseResult& /* result */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_void_NativeBrowseResult create_Func_void_NativeBrowseResult(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_void_NativeBrowseResult_Wrapper wrap_Func_void_NativeBrowseResult(Func_void_NativeBrowseResult value) noexcept {
+    return Func_void_NativeBrowseResult_Wrapper(std::move(value));
+  }
+  
+  // pragma MARK: std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* parentId */)>
+  /**
+   * Specialized version of `std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string&)>`.
+   */
+  using Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string = std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* parentId */)>;
+  /**
+   * Wrapper class for a `std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& / * parentId * /)>`, this can be used from Swift.
+   */
+  class Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_Wrapper final {
+  public:
+    explicit Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_Wrapper(std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* parentId */)>&& func): _function(std::make_unique<std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* parentId */)>>(std::move(func))) {}
+    inline std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>> call(std::string parentId) const noexcept {
+      auto __result = _function->operator()(parentId);
+      return __result;
+    }
+  private:
+    std::unique_ptr<std::function<std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>(const std::string& /* parentId */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string create_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_Wrapper wrap_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string value) noexcept {
+    return Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_Wrapper(std::move(value));
+  }
+  
+  // pragma MARK: std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>
+  /**
+   * Specialized version of `std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>`.
+   */
+  using std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult____ = std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>>;
+  inline std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>> create_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult____() noexcept {
+    return Promise<std::shared_ptr<Promise<NativeBrowseResult>>>::create();
+  }
+  inline PromiseHolder<std::shared_ptr<Promise<NativeBrowseResult>>> wrap_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult____(std::shared_ptr<Promise<std::shared_ptr<Promise<NativeBrowseResult>>>> promise) noexcept {
+    return PromiseHolder<std::shared_ptr<Promise<NativeBrowseResult>>>(std::move(promise));
+  }
+  
+  // pragma MARK: std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>& /* result */)>
+  /**
+   * Specialized version of `std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>&)>`.
+   */
+  using Func_void_std__shared_ptr_Promise_NativeBrowseResult__ = std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>& /* result */)>;
+  /**
+   * Wrapper class for a `std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>& / * result * /)>`, this can be used from Swift.
+   */
+  class Func_void_std__shared_ptr_Promise_NativeBrowseResult___Wrapper final {
+  public:
+    explicit Func_void_std__shared_ptr_Promise_NativeBrowseResult___Wrapper(std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>& /* result */)>&& func): _function(std::make_unique<std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>& /* result */)>>(std::move(func))) {}
+    inline void call(std::shared_ptr<Promise<NativeBrowseResult>> result) const noexcept {
+      _function->operator()(result);
+    }
+  private:
+    std::unique_ptr<std::function<void(const std::shared_ptr<Promise<NativeBrowseResult>>& /* result */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_void_std__shared_ptr_Promise_NativeBrowseResult__ create_Func_void_std__shared_ptr_Promise_NativeBrowseResult__(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_void_std__shared_ptr_Promise_NativeBrowseResult___Wrapper wrap_Func_void_std__shared_ptr_Promise_NativeBrowseResult__(Func_void_std__shared_ptr_Promise_NativeBrowseResult__ value) noexcept {
+    return Func_void_std__shared_ptr_Promise_NativeBrowseResult___Wrapper(std::move(value));
+  }
+  
+  // pragma MARK: std::function<void(const std::string& /* id */)>
+  /**
+   * Specialized version of `std::function<void(const std::string&)>`.
+   */
+  using Func_void_std__string = std::function<void(const std::string& /* id */)>;
+  /**
+   * Wrapper class for a `std::function<void(const std::string& / * id * /)>`, this can be used from Swift.
+   */
+  class Func_void_std__string_Wrapper final {
+  public:
+    explicit Func_void_std__string_Wrapper(std::function<void(const std::string& /* id */)>&& func): _function(std::make_unique<std::function<void(const std::string& /* id */)>>(std::move(func))) {}
+    inline void call(std::string id) const noexcept {
+      _function->operator()(id);
+    }
+  private:
+    std::unique_ptr<std::function<void(const std::string& /* id */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_void_std__string create_Func_void_std__string(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_void_std__string_Wrapper wrap_Func_void_std__string(Func_void_std__string value) noexcept {
+    return Func_void_std__string_Wrapper(std::move(value));
+  }
+  
+  // pragma MARK: std::function<void(const std::string& /* query */, const NativeSearchFocus& /* focus */)>
+  /**
+   * Specialized version of `std::function<void(const std::string&, const NativeSearchFocus&)>`.
+   */
+  using Func_void_std__string_NativeSearchFocus = std::function<void(const std::string& /* query */, const NativeSearchFocus& /* focus */)>;
+  /**
+   * Wrapper class for a `std::function<void(const std::string& / * query * /, const NativeSearchFocus& / * focus * /)>`, this can be used from Swift.
+   */
+  class Func_void_std__string_NativeSearchFocus_Wrapper final {
+  public:
+    explicit Func_void_std__string_NativeSearchFocus_Wrapper(std::function<void(const std::string& /* query */, const NativeSearchFocus& /* focus */)>&& func): _function(std::make_unique<std::function<void(const std::string& /* query */, const NativeSearchFocus& /* focus */)>>(std::move(func))) {}
+    inline void call(std::string query, NativeSearchFocus focus) const noexcept {
+      _function->operator()(query, focus);
+    }
+  private:
+    std::unique_ptr<std::function<void(const std::string& /* query */, const NativeSearchFocus& /* focus */)>> _function;
+  } SWIFT_NONCOPYABLE;
+  Func_void_std__string_NativeSearchFocus create_Func_void_std__string_NativeSearchFocus(void* NON_NULL swiftClosureWrapper) noexcept;
+  inline Func_void_std__string_NativeSearchFocus_Wrapper wrap_Func_void_std__string_NativeSearchFocus(Func_void_std__string_NativeSearchFocus value) noexcept {
+    return Func_void_std__string_NativeSearchFocus_Wrapper(std::move(value));
+  }
+  
   // pragma MARK: std::vector<MediaControl>
   /**
    * Specialized version of `std::vector<MediaControl>`.
@@ -512,6 +709,15 @@ namespace margelo::nitro::rnmediamediasession::bridge::swift {
   }
   inline Result_std__optional_NativeSleepTimerState__ create_Result_std__optional_NativeSleepTimerState__(const std::exception_ptr& error) noexcept {
     return Result<std::optional<NativeSleepTimerState>>::withError(error);
+  }
+  
+  // pragma MARK: Result<std::string>
+  using Result_std__string_ = Result<std::string>;
+  inline Result_std__string_ create_Result_std__string_(const std::string& value) noexcept {
+    return Result<std::string>::withValue(value);
+  }
+  inline Result_std__string_ create_Result_std__string_(const std::exception_ptr& error) noexcept {
+    return Result<std::string>::withError(error);
   }
 
 } // namespace margelo::nitro::rnmediamediasession::bridge::swift

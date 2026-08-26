@@ -402,6 +402,18 @@ export class SessionBridge {
   }
 
   /**
+   * Tell any connected car that a browse node changed.
+   *
+   * The sign-in toggle is the demo: flipping it changes what `getChildren`
+   * answers for every node, so every node is invalidated. A real app calls it
+   * with the one parent whose contents moved.
+   */
+  invalidateBrowse(parentId?: string): void {
+    this.#service?.invalidateBrowse(parentId)
+    console.log(`[example] invalidateBrowse(${parentId ?? 'everything'})`)
+  }
+
+  /**
    * Polled by the UI. Safe from JS *because the UI is on screen.*
    *
    * `getSleepTimer()` rather than `getSleepTimerRemaining()`, because the badge

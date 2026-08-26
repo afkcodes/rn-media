@@ -18,7 +18,7 @@ public extension MediaSessionHandlers {
   /**
    * Create a new instance of `MediaSessionHandlers`.
    */
-  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, setDeviceVolume: @escaping (_ volume: Double) -> Void, increaseDeviceVolume: @escaping () -> Void, decreaseDeviceVolume: @escaping () -> Void, setDeviceMuted: @escaping (_ muted: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void, onRevivalRequested: @escaping () -> Void, onSessionError: @escaping (_ code: SessionErrorCode, _ message: String) -> Void) {
+  init(play: @escaping () -> Void, pause: @escaping () -> Void, stop: @escaping () -> Void, seekTo: @escaping (_ position: Double) -> Void, skipToNext: @escaping () -> Void, skipToPrevious: @escaping () -> Void, skipToQueueItem: @escaping (_ index: Double) -> Void, setRate: @escaping (_ rate: Double) -> Void, setRepeatMode: @escaping (_ mode: MediaRepeatMode) -> Void, setShuffle: @escaping (_ enabled: Bool) -> Void, setDeviceVolume: @escaping (_ volume: Double) -> Void, increaseDeviceVolume: @escaping () -> Void, decreaseDeviceVolume: @escaping () -> Void, setDeviceMuted: @escaping (_ muted: Bool) -> Void, onTaskRemoved: @escaping () -> Void, customAction: @escaping (_ name: String, _ extras: String) -> Void, onSleepTimer: @escaping () -> Void, onPlaybackResumption: @escaping () -> Void, onRevivalRequested: @escaping () -> Void, onSessionError: @escaping (_ code: SessionErrorCode, _ message: String) -> Void, getChildren: @escaping (_ parentId: String) -> Promise<Promise<NativeBrowseResult>>, getMediaItem: @escaping (_ id: String) -> Promise<Promise<NativeBrowseResult>>, search: @escaping (_ query: String) -> Promise<Promise<NativeBrowseResult>>, playFromMediaId: @escaping (_ id: String) -> Void, playFromSearch: @escaping (_ query: String, _ focus: NativeSearchFocus) -> Void, onCarConnectionChanged: @escaping (_ kind: String) -> Void) {
     self.init({ () -> bridge.Func_void in
       let __closureWrapper = Func_void(play)
       return bridge.create_Func_void(__closureWrapper.toUnsafe())
@@ -79,6 +79,24 @@ public extension MediaSessionHandlers {
     }(), { () -> bridge.Func_void_SessionErrorCode_std__string in
       let __closureWrapper = Func_void_SessionErrorCode_std__string(onSessionError)
       return bridge.create_Func_void_SessionErrorCode_std__string(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string in
+      let __closureWrapper = Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(getChildren)
+      return bridge.create_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string in
+      let __closureWrapper = Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(getMediaItem)
+      return bridge.create_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string in
+      let __closureWrapper = Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(search)
+      return bridge.create_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_std__string in
+      let __closureWrapper = Func_void_std__string(playFromMediaId)
+      return bridge.create_Func_void_std__string(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_std__string_NativeSearchFocus in
+      let __closureWrapper = Func_void_std__string_NativeSearchFocus(playFromSearch)
+      return bridge.create_Func_void_std__string_NativeSearchFocus(__closureWrapper.toUnsafe())
+    }(), { () -> bridge.Func_void_std__string in
+      let __closureWrapper = Func_void_std__string(onCarConnectionChanged)
+      return bridge.create_Func_void_std__string(__closureWrapper.toUnsafe())
     }())
   }
 
@@ -278,6 +296,129 @@ public extension MediaSessionHandlers {
       let __wrappedFunction = bridge.wrap_Func_void_SessionErrorCode_std__string(self.__onSessionError)
       return { (__code: SessionErrorCode, __message: String) -> Void in
         __wrappedFunction.call(__code.rawValue, std.string(__message))
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var getChildren: (_ parentId: String) -> Promise<Promise<NativeBrowseResult>> {
+    return { () -> (String) -> Promise<Promise<NativeBrowseResult>> in
+      let __wrappedFunction = bridge.wrap_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(self.__getChildren)
+      return { (__parentId: String) -> Promise<Promise<NativeBrowseResult>> in
+        let __result = __wrappedFunction.call(std.string(__parentId))
+        return { () -> Promise<Promise<NativeBrowseResult>> in
+          let __promise = Promise<Promise<NativeBrowseResult>>()
+          let __resolver = { (__result: Promise<NativeBrowseResult>) in
+            __promise.resolve(withResult: __result)
+          }
+          let __rejecter = { (__error: Error) in
+            __promise.reject(withError: __error)
+          }
+          let __resolverCpp = { () -> bridge.Func_void_std__shared_ptr_Promise_NativeBrowseResult__ in
+            let __closureWrapper = Func_void_std__shared_ptr_Promise_NativeBrowseResult__(__resolver)
+            return bridge.create_Func_void_std__shared_ptr_Promise_NativeBrowseResult__(__closureWrapper.toUnsafe())
+          }()
+          let __rejecterCpp = { () -> bridge.Func_void_std__exception_ptr in
+            let __closureWrapper = Func_void_std__exception_ptr(__rejecter)
+            return bridge.create_Func_void_std__exception_ptr(__closureWrapper.toUnsafe())
+          }()
+          let __promiseHolder = bridge.wrap_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult____(__result)
+          __promiseHolder.addOnResolvedListener(__resolverCpp)
+          __promiseHolder.addOnRejectedListener(__rejecterCpp)
+          return __promise
+        }()
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var getMediaItem: (_ id: String) -> Promise<Promise<NativeBrowseResult>> {
+    return { () -> (String) -> Promise<Promise<NativeBrowseResult>> in
+      let __wrappedFunction = bridge.wrap_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(self.__getMediaItem)
+      return { (__id: String) -> Promise<Promise<NativeBrowseResult>> in
+        let __result = __wrappedFunction.call(std.string(__id))
+        return { () -> Promise<Promise<NativeBrowseResult>> in
+          let __promise = Promise<Promise<NativeBrowseResult>>()
+          let __resolver = { (__result: Promise<NativeBrowseResult>) in
+            __promise.resolve(withResult: __result)
+          }
+          let __rejecter = { (__error: Error) in
+            __promise.reject(withError: __error)
+          }
+          let __resolverCpp = { () -> bridge.Func_void_std__shared_ptr_Promise_NativeBrowseResult__ in
+            let __closureWrapper = Func_void_std__shared_ptr_Promise_NativeBrowseResult__(__resolver)
+            return bridge.create_Func_void_std__shared_ptr_Promise_NativeBrowseResult__(__closureWrapper.toUnsafe())
+          }()
+          let __rejecterCpp = { () -> bridge.Func_void_std__exception_ptr in
+            let __closureWrapper = Func_void_std__exception_ptr(__rejecter)
+            return bridge.create_Func_void_std__exception_ptr(__closureWrapper.toUnsafe())
+          }()
+          let __promiseHolder = bridge.wrap_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult____(__result)
+          __promiseHolder.addOnResolvedListener(__resolverCpp)
+          __promiseHolder.addOnRejectedListener(__rejecterCpp)
+          return __promise
+        }()
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var search: (_ query: String) -> Promise<Promise<NativeBrowseResult>> {
+    return { () -> (String) -> Promise<Promise<NativeBrowseResult>> in
+      let __wrappedFunction = bridge.wrap_Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string(self.__search)
+      return { (__query: String) -> Promise<Promise<NativeBrowseResult>> in
+        let __result = __wrappedFunction.call(std.string(__query))
+        return { () -> Promise<Promise<NativeBrowseResult>> in
+          let __promise = Promise<Promise<NativeBrowseResult>>()
+          let __resolver = { (__result: Promise<NativeBrowseResult>) in
+            __promise.resolve(withResult: __result)
+          }
+          let __rejecter = { (__error: Error) in
+            __promise.reject(withError: __error)
+          }
+          let __resolverCpp = { () -> bridge.Func_void_std__shared_ptr_Promise_NativeBrowseResult__ in
+            let __closureWrapper = Func_void_std__shared_ptr_Promise_NativeBrowseResult__(__resolver)
+            return bridge.create_Func_void_std__shared_ptr_Promise_NativeBrowseResult__(__closureWrapper.toUnsafe())
+          }()
+          let __rejecterCpp = { () -> bridge.Func_void_std__exception_ptr in
+            let __closureWrapper = Func_void_std__exception_ptr(__rejecter)
+            return bridge.create_Func_void_std__exception_ptr(__closureWrapper.toUnsafe())
+          }()
+          let __promiseHolder = bridge.wrap_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult____(__result)
+          __promiseHolder.addOnResolvedListener(__resolverCpp)
+          __promiseHolder.addOnRejectedListener(__rejecterCpp)
+          return __promise
+        }()
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var playFromMediaId: (_ id: String) -> Void {
+    return { () -> (String) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_std__string(self.__playFromMediaId)
+      return { (__id: String) -> Void in
+        __wrappedFunction.call(std.string(__id))
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var playFromSearch: (_ query: String, _ focus: NativeSearchFocus) -> Void {
+    return { () -> (String, NativeSearchFocus) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_std__string_NativeSearchFocus(self.__playFromSearch)
+      return { (__query: String, __focus: NativeSearchFocus) -> Void in
+        __wrappedFunction.call(std.string(__query), __focus)
+      }
+    }()
+  }
+  
+  @inline(__always)
+  var onCarConnectionChanged: (_ kind: String) -> Void {
+    return { () -> (String) -> Void in
+      let __wrappedFunction = bridge.wrap_Func_void_std__string(self.__onCarConnectionChanged)
+      return { (__kind: String) -> Void in
+        __wrappedFunction.call(std.string(__kind))
       }
     }()
   }

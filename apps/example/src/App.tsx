@@ -60,6 +60,7 @@ import { COLORS, SPACE, TYPE } from './theme'
 import { usePlayback } from './playback'
 import { durationMs, nowPlaying } from './playback/broadcast'
 import { runCastSelfTest } from './playback/cast-selftest'
+import { isSignInRequired, setSignInRequired } from './playback/browse'
 import { sameShell, selectShell } from './playback/shell'
 import { formatTime } from './components/SeekBar'
 import { CastSection } from './components/CastSection'
@@ -73,6 +74,7 @@ import { PersistenceNote } from './components/PersistenceNote'
 import { PlaybackModes } from './components/PlaybackModes'
 import { PrefetchBanner } from './components/PrefetchBanner'
 import { RetryBanner } from './components/RetryBanner'
+import { CarSection } from './components/CarSection'
 import { SessionErrorBanner } from './components/SessionErrorBanner'
 import { QueueList } from './components/QueueList'
 import { ReplayGainToggle } from './components/ReplayGainToggle'
@@ -127,6 +129,12 @@ function App(): React.JSX.Element {
   // the entry changes rather than kept in state and pushed on every update.
   // Most entries have none, and this costs exactly one native call per track.
   const [chapters, setChapters] = React.useState<readonly ChapterEntry[]>([])
+  // The browse tree's sign-in simulation. Module state in `browse.ts` is the
+  // source of truth (the handler reads it from a thread with no React), and
+  // this mirrors it so the chip re-renders.
+  const [signInRequired, setSignInRequiredState] = React.useState(
+    isSignInRequired()
+  )
   React.useEffect(() => {
     setChapters(ready ? playback.chapters() : [])
   }, [playback, ready, shell.index, shell.status])
@@ -281,6 +289,16 @@ function App(): React.JSX.Element {
         <EqualizerSection player={player} />
 
         <VisualizerSection player={player} />
+
+        <CarSection
+          signInRequired={signInRequired}
+          onToggleSignIn={(required) => {
+            setSignInRequired(required)
+            setSignInRequiredState(required)
+            // A car already showing a list does not ask again on its own.
+            playback.invalidateBrowse()
+          }}
+        />
 
         <SleepTimerSection
           ready={ready}

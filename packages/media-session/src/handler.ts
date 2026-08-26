@@ -1,9 +1,11 @@
 import { logSessionError } from './errors'
+import { toSessionError } from './validate'
 import type {
+  BrowseItem,
   MediaHandler,
-  MediaItem,
   MediaRepeatMode,
   RemoteVolumeDirection,
+  SearchFocus,
   SessionError,
 } from './types'
 
@@ -93,14 +95,47 @@ export class BaseMediaHandler implements MediaHandler {
     logSessionError(error)
   }
 
-  /** Reserved for the Android Auto browse tree. Not invoked in v1. */
-  getChildren(_parentId: string): Promise<MediaItem[]> {
+  /**
+   * Default: an empty tree.
+   *
+   * Correct by construction rather than by luck: an empty list is what Google
+   * asks a browse node with no children to return, so an app that never
+   * implements this shows a car an app with nothing in it — not an error, not a
+   * crash, and not a browse entry that does nothing when tapped.
+   */
+  getChildren(_parentId: string): Promise<BrowseItem[]> {
     return Promise.resolve([])
   }
 
-  /** Reserved for the Android Auto browse tree. Not invoked in v1. */
-  getMediaItem(_id: string): Promise<MediaItem | undefined> {
+  /** Default: no such item. See {@link getChildren}. */
+  getMediaItem(_id: string): Promise<BrowseItem | undefined> {
     return Promise.resolve(undefined)
+  }
+
+  /**
+   * **The second method here that is not a no-op**, and for the same reason
+   * {@link onSessionError} is the first: the default that would be silent is
+   * the bug.
+   *
+   * A handler that overrides `getChildren` and forgets this one hands a car a
+   * full browse tree in which every single leaf does nothing when tapped —
+   * no error, no log, no playback (ARCHITECTURE §27). There is nothing this
+   * class can play on the app's behalf, so it says so on the channel the app
+   * already reads.
+   *
+   * Overriding it silences the report, which is the point: implementing the
+   * method *is* the fix.
+   */
+  playFromMediaId(id: string): void | Promise<void> {
+    return this.onSessionError(
+      toSessionError(
+        'playFromMediaIdUnhandled',
+        `A car or voice assistant asked to play browse item "${id}", but this ` +
+          'MediaHandler does not implement playFromMediaId(id), so the tap did ' +
+          'nothing. Implement it: build the queue around that id, broadcast it, ' +
+          'and start playback.'
+      )
+    )
   }
 }
 
@@ -119,7 +154,38 @@ export class BaseMediaHandler implements MediaHandler {
  * ```
  */
 export class CompositeMediaHandler implements MediaHandler {
-  constructor(protected readonly inner: MediaHandler) {}
+  /**
+   * Present **iff the wrapped handler has it** — properties rather than
+   * methods, and assigned in the constructor, for a reason that is invisible
+   * until a car is in front of you.
+   *
+   * These two are *capability declarations*: `MediaService.init` reads the
+   * decorated handler to decide whether the session advertises a search tab
+   * (`COMMAND_CODE_LIBRARY_SEARCH`, which is the only thing that sets Android
+   * Auto's `SEARCH_SUPPORTED`) and whether voice playback is answerable. A
+   * decorator that *defined* them the way it defines `play` would advertise a
+   * search the app underneath cannot answer, and the car would draw an empty
+   * search tab instead of no search tab. A method declaration cannot be
+   * conditional; a property assignment can.
+   */
+  readonly playFromSearch?: (
+    query: string,
+    focus: SearchFocus
+  ) => void | Promise<void>
+  /** See {@link playFromSearch}. */
+  readonly search?: (query: string) => Promise<BrowseItem[]>
+
+  constructor(protected readonly inner: MediaHandler) {
+    const playFromSearch = inner.playFromSearch
+    if (playFromSearch !== undefined) {
+      this.playFromSearch = (query, focus) =>
+        playFromSearch.call(inner, query, focus)
+    }
+    const search = inner.search
+    if (search !== undefined) {
+      this.search = (query) => search.call(inner, query)
+    }
+  }
 
   play(): void | Promise<void> {
     return this.inner.play()
@@ -194,10 +260,13 @@ export class CompositeMediaHandler implements MediaHandler {
     }
     return this.inner.onSessionError(error)
   }
-  getChildren(parentId: string): Promise<MediaItem[]> {
+  getChildren(parentId: string): Promise<BrowseItem[]> {
     return this.inner.getChildren(parentId)
   }
-  getMediaItem(id: string): Promise<MediaItem | undefined> {
+  getMediaItem(id: string): Promise<BrowseItem | undefined> {
     return this.inner.getMediaItem(id)
+  }
+  playFromMediaId(id: string): void | Promise<void> {
+    return this.inner.playFromMediaId(id)
   }
 }

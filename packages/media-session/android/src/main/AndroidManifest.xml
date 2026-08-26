@@ -25,6 +25,44 @@
 
   <application>
     <!--
+      Android Auto's own gate. Its launcher enumerates apps whose manifest
+      declares this meta-data and whose XML says `media`; an app without it is
+      simply not listed in the car, however complete its browse tree is.
+      Declared here rather than in the consumer's manifest for the same reason
+      the service is: installing this package should be enough.
+      https://developer.android.com/training/cars/media#config_manifest
+    -->
+    <meta-data
+      android:name="com.google.android.gms.car.application"
+      android:resource="@xml/automotive_app_desc" />
+
+    <!--
+      Browse artwork. Android Auto renders a browse item's icon from
+      `content://` and `android.resource://` only — an https URL does not
+      render, and `setIconBitmap` is unsupported on Automotive OS and a 1 MB
+      binder limit away from a TransactionTooLargeException. So the browse path
+      rewrites https artwork to this provider.
+      https://developer.android.com/training/cars/media/create-media-browser/media-artwork
+
+      - authorities: `${applicationId}` is substituted by AGP at merge time, so
+        two apps built from this package never collide.
+      - exported="true" is required: the browser (Android Auto, the Automotive
+        OS media app) is a different process, and there is no per-URI grant to
+        hand it — the browse tree is not launched by an Intent.
+      - grantUriPermissions="false" for the same reason: nothing here is handed
+        out per URI. What protects the provider is that it serves ONLY hashes
+        this app registered while building its own browse tree
+        (`ArtworkRegistry`), so it can never be pointed at an arbitrary URL or
+        an arbitrary file. Same shape as Google's UAMP sample.
+    -->
+    <provider
+      android:name="com.rnmediamediasession.RnMediaArtworkProvider"
+      android:authorities="${applicationId}.rnmedia.artwork"
+      android:exported="true"
+      android:grantUriPermissions="false"
+      tools:ignore="ExportedContentProvider" />
+
+    <!--
       Declared here rather than in the consumer's manifest so that adding this
       package is enough to get a working session. The consumer can still
       override any attribute with tools:replace.

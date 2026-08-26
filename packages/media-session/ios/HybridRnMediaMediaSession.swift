@@ -49,14 +49,20 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
 
   // MARK: - Main-queue-confined state
 
-  private var handlers: MediaSessionHandlers?
+  // Four of the fields below are `internal` rather than `private`, and the
+  // widening is deliberate and minimal: `CarPlayBridge.swift` is an extension of
+  // this class in another file, and Swift's `private` does not reach across
+  // files even for the same type. They stay main-queue-confined — the CarPlay
+  // extension is `@MainActor`, which is that same queue — so the confinement
+  // contract this whole class is built on is unchanged.
+  var handlers: MediaSessionHandlers?
   private var binding: RemoteCommandBinding?
   private let artworkCache = ArtworkCache()
 
-  private var playbackState: NativePlaybackState?
+  var playbackState: NativePlaybackState?
   private var projection = PositionProjection.zero
   private var mediaItem: NativeMediaItem?
-  private var queue: [NativeMediaItem] = []
+  var queue: [NativeMediaItem] = []
 
   /// Bumped on every artwork change so a slow download that lands after the
   /// user skipped cannot paint the previous track's cover.
@@ -137,6 +143,12 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       self.binding?.apply([])
       self.reportedArtworkFailure = nil
       self.checkBackgroundAudioMode()
+      // Publish this session to CarPlay. The scene may already be connected —
+      // the driver plugged the phone in, the car launched the app, and the
+      // scene reached `didConnect` before JavaScript finished starting — in
+      // which case registering is what replaces the car's spinner with the real
+      // tabs. Weakly held; see ``CarPlayLink``.
+      CarPlayLink.shared.register(self)
       promise.resolve(withResult: ())
     }
     return promise
@@ -162,6 +174,9 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       )
       self.publishNowPlayingInfo()
       self.retargetTrackEndTimer()
+      // The capability set decides which Now Playing buttons the car offers,
+      // and `queueIndex` decides which browse row shows the playing indicator.
+      CarPlayCoordinator.post(.nowPlayingChanged)
     }
   }
 
@@ -177,6 +192,7 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       // This channel is where a duration usually arrives and where a track
       // change usually shows up first — both move an end-of-track deadline.
       self.retargetTrackEndTimer()
+      CarPlayCoordinator.post(.nowPlayingChanged)
     }
   }
 
@@ -191,6 +207,8 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
       // rather than replaying a stale one.
       self.publishNowPlayingInfo()
       self.retargetTrackEndTimer()
+      // The Up Next list and its button are the broadcast queue.
+      CarPlayCoordinator.post(.nowPlayingChanged)
     }
   }
 
@@ -261,6 +279,10 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
         promise.resolve(withResult: ())
         return
       }
+      // Before the handlers go: a car left holding this session would keep
+      // asking a dead one for children. Retracting posts to the coordinator,
+      // which falls back to a spinner until another `initialize` arrives.
+      CarPlayLink.shared.register(nil)
       self.binding?.removeAll()
       self.binding = nil
       self.handlers = nil
@@ -300,7 +322,7 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
    * `%@` with the whole message as the single argument: it is built by
    * interpolation and must never be read as a format string itself.
    */
-  private func report(_ code: SessionErrorCode, _ message: String) {
+  func report(_ code: SessionErrorCode, _ message: String) {
     NSLog("%@", "[media-session] \(message)")
     handlers?.onSessionError(code, message)
   }
@@ -423,7 +445,9 @@ final class HybridRnMediaMediaSession: HybridRnMediaMediaSessionSpec {
    * never on a hot path) and a stored copy is one more thing three channels
    * would each have to remember to refresh.
    */
-  private var nowPlaying: NowPlaying? {
+  /// Internal rather than private for the reason the stored fields above are:
+  /// `CarPlayBridge.swift` reads it for `CPListItem.isPlaying`.
+  var nowPlaying: NowPlaying? {
     // Narrowed to an `Int` here rather than inside the resolver so the resolver
     // stays free of the bridge's `Double`. `Int(_: Double)` traps on NaN and on
     // anything outside `Int`'s range, so the conversion happens only for a value

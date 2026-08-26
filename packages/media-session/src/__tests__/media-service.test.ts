@@ -731,6 +731,7 @@ describe('session errors', () => {
         customAction() {},
         getChildren: () => Promise.resolve([]),
         getMediaItem: () => Promise.resolve(undefined),
+        playFromMediaId() {},
       }
       await createMediaService(native).init(() => handler)
 

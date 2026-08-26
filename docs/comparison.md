@@ -23,7 +23,7 @@ reader can check the table rather than trust it.
 | Crossfade | ❌ | ❌ | ❌ | ✅ | ❌ deliberately — built, listened to, dropped ([Limitations](../README.md#limitations)) |
 | Casting (Chromecast / AirPlay) | ❌ (V5, commercial: Chromecast/Android + AirPlay/iOS, platform-split) | ❌ | ❌ app-side | ✅ | ✅ Chromecast, both platforms — session handoff, receiver-side queue, live streams; Android device-verified, iOS CI-verified |
 | Remote (receiver) volume from the app | ❌ | ❌ | ❌ | ❌ | ✅ Android `setRemotePlayback`, plus the hardware keys while the app is foreground; screen-off key routing is [under investigation](../README.md#limitations). iOS is a documented platform no-op |
-| Android Auto / CarPlay | ✅ | ❌ | ❌ | ✅ | 🚧 next feature ([Roadmap](../README.md#roadmap)) |
+| Android Auto / CarPlay | ⚠️ controls only | ❌ | ❌ | ✅ | ✅ browse + voice (Auto), CarPlay templates |
 | DRM (Widevine/FairPlay) | ⚠️ announced | ❌ | ✅ | not documented | ❌ libmpv cannot ([Limitations](../README.md#limitations)) |
 | Native binary it adds | ≈none (platform codecs) | ≈none | ≈none | — | 3.63 MB downloaded for `arm64-v8a`, ≈7.1 MB for the iOS device slice ([Requirements](../README.md#requirements)) |
 
@@ -65,9 +65,21 @@ Every ✅ in the `rn-media` column is a claim this repo has to be able to prove:
 The cells that favour a competitor stay in the table on purpose: crossfade
 (shipped by queue-player, [deliberately dropped
 here](../README.md#limitations)), DRM (react-native-video has it, libmpv cannot),
-Android Auto / CarPlay (track-player and queue-player ship it, we do not yet),
 and the native binary size — a shipped engine costs megabytes that platform
 codecs do not.
+
+## Android Auto
+
+A row corrected on 2026-08-27 after reading the sources rather than the READMEs.
+`react-native-track-player`'s README says "Android Auto — full support"; its
+engine (`KotlinAudio`, `MediaSessionCallback.kt`) handles play / pause / next /
+previous / forward / rewind / stop / seek / rating and nothing else — no
+`MediaLibraryService`, no browse tree, no `onPlayFromSearch`. That is the car's
+Now Playing screen driven by an ordinary media session, which every media3 app
+gets; it is not a browsable app. `react-native-queue-player` genuinely ships it
+(Nitro-based `BrowseDataProvider` + a full `CarPlay*` Swift set), with a
+push-a-static-snapshot design; ours pulls from the handler and caches natively so
+dynamic trees work and a cold car connection still answers (ARCHITECTURE §31).
 
 ## A different job: `react-native-audio-api`
 

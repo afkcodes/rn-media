@@ -63,6 +63,12 @@ namespace margelo::nitro::rnmediamediasession {
         case SessionErrorCode::LOCALAUDIOSLOTUNAVAILABLE:
           static const auto fieldLOCALAUDIOSLOTUNAVAILABLE = clazz->getStaticField<JSessionErrorCode>("LOCALAUDIOSLOTUNAVAILABLE");
           return clazz->getStaticFieldValue(fieldLOCALAUDIOSLOTUNAVAILABLE);
+        case SessionErrorCode::PLAYFROMMEDIAIDUNHANDLED:
+          static const auto fieldPLAYFROMMEDIAIDUNHANDLED = clazz->getStaticField<JSessionErrorCode>("PLAYFROMMEDIAIDUNHANDLED");
+          return clazz->getStaticFieldValue(fieldPLAYFROMMEDIAIDUNHANDLED);
+        case SessionErrorCode::BROWSEROOTREJECTED:
+          static const auto fieldBROWSEROOTREJECTED = clazz->getStaticField<JSessionErrorCode>("BROWSEROOTREJECTED");
+          return clazz->getStaticFieldValue(fieldBROWSEROOTREJECTED);
         default:
           std::string stringValue = std::to_string(static_cast<int>(value));
           throw std::invalid_argument("Invalid enum value (" + stringValue + "!");

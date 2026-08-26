@@ -10,7 +10,7 @@ package com.margelo.nitro.rnmediamediasession
 import androidx.annotation.Keep
 import com.facebook.proguard.annotations.DoNotStrip
 import java.util.Objects
-
+import com.margelo.nitro.core.Promise
 
 /**
  * Represents the JavaScript object/struct "MediaSessionHandlers".
@@ -77,13 +77,31 @@ data class MediaSessionHandlers(
   val onRevivalRequested: Func_void,
   @DoNotStrip
   @Keep
-  val onSessionError: Func_void_SessionErrorCode_std__string
+  val onSessionError: Func_void_SessionErrorCode_std__string,
+  @DoNotStrip
+  @Keep
+  val getChildren: Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string,
+  @DoNotStrip
+  @Keep
+  val getMediaItem: Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string,
+  @DoNotStrip
+  @Keep
+  val search: Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string,
+  @DoNotStrip
+  @Keep
+  val playFromMediaId: Func_void_std__string,
+  @DoNotStrip
+  @Keep
+  val playFromSearch: Func_void_std__string_NativeSearchFocus,
+  @DoNotStrip
+  @Keep
+  val onCarConnectionChanged: Func_void_std__string
 ) {
   /**
    * Create a new instance of MediaSessionHandlers from Kotlin
    */
-  constructor(play: () -> Unit, pause: () -> Unit, stop: () -> Unit, seekTo: (position: Double) -> Unit, skipToNext: () -> Unit, skipToPrevious: () -> Unit, skipToQueueItem: (index: Double) -> Unit, setRate: (rate: Double) -> Unit, setRepeatMode: (mode: MediaRepeatMode) -> Unit, setShuffle: (enabled: Boolean) -> Unit, setDeviceVolume: (volume: Double) -> Unit, increaseDeviceVolume: () -> Unit, decreaseDeviceVolume: () -> Unit, setDeviceMuted: (muted: Boolean) -> Unit, onTaskRemoved: () -> Unit, customAction: (name: String, extras: String) -> Unit, onSleepTimer: () -> Unit, onPlaybackResumption: () -> Unit, onRevivalRequested: () -> Unit, onSessionError: (code: SessionErrorCode, message: String) -> Unit):
-         this(Func_void_java(play), Func_void_java(pause), Func_void_java(stop), Func_void_double_java(seekTo), Func_void_java(skipToNext), Func_void_java(skipToPrevious), Func_void_double_java(skipToQueueItem), Func_void_double_java(setRate), Func_void_MediaRepeatMode_java(setRepeatMode), Func_void_bool_java(setShuffle), Func_void_double_java(setDeviceVolume), Func_void_java(increaseDeviceVolume), Func_void_java(decreaseDeviceVolume), Func_void_bool_java(setDeviceMuted), Func_void_java(onTaskRemoved), Func_void_std__string_std__string_java(customAction), Func_void_java(onSleepTimer), Func_void_java(onPlaybackResumption), Func_void_java(onRevivalRequested), Func_void_SessionErrorCode_std__string_java(onSessionError))
+  constructor(play: () -> Unit, pause: () -> Unit, stop: () -> Unit, seekTo: (position: Double) -> Unit, skipToNext: () -> Unit, skipToPrevious: () -> Unit, skipToQueueItem: (index: Double) -> Unit, setRate: (rate: Double) -> Unit, setRepeatMode: (mode: MediaRepeatMode) -> Unit, setShuffle: (enabled: Boolean) -> Unit, setDeviceVolume: (volume: Double) -> Unit, increaseDeviceVolume: () -> Unit, decreaseDeviceVolume: () -> Unit, setDeviceMuted: (muted: Boolean) -> Unit, onTaskRemoved: () -> Unit, customAction: (name: String, extras: String) -> Unit, onSleepTimer: () -> Unit, onPlaybackResumption: () -> Unit, onRevivalRequested: () -> Unit, onSessionError: (code: SessionErrorCode, message: String) -> Unit, getChildren: (parentId: String) -> Promise<Promise<NativeBrowseResult>>, getMediaItem: (id: String) -> Promise<Promise<NativeBrowseResult>>, search: (query: String) -> Promise<Promise<NativeBrowseResult>>, playFromMediaId: (id: String) -> Unit, playFromSearch: (query: String, focus: NativeSearchFocus) -> Unit, onCarConnectionChanged: (kind: String) -> Unit):
+         this(Func_void_java(play), Func_void_java(pause), Func_void_java(stop), Func_void_double_java(seekTo), Func_void_java(skipToNext), Func_void_java(skipToPrevious), Func_void_double_java(skipToQueueItem), Func_void_double_java(setRate), Func_void_MediaRepeatMode_java(setRepeatMode), Func_void_bool_java(setShuffle), Func_void_double_java(setDeviceVolume), Func_void_java(increaseDeviceVolume), Func_void_java(decreaseDeviceVolume), Func_void_bool_java(setDeviceMuted), Func_void_java(onTaskRemoved), Func_void_std__string_std__string_java(customAction), Func_void_java(onSleepTimer), Func_void_java(onPlaybackResumption), Func_void_java(onRevivalRequested), Func_void_SessionErrorCode_std__string_java(onSessionError), Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_java(getChildren), Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_java(getMediaItem), Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string_java(search), Func_void_std__string_java(playFromMediaId), Func_void_std__string_NativeSearchFocus_java(playFromSearch), Func_void_std__string_java(onCarConnectionChanged))
 
   override fun equals(other: Any?): Boolean {
     if (this === other) return true
@@ -108,6 +126,12 @@ data class MediaSessionHandlers(
       && Objects.deepEquals(this.onPlaybackResumption, other.onPlaybackResumption)
       && Objects.deepEquals(this.onRevivalRequested, other.onRevivalRequested)
       && Objects.deepEquals(this.onSessionError, other.onSessionError)
+      && Objects.deepEquals(this.getChildren, other.getChildren)
+      && Objects.deepEquals(this.getMediaItem, other.getMediaItem)
+      && Objects.deepEquals(this.search, other.search)
+      && Objects.deepEquals(this.playFromMediaId, other.playFromMediaId)
+      && Objects.deepEquals(this.playFromSearch, other.playFromSearch)
+      && Objects.deepEquals(this.onCarConnectionChanged, other.onCarConnectionChanged)
   }
 
   override fun hashCode(): Int {
@@ -131,7 +155,13 @@ data class MediaSessionHandlers(
       onSleepTimer,
       onPlaybackResumption,
       onRevivalRequested,
-      onSessionError
+      onSessionError,
+      getChildren,
+      getMediaItem,
+      search,
+      playFromMediaId,
+      playFromSearch,
+      onCarConnectionChanged
     ).contentDeepHashCode()
   }
 
@@ -143,8 +173,8 @@ data class MediaSessionHandlers(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(play: Func_void, pause: Func_void, stop: Func_void, seekTo: Func_void_double, skipToNext: Func_void, skipToPrevious: Func_void, skipToQueueItem: Func_void_double, setRate: Func_void_double, setRepeatMode: Func_void_MediaRepeatMode, setShuffle: Func_void_bool, setDeviceVolume: Func_void_double, increaseDeviceVolume: Func_void, decreaseDeviceVolume: Func_void, setDeviceMuted: Func_void_bool, onTaskRemoved: Func_void, customAction: Func_void_std__string_std__string, onSleepTimer: Func_void, onPlaybackResumption: Func_void, onRevivalRequested: Func_void, onSessionError: Func_void_SessionErrorCode_std__string): MediaSessionHandlers {
-      return MediaSessionHandlers(play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, setRepeatMode, setShuffle, setDeviceVolume, increaseDeviceVolume, decreaseDeviceVolume, setDeviceMuted, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption, onRevivalRequested, onSessionError)
+    private fun fromCpp(play: Func_void, pause: Func_void, stop: Func_void, seekTo: Func_void_double, skipToNext: Func_void, skipToPrevious: Func_void, skipToQueueItem: Func_void_double, setRate: Func_void_double, setRepeatMode: Func_void_MediaRepeatMode, setShuffle: Func_void_bool, setDeviceVolume: Func_void_double, increaseDeviceVolume: Func_void, decreaseDeviceVolume: Func_void, setDeviceMuted: Func_void_bool, onTaskRemoved: Func_void, customAction: Func_void_std__string_std__string, onSleepTimer: Func_void, onPlaybackResumption: Func_void, onRevivalRequested: Func_void, onSessionError: Func_void_SessionErrorCode_std__string, getChildren: Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string, getMediaItem: Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string, search: Func_std__shared_ptr_Promise_std__shared_ptr_Promise_NativeBrowseResult_____std__string, playFromMediaId: Func_void_std__string, playFromSearch: Func_void_std__string_NativeSearchFocus, onCarConnectionChanged: Func_void_std__string): MediaSessionHandlers {
+      return MediaSessionHandlers(play, pause, stop, seekTo, skipToNext, skipToPrevious, skipToQueueItem, setRate, setRepeatMode, setShuffle, setDeviceVolume, increaseDeviceVolume, decreaseDeviceVolume, setDeviceMuted, onTaskRemoved, customAction, onSleepTimer, onPlaybackResumption, onRevivalRequested, onSessionError, getChildren, getMediaItem, search, playFromMediaId, playFromSearch, onCarConnectionChanged)
     }
   }
 }
