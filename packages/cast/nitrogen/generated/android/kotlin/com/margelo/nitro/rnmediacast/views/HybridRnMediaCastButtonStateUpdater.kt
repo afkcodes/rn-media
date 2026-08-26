@@ -14,10 +14,10 @@ internal class HybridRnMediaCastButtonStateUpdater {
   companion object {
     /**
      * Updates the props for [view] through C++.
-     * The [state] prop is expected to contain [view]'s props as wrapped Fabric state.
+     * The [newState] prop is expected to contain [view]'s props as wrapped Fabric state.
      */
     @Suppress("KotlinJniMissingFunction")
     @JvmStatic
-    external fun updateViewProps(view: HybridRnMediaCastButtonSpec, state: StateWrapper)
+    external fun updateViewProps(view: HybridRnMediaCastButtonSpec, newState: StateWrapper, oldState: StateWrapper?)
   }
 }
