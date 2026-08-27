@@ -14,13 +14,10 @@ import type { Player } from '@timbre/player'
 import type { ReplayGainMode } from '@timbre/player'
 import { COLORS, SPACE, TYPE } from '../theme'
 import type { ShellState } from '../projections'
-import {
-  invalidateBrowse,
-  setPitchSemitones,
-  setRate,
-  setVolume,
-  toggleMuted,
-} from '../playback'
+import { invalidateBrowse, setPitchSemitones, setRate } from './extras'
+// Volume routes through the cast layer so the in-app slider drives the speaker
+// while casting (and the local player otherwise).
+import { setVolume, toggleMuted } from './cast-wiring'
 import { formatTime } from '../components/SeekBar'
 import { ReplayGainToggle } from '../components/ReplayGainToggle'
 import { PrefetchBanner } from '../components/PrefetchBanner'

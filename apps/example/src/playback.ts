@@ -1,26 +1,22 @@
 /**
- * The whole common-path setup, in one file — the thing to copy.
+ * The whole common-path setup, in one file — the thing to copy. A media app
+ * wires four things in order — `Player.create → wireAudioSession →
+ * MediaService.init(one handler) → broadcast` — plus the honest edges
+ * (persistence restore, the ICY station line, retry/error). It drives the PLAYER
+ * directly and knows nothing about Chromecast or the other advanced demos; those
+ * wire themselves in through the small seams at the bottom.
  *
- * A media app wires four things, in this order:
- *
- *   Player.create → wireAudioSession → MediaService.init(one handler) → broadcast
- *
- * and everything below is those four plus the honest edges (persistence restore,
- * the ICY station line, retry/error surfacing, and — kept here because the
- * notification must mirror it — a Cast handoff). It all lives **outside React**
- * and starts at module scope (see `index.js`), which is the single most
- * important thing in the app: on Android the JS runtime outlives the Activity
- * but the React tree does not, so a player or a session owned by a hook would be
- * torn down on the Back key while a notification was still on screen. Hooks are
- * right for a screen-scoped player; a media app's player is process-scoped, so
- * it is created once and React only ever *reads* it.
+ * It all lives OUTSIDE React and starts at module scope (see `index.js`), because
+ * on Android the JS runtime outlives the Activity but the React tree does not —
+ * a player or session owned by a hook would be torn down on the Back key while a
+ * notification was still on screen. Hooks suit a screen-scoped player; a media
+ * app's player is process-scoped, created once, and React only reads it.
  */
 import { useEffect, useReducer } from 'react'
 import { AppState } from 'react-native'
 import {
   Player,
   toPlayerError,
-  type ChapterEntry,
   type PlayerError,
   type PlayerState,
 } from '@timbre/player'
@@ -37,13 +33,13 @@ import {
   withPersistence,
   withQueueHandling,
   type BrowseItem,
+  type MediaHandler,
   type MediaItem,
   type MediaRepeatMode,
   type PersistedMediaService,
   type PersistedSession,
   type SearchFocus,
   type SessionError,
-  type SleepTimerState,
 } from '@timbre/media-session'
 import { TRACKS, type Track } from './data/tracks'
 import { createDemoResolver } from './resolver'
@@ -56,11 +52,9 @@ import {
   toMediaItem,
   toPlaybackState,
 } from './projections'
-import { CastIntegration } from './cast'
-import { toCastMediaItem, toCastPlaybackState } from './cast-broadcast'
-// The car browse tree is an advanced feature (Android Auto / CarPlay), so the
-// TREE lives in `advanced/`; the handler's three-line getChildren wiring stays
-// here because the media session takes exactly one handler for every surface.
+// The car browse TREE is an advanced feature, so it lives in advanced/; the
+// handler's three-line getChildren wiring stays here only because the media
+// session takes exactly one handler for every surface.
 import {
   assertSignedIn,
   childrenOf,
@@ -91,7 +85,6 @@ export interface RetryNote {
 /** The reactive snapshot `usePlayback` hands the UI. */
 export interface PlaybackSnapshot {
   readonly player: Player | undefined
-  readonly cast: CastIntegration
   readonly queueRows: readonly QueueRow[]
   readonly queue: readonly Track[]
   /** ICY station identity, from the metadata tags. */
@@ -129,11 +122,11 @@ function notify(): void {
   for (const listener of listeners) listener()
 }
 
-/* --- The media handler: fan-in. Every remote surface funnels into this ONE
- * object, which is also the app's command vocabulary (the UI calls the same
- * methods). `withQueueHandling` gives it queue index arithmetic + the channel-3
- * broadcast for free; each method routes to the CAST receiver when a handoff
- * owns playback, so a notification button steers the speaker with no new wiring. */
+/* --- The media handler: fan-in. Every remote surface (notification, lock screen,
+ * Bluetooth, a car, Assistant) funnels into this ONE object, which is also the
+ * app's command vocabulary — the UI calls the same functions below.
+ * `withQueueHandling` gives it queue index arithmetic + the channel-3 broadcast
+ * for free; this class writes only what makes the sound, all against the player. */
 
 class DemoHandler extends withQueueHandling(BaseMediaHandler, {
   // Persist the queue too: the mixin broadcasts channel 3 through this, so the
@@ -148,62 +141,47 @@ class DemoHandler extends withQueueHandling(BaseMediaHandler, {
 
   override play(): void {
     this.#log('play')
-    if (cast.owns) return void cast.play()
     void localPlay()
   }
   override pause(): void {
     this.#log('pause')
-    if (cast.owns) return void cast.pause()
     player?.pause()
   }
   /**
    * The **remote** stop: stop playing, keep the session — the library's `stop`
-   * contract. Never the app's "stop & dismiss" (that ends background execution
-   * and is reachable only from the app's own UI): on iOS the system replaces
-   * pause with a *stop* button for a live stream, and routing that to teardown
-   * left the lock-screen card unrecoverable.
+   * contract. Never the app's "stop & dismiss" (that ends background execution):
+   * on iOS the system replaces pause with a *stop* button for a live stream, and
+   * routing that to teardown left the lock-screen card unrecoverable.
    */
   override stop(): void {
     this.#log('stop')
-    if (cast.owns) return void cast.pause()
     void stopPlayback()
   }
   override seekTo(ms: number): void {
     this.#log('seekTo')
-    seekTo(ms / 1000)
+    void player?.seekTo(ms / 1000)
   }
   override setRate(rate: number): void {
     this.#log('setRate')
     player?.setRate(rate)
   }
 
-  // withQueueHandling supplies skipToNext/skipToPrevious/skipToQueueItem; these
-  // three overrides route to the receiver while casting and, locally, defer to
-  // the PLAYER's own skip — which is loop-aware (it wraps under `loop: playlist`
-  // and not otherwise), something the mixin's static index math cannot be. See
-  // the API-DX note in the report.
+  // The two skip overrides defer to the PLAYER's own skip — which is loop-aware
+  // (it wraps under `loop: playlist` and not otherwise), something the mixin's
+  // static index math cannot be. `skipToQueueItem` keeps the mixin's path so a
+  // car/notification queue-item tap flows through `playQueueItem`.
   override skipToNext(): void {
     this.#log('skipToNext')
     ensureSession()
-    if (cast.owns) return void cast.next()
     void player?.playlist.next()
   }
   override skipToPrevious(): void {
     this.#log('skipToPrevious')
     ensureSession()
-    if (cast.owns) return void cast.previous()
-    // Restart-or-previous is the library's own rule inside `playlist.previous`
-    // (seek to 0 past 3 s in, move back otherwise) — not re-implemented here.
+    // Restart-or-previous is the library's own rule inside `playlist.previous`.
     void player?.playlist.previous()
   }
-  override skipToQueueItem(index: number): void | Promise<void> {
-    this.#log('skipToQueueItem')
-    if (cast.owns) return void cast.jumpTo(index)
-    // super → playQueueItem below, which is the one place a *tapped* queue row
-    // starts (a car item, a notification queue pick), through the focus gate.
-    return super.skipToQueueItem(index)
-  }
-  /** The only sound-making method the mixin asks a subclass to write. */
+  /** The one sound-making method the mixin asks a subclass to write. */
   override playQueueItem(_item: MediaItem, index: number): Promise<void> {
     return localJumpTo(index)
   }
@@ -219,19 +197,16 @@ class DemoHandler extends withQueueHandling(BaseMediaHandler, {
   /** The remote volume slider, and a hardware key press with the app backgrounded. */
   override onSetDeviceVolume(volume: number): void {
     this.#log(`onSetDeviceVolume(${volume.toFixed(2)})`)
-    if (cast.owns) return cast.setVolume(volume)
     player?.setVolume(volume)
   }
   override onSetDeviceMuted(muted: boolean): void {
     this.#log(`onSetDeviceMuted(${String(muted)})`)
-    if (cast.owns) return cast.setMuted(muted)
     player?.setMuted(muted)
   }
 
   override onTaskRemoved(): void {
     this.#log('onTaskRemoved')
-    // Swiped from Recents: the native default (keep playing while playing) has
-    // already run; checkpoint the position at this last-guaranteed instant.
+    // Swiped from Recents: checkpoint the position at this last-guaranteed instant.
     service?.save()
   }
   /** Playback is ALREADY paused natively by the time this fires — nothing to do. */
@@ -282,85 +257,24 @@ class DemoHandler extends withQueueHandling(BaseMediaHandler, {
   }
   playFromSearch(query: string, focus: SearchFocus): void {
     this.#log(`playFromSearch("${query}", ${focus.kind})`)
-    const needle =
-      focus.artist ?? focus.album ?? focus.title ?? focus.genre ?? query
+    const needle = focus.artist ?? focus.album ?? focus.title ?? focus.genre ?? query
     const first = searchTracks(needle)[0]
     if (first === undefined) return
     this.playFromMediaId(first.id)
   }
 }
 
-/* --- Cast: kept here (not in advanced/) because while a handoff is active the
- * RECEIVER's state must flow through the same three channels the notification and
- * lock screen read (§3), so the fan-out lives next to broadcast(). The receiver
- * transport routing is the `cast.owns` branch in every handler method above. --- */
-
-let castActive = false
-let lastCastItem = ''
-
-export const cast = new CastIntegration({
-  player: () => player,
-  queue: () => queueRows.map((row) => row.track),
-  resume: () => localPlay(),
-  onReceiverState: (snapshot) => {
-    publishCast(
-      snapshot,
-      snapshot?.itemIndex === undefined
-        ? undefined
-        : queueRows[snapshot.itemIndex]?.track
-    )
-    // Casting over: repaint channels 1–2 from the local player, silent all session.
-    if (snapshot === undefined && player !== undefined) broadcast(player.state, true)
-    notify()
-  },
-  // While the receiver owns playback the session is told so — which is what puts
-  // the phone's hardware volume keys on the speaker even with the screen locked.
-  onRemoteVolume: (volume) =>
-    service?.setRemotePlayback(
-      volume === undefined
-        ? undefined
-        : {
-            volume: Math.max(0, Math.min(1, volume.volume)),
-            muted: volume.muted,
-            // Holds a silent local output so a locked-screen key press keeps
-            // landing on this app (bug #53). On because this app demos at full
-            // capability; a real app weighs it against idle battery.
-            holdLocalAudioSlot: true,
-          }
-    ),
-  onChange: () => notify(),
-})
-
-/** While casting, the receiver drives channels 1–2 through the same setters. */
-function publishCast(snapshot: Parameters<typeof toCastPlaybackState>[0] | undefined, track: Track | undefined): void {
-  if (snapshot === undefined) {
-    castActive = false
-    lastSignature = '' // the local signature is a whole cast session stale
-    lastCastItem = ''
-    return
-  }
-  castActive = true
-  if (service === undefined) return
-  // The ITEM channel changes only on track boundaries; a receiver status arrives
-  // every few seconds and each is a position discontinuity, so the state always
-  // goes out but the item does not re-send metadata every surface already has.
-  const itemSig = `${track?.id ?? ''}|${String(snapshot.duration)}|${String(snapshot.itemIndex)}`
-  if (itemSig !== lastCastItem) {
-    lastCastItem = itemSig
-    service.setMediaItem(track === undefined ? undefined : toCastMediaItem(track, snapshot))
-  }
-  service.setPlaybackState(toCastPlaybackState(snapshot))
-}
-
 /* --- broadcast(): fan-out. Projects PlayerState onto the three channels on a
  * DISCONTINUITY only — the buffered position moves several times a second, and
- * keying on the whole snapshot would put the session back on a timer. --- */
+ * keying on the whole snapshot would put the session back on a timer. */
 
 let lastSignature = ''
+/** Set by an advanced module (cast) while it owns channels 1–2. See the seams. */
+let broadcastSuspended = false
 const durations = new Map<string, number>()
 
 function broadcast(state: PlayerState, force: boolean): void {
-  if (service === undefined || castActive) return // receiver owns 1–2 while casting
+  if (service === undefined || broadcastSuspended) return
   const track = queueRows[state.playlist.index]?.track
   const signature = [
     state.status,
@@ -379,8 +293,8 @@ function broadcast(state: PlayerState, force: boolean): void {
   lastSignature = signature
 
   // A duration we have not published yet makes the media3 timeline entry
-  // seekable (a `C.TIME_UNSET` duration reads as "not seekable", and the
-  // scrubber never appears). Guarded on the value: once per track, never a timer.
+  // seekable (a `C.TIME_UNSET` duration reads as "not seekable"). Guarded on the
+  // value: once per track, never a timer.
   if (track !== undefined) {
     const ms = durationMs(track, state)
     if (ms !== undefined && durations.get(track.id) !== ms) {
@@ -416,8 +330,6 @@ function syncQueue(): void {
       current: entry.current,
       track: matchTrack(entry.uri) ?? unknownTrack(entry.uri),
     }))
-    // `onQueueChanged` reloads the receiver projection when casting.
-    cast.onQueueChanged()
     publishQueue()
     notify()
   } catch (cause) {
@@ -439,16 +351,15 @@ function unknownTrack(uri: string): Track {
 
 /* --- The command vocabulary: one implementation each, called by BOTH the UI and
  * the handler. Anything that can start audio requests focus and ensures the
- * session is up first — the app's job, invisible until a phone call arrives. --- */
+ * session is up first — the app's job, invisible until a phone call arrives. */
 
 /** Where `play` re-enters after a stop cleared the cursor. Set on the way out. */
 let resumeIndex = 0
 /** Seek here once mpv has opened the resumed entry (persistence). */
 let pendingResumeMs: number | undefined
 
-export function play(): void {
-  if (cast.owns) return void cast.play()
-  void localPlay()
+export function play(): Promise<void> {
+  return localPlay()
 }
 async function localPlay(): Promise<void> {
   if (player === undefined) return
@@ -470,11 +381,9 @@ async function localPlay(): Promise<void> {
 }
 
 export function pause(): void {
-  if (cast.owns) return cast.pause()
   player?.pause()
 }
 export function toggle(): void {
-  if (cast.owns) return cast.toggle()
   if (player?.state.playing === true) player.pause()
   else void localPlay()
 }
@@ -487,10 +396,6 @@ export function previous(): void {
 
 /** Tapping a queue row means "play this one" — through the focus gate. */
 export function jumpTo(index: number): Promise<void> {
-  if (cast.owns) {
-    cast.jumpTo(index)
-    return Promise.resolve()
-  }
   return localJumpTo(index)
 }
 async function localJumpTo(index: number): Promise<void> {
@@ -513,48 +418,32 @@ async function localJumpTo(index: number): Promise<void> {
 
 /** Not a sound-*starting* call, so no focus request: it moves the playhead. */
 export function seekTo(seconds: number): void {
-  if (cast.owns) return cast.seekTo(seconds)
   void player?.seekTo(seconds)
 }
 /**
  * ±15 s via mpv's own relative seek, not `seekTo(position + delta)`: the position
  * this app can read is projected from an anchor that may be a few hundred ms old
- * (nothing ticks across the bridge), so an absolute target accumulates that error
- * on every rapid tap.
+ * (nothing ticks across the bridge), so an absolute target accumulates that error.
  */
 export function seekBy(deltaSeconds: number): void {
-  if (cast.owns) return cast.seekBy(deltaSeconds)
   void player?.seekBy(deltaSeconds)
 }
-
-export function setRate(rate: number): void {
-  player?.setRate(rate)
-}
-/** Pitch as a frequency ratio — mpv's own `--pitch`, a semitone is `2 ** (1/12)`. */
-export function setPitchSemitones(semitones: number): void {
-  player?.setPitch(2 ** (semitones / 12))
-}
-/** Volume follows playback ownership: the speaker while casting, mpv locally. */
 export function setVolume(volume: number): void {
-  if (cast.owns) return cast.setVolume(volume)
   player?.setVolume(volume)
 }
 export function toggleMuted(): void {
-  if (cast.owns) return cast.toggleMuted()
   if (player !== undefined) player.setMuted(!player.state.muted)
 }
 
 /** Repeat, in session vocabulary — the one method the chips and the notification share. */
 export function setRepeatMode(mode: MediaRepeatMode): void {
   // `loop` is an observed property, so the confirmation flows back through the
-  // snapshot: the UI re-renders off it and the broadcast re-sends `repeatMode`,
-  // which is the acknowledgement every remote surface waits on. No local state.
+  // snapshot: the UI re-renders off it and the broadcast re-sends `repeatMode`.
   player?.setLoop(repeatToLoop(mode))
 }
 /**
  * Shuffle — a real reorder of mpv's playlist (`true` = `playlist.shuffle`, which
  * moves the playing entry too but keeps it current; `false` = one level of undo).
- * The flag is recorded first so the queue-edit rebroadcast already carries it.
  */
 export async function setShuffleEnabled(enabled: boolean): Promise<void> {
   shuffleEnabled = enabled
@@ -591,39 +480,8 @@ async function runQueueEdit(action: (p: Player) => Promise<void>): Promise<void>
   }
 }
 
-/* --- sleep timer, checkpoints, teardown ----------------------------------- */
+/* --- checkpoints, teardown, banners --------------------------------------- */
 
-export function setSleepTimer(seconds: number): void {
-  try {
-    service?.setSleepTimer(seconds)
-  } catch (cause) {
-    console.warn('[example] sleep timer rejected:', cause)
-  }
-  notify()
-}
-export function setSleepTimerToTrackEnd(): void {
-  service?.setSleepTimerToTrackEnd()
-  notify()
-}
-export function cancelSleepTimer(): void {
-  service?.cancelSleepTimer()
-  notify()
-}
-export function getSleepTimer(): SleepTimerState | undefined {
-  return service?.getSleepTimer()
-}
-/** Tell a connected car a browse node changed (the sign-in toggle is the demo). */
-export function invalidateBrowse(parentId?: string): void {
-  service?.invalidateBrowse(parentId)
-}
-/** The current entry's chapters — a pull, taken when the entry changes. */
-export function getChapters(): readonly ChapterEntry[] {
-  return player?.getChapters() ?? []
-}
-/** The mpv-backed player, or `undefined` before `Player.create` resolves. */
-export function getPlayer(): Player | undefined {
-  return player
-}
 /** Checkpoint now — the app picks the moment (see the `AppState` wiring below). */
 export function saveSession(): void {
   service?.save()
@@ -644,15 +502,10 @@ async function stopPlayback(): Promise<void> {
  * next play rebuilds it (see `ensureSession`).
  */
 export async function stopSession(): Promise<void> {
-  if (cast.engaged) {
-    cast.pause()
-    await cast.disconnect(true)
-  }
   pause()
   try {
     // Checkpoint at the stop moment: the pause above round-trips through mpv and
-    // comes back as a broadcast *after* teardown detaches the tee, so without
-    // this the last persisted position is a possibly-stale discontinuity.
+    // comes back as a broadcast *after* teardown detaches the tee.
     service?.save()
     await service?.stopService()
   } finally {
@@ -699,14 +552,11 @@ let restored: PersistedSession | undefined
 
 /** Idempotent: safe from every mount and from a Fast Refresh. */
 export async function start(): Promise<void> {
-  // Restore first, so the queue opens on the entry the last process died on
-  // rather than jumping to track 1 and correcting itself.
+  // Restore first, so the queue opens on the entry the last process died on.
   await (restoring ??= restore())
   await (startingPlayer ??= createPlayer())
   syncQueue() // the playlist was built inside createPlayer, before events could mirror it
   ensureSession()
-  // Not awaited into the critical path: playback must not wait on Play services.
-  void cast.start()
 }
 
 async function restore(): Promise<void> {
@@ -791,8 +641,8 @@ function consumeResume(state: PlayerState): void {
 }
 
 function wirePlayerEvents(p: Player): void {
-  // `error` means "gave up", not "failed": with `retry` on, an entry that
-  // failed then played on attempt 2 produces `retrying` and no error at all.
+  // `error` means "gave up", not "failed": with `retry` on, an entry that failed
+  // then played on attempt 2 produces `retrying` and no error at all.
   p.on('error', (e, info) => {
     retrying = undefined
     error = e
@@ -805,8 +655,7 @@ function wirePlayerEvents(p: Player): void {
     retrying = { index: e.index, attempt: e.attempt, maxAttempts: e.maxAttempts, message: e.error.message }
     notify()
   })
-  // The library's own signal that the queue *contents* moved (add/remove/clear,
-  // or a reorder that changes no observable property).
+  // The library's own signal that the queue *contents* moved.
   p.on('queueChanged', () => syncQueue())
   p.on('trackChanged', () => {
     retrying = undefined // an entry that changed is no longer being re-attempted
@@ -836,34 +685,34 @@ function ensureSession(): void {
 async function createSession(): Promise<void> {
   try {
     handler ??= new DemoHandler()
-    const api = await MediaService.init(() => handler as DemoHandler, {
+    // `decorateHandler` is identity unless an advanced module (cast) wrapped it —
+    // that is how a Chromecast handoff steers the receiver from a notification
+    // button without the core knowing casting exists.
+    const target = handler
+    const api = await MediaService.init(() => decorateHandler(target), {
       android: {
         notificationChannelId: 'playback',
         notificationChannelName: 'Playback',
         notificationIcon: 'ic_notification',
         stopForegroundOnPause: true,
         // Far below media3's 10-minute default so the demotion is observable in
-        // `dumpsys activity services` while someone watches. A shipping app leaves it.
+        // `dumpsys activity services`. A shipping app leaves it alone.
         stopForegroundTimeoutMs: 15_000,
         // Coming back from the dead — paired with the bare import in index.js,
         // withPersistence below, the MediaButtonReceiver, and onRevivalRequested.
         playbackResumption: true,
-        // The alive-process half: after a stop the System UI still offers its
-        // resumption card, but this process already ran its module scope and
-        // cannot again, so a revived service asks the app to re-init — which is
-        // exactly this idempotent path. Fired only while no init is up.
+        // A revived service (System UI card / media button) runs only module
+        // scope, so it asks the app to re-init — which is exactly this path.
         onRevivalRequested: () => ensureSession(),
         notificationColor: ACCENT_ARGB,
       },
-      // Cross-platform parity: match the app's own ±15/±30 jump buttons so the
-      // lock screen moves by the same amounts (iOS pins 15 both ways otherwise).
+      // Cross-platform parity: match the app's own ±15/±30 jump buttons.
       jumpForwardSeconds: 30,
       jumpBackwardSeconds: 15,
       onHandlerError: (method, cause) =>
         console.error(`[example] handler.${method} failed:`, cause),
     })
-    // One line, and every broadcast below persists itself. `sessionStorage` is
-    // ours — the library gains no storage dependency from it.
+    // One line, and every broadcast below persists itself. `sessionStorage` is ours.
     service = withPersistence(api, sessionStorage, {
       onError: (cause) => console.error('[example] persisting the session failed:', cause),
     })
@@ -879,14 +728,45 @@ async function createSession(): Promise<void> {
   notify()
 }
 
+/* --- Seams for advanced modules (cast) — generic, not cast-aware. ---------- */
+
+export function getPlayer(): Player | undefined {
+  return player
+}
+export function getService(): PersistedMediaService | undefined {
+  return service
+}
+export function getQueue(): readonly Track[] {
+  return queueRows.map((row) => row.track)
+}
+/** Subscribe to app-owned changes (the queue moved, an error arrived, …). */
+export function subscribe(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => void listeners.delete(listener)
+}
+/** Wrap the media handler before it is registered — the fan-in decoration seam. */
+export function setHandlerDecorator(fn: (h: MediaHandler) => MediaHandler): void {
+  decorateHandler = fn
+}
+/** Hand channels 1–2 to an external owner (cast), or take them back. */
+export function setBroadcastSuspended(suspended: boolean): void {
+  broadcastSuspended = suspended
+}
+/** Re-paint channels 1–2 from the live player — used when cast hands them back. */
+export function forceBroadcast(): void {
+  if (player !== undefined) broadcast(player.state, true)
+}
+
+let decorateHandler: (h: MediaHandler) => MediaHandler = (h) => h
+
 /* --- Module scope: the reason resumption works. A revived headless runtime runs
  * ONLY module scope (no component mounts), so starting here — not in a useEffect —
- * is what registers the handler after a process kill. --- */
+ * is what registers the handler after a process kill. */
 
 void start()
 
 // Checkpoint on the way out of the foreground — the last instant JS is
-// guaranteed to run. Module scope, for the same reason: it must outlive the tree.
+// guaranteed to run. Module scope, so it outlives the React tree.
 const scope = globalThis as typeof globalThis & { __rnMediaAppState?: { remove(): void } }
 scope.__rnMediaAppState ??= AppState.addEventListener('change', (nextState) => {
   if (nextState !== 'active') {
@@ -897,17 +777,14 @@ scope.__rnMediaAppState ??= AppState.addEventListener('change', (nextState) => {
 
 /* --- The one hook the UI uses for app-owned state + the player instance. --- */
 
-/** Re-render on any app-owned change; player STATE has its own hooks in App.tsx. */
 export function usePlayback(): PlaybackSnapshot {
   const [, bump] = useReducer((n: number) => n + 1, 0)
   useEffect(() => {
     void start()
-    listeners.add(bump)
-    return () => void listeners.delete(bump)
+    return subscribe(bump)
   }, [])
   return {
     player,
-    cast,
     queueRows,
     queue: queueRows.map((row) => row.track),
     station,

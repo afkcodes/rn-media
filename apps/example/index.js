@@ -25,6 +25,12 @@ import { AppRegistry } from 'react-native';
  * device 2026-08-13 (task #47).
  */
 import './src/playback';
+// Chromecast is an advanced, self-contained module. This bare import runs its
+// module scope at boot so it can register its media-handler decorator BEFORE the
+// core builds the session — the same "bindings defer, side-effects don't" reason
+// the line above is bare (Metro inline-requires). Drop this line and the core
+// runs cast-free; nothing else changes.
+import './src/advanced/cast-wiring';
 import App from './App';
 import { name as appName } from './app.json';
 
