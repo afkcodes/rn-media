@@ -29,7 +29,6 @@ export const TransportControls = React.memo(function TransportControls({
   onToggle,
   onNext,
   onSeekBy,
-  onStop,
 }: {
   playing: boolean
   ready: boolean
@@ -40,7 +39,6 @@ export const TransportControls = React.memo(function TransportControls({
   onToggle: () => void
   onNext: () => void
   onSeekBy: (deltaSeconds: number) => void
-  onStop: () => void
 }): React.JSX.Element {
   return (
     <View style={styles.container}>
@@ -102,18 +100,6 @@ export const TransportControls = React.memo(function TransportControls({
         />
       </View>
 
-      <Pressable
-        accessibilityRole="button"
-        disabled={!ready}
-        onPress={onStop}
-        style={({ pressed }) => [
-          styles.stop,
-          !ready && styles.dim,
-          pressed && styles.pressed,
-        ]}
-      >
-        <Text style={styles.stopLabel}>■ stop &amp; dismiss notification</Text>
-      </Pressable>
     </View>
   )
 })

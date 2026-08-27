@@ -128,24 +128,6 @@ export function NowPlaying({
         )}
       </View>
 
-      <View style={styles.statusRow}>
-        <Dot color={STATUS_COLOR[shell.status]} />
-        <Text style={styles.status}>
-          {shell.status}
-          {/* Present only while stalled — mpv's own "% until we unpause". */}
-          {shell.bufferingPercent === undefined
-            ? ''
-            : ` ${String(Math.round(shell.bufferingPercent))}%`}
-        </Text>
-        <Text style={styles.clock}>
-          {formatTime(progress.position)}
-          <Text style={styles.clockDim}>
-            {' / '}
-            {live ? 'live' : formatTime(durationSeconds)}
-          </Text>
-        </Text>
-      </View>
-
       {/*
         The scrubber reads the *published* duration, not `state.duration`, so
         it goes to its live presentation on exactly the entries where the
