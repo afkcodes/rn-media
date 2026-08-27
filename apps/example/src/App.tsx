@@ -29,7 +29,7 @@ import {
   usePlayerState,
   useProgress,
   type ChapterEntry,
-} from '@timbre/player'
+} from '@afkcodes/timbre-player'
 import { COLORS, SPACE, TYPE } from './theme'
 import * as pb from './playback'
 // Transport is imported from the cast module: its routed play/pause/… drive the

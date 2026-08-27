@@ -69,7 +69,7 @@ jobs:
         run: npm ci
 
       # Before anything is compiled: does every workspace package actually
-      # resolve from the example app? On 2026-08-14 `@timbre/cast` passed
+      # resolve from the example app? On 2026-08-14 `@afkcodes/timbre-cast` passed
       # every gate we own and shipped in nothing, because its workspace link
       # was missing and the build simply succeeded WITHOUT it. Autolinking
       # skipping a package is not an error — it is a smaller APK. This step is
@@ -124,10 +124,10 @@ jobs:
         working-directory: apps/example/android
         run: >-
           ./gradlew
-          :timbre_player:lintRelease
-          :timbre_audio-session:lintRelease
-          :timbre_media-session:lintRelease
-          :timbre_cast:lintRelease
+          :afkcodes_timbre-player:lintRelease
+          :afkcodes_timbre-audio-session:lintRelease
+          :afkcodes_timbre-media-session:lintRelease
+          :afkcodes_timbre-cast:lintRelease
           -PreactNativeArchitectures=arm64-v8a
           --no-daemon --build-cache
 
@@ -148,8 +148,8 @@ jobs:
         working-directory: apps/example/android
         run: >-
           ./gradlew
-          :timbre_media-session:testDebugUnitTest
-          :timbre_cast:testDebugUnitTest
+          :afkcodes_timbre-media-session:testDebugUnitTest
+          :afkcodes_timbre-cast:testDebugUnitTest
           -PreactNativeArchitectures=arm64-v8a
           --no-daemon --build-cache
 

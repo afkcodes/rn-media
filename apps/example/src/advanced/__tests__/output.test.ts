@@ -11,7 +11,7 @@
  * `mode: 'no'`; these tests pin the exact property payloads.
  */
 import { describe, expect, it } from 'vitest'
-import type { Player, ReplayGainOptions } from '@timbre/player'
+import type { Player, ReplayGainOptions } from '@afkcodes/timbre-player'
 import { OutputOptions, replayGainOptionsFor } from '../output'
 
 /** A `Player` stub that records `setReplayGain` payloads, in order. */

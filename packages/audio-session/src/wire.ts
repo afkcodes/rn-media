@@ -7,7 +7,7 @@ import type { AudioSessionApi, Unsubscribe } from './types'
  *
  * Structural on purpose — our `Player`, react-native-track-player, expo-audio
  * and a hand-rolled fake all satisfy it. This package must never import
- * `@timbre/player`.
+ * `@afkcodes/timbre-player`.
  */
 export interface AudioSessionPlayerLike {
   play(): void

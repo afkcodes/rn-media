@@ -5,7 +5,7 @@
  *
  * ## The incident this exists for (2026-08-14)
  *
- * `@timbre/cast` passed 121 unit tests, ESLint, `tsc`, Android `lintRelease`
+ * `@afkcodes/timbre-cast` passed 121 unit tests, ESLint, `tsc`, Android `lintRelease`
  * and `assembleRelease`, and the APK was installed on a device — and the
  * feature was simply not there. The workspace link for the package was missing
  * from `node_modules`, so React Native's autolinking never saw a fourth native

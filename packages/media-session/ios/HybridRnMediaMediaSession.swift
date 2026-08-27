@@ -2,7 +2,7 @@
 //  HybridRnMediaMediaSession.swift
 //  RnMediaMediaSession
 //
-//  The iOS half of `@timbre/media-session`.
+//  The iOS half of `@afkcodes/timbre-media-session`.
 //
 
 import Foundation

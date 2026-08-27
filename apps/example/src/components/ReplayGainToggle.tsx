@@ -25,7 +25,7 @@
  * the track that is already playing: no reload, no gap.
  */
 import React from 'react'
-import type { ReplayGainMode } from '@timbre/player'
+import type { ReplayGainMode } from '@afkcodes/timbre-player'
 import { Chip, ChipRow, Section } from './ui'
 
 const MODES: readonly { id: ReplayGainMode; label: string }[] = [

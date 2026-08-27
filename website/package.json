@@ -1,5 +1,5 @@
 {
-  "name": "@timbre/website",
+  "name": "@afkcodes/timbre-website",
   "version": "0.0.0",
   "private": true,
   "description": "Documentation site for the timbre packages (Docusaurus 3).",

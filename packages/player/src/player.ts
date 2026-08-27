@@ -2512,7 +2512,7 @@ export class Player {
    * method.
    *
    * A convenience, but not only that: it is what makes a `Player` satisfy
-   * `@timbre/audio-session`'s `AudioSessionPlayerLike.isPlaying`, which
+   * `@afkcodes/timbre-audio-session`'s `AudioSessionPlayerLike.isPlaying`, which
    * `wireAudioSession` consults to tell its own interruption pause apart from
    * one the user asked for — a user pause must never be auto-resumed when the
    * interruption ends.
@@ -3409,7 +3409,7 @@ export class Player {
    *
    * @example
    * ```ts
-   * import { AudioFilters } from '@timbre/player'
+   * import { AudioFilters } from '@afkcodes/timbre-player'
    *
    * player.setAudioFilters([
    *   AudioFilters.volume({ gainDb: -6 }),      // headroom for the boost below

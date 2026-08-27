@@ -1,5 +1,5 @@
 /**
- * The cast side of the playback layer: `@timbre/cast` wired to this app.
+ * The cast side of the playback layer: `@afkcodes/timbre-cast` wired to this app.
  *
  * Three responsibilities, in the order they matter:
  *
@@ -35,8 +35,8 @@ import {
   type CastHandoffQueueSnapshot,
   type CastReceiverSnapshot,
   type SkippedCastItem,
-} from '@timbre/cast'
-import type { Player, PlayerState } from '@timbre/player'
+} from '@afkcodes/timbre-cast'
+import type { Player, PlayerState } from '@afkcodes/timbre-player'
 import { DEMO_SCHEME, type Track } from './data/tracks'
 import { castMimeOf, castUrlOf } from './cast-broadcast'
 

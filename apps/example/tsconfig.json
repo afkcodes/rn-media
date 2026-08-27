@@ -5,10 +5,10 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "@timbre/player": ["../../packages/player/src"],
-      "@timbre/audio-session": ["../../packages/audio-session/src"],
-      "@timbre/cast": ["../../packages/cast/src"],
-      "@timbre/media-session": ["../../packages/media-session/src"]
+      "@afkcodes/timbre-player": ["../../packages/player/src"],
+      "@afkcodes/timbre-audio-session": ["../../packages/audio-session/src"],
+      "@afkcodes/timbre-cast": ["../../packages/cast/src"],
+      "@afkcodes/timbre-media-session": ["../../packages/media-session/src"]
     }
   }
 }

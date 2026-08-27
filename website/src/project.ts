@@ -1,7 +1,7 @@
 /**
  * The ONE place the project's identity lives.
  *
- * The npm scope is still the `@timbre/*` placeholder (CLAUDE.md: the final
+ * The npm scope is still the `@afkcodes/timbre-*` placeholder (CLAUDE.md: the final
  * name is a pending decision and the rename must stay a one-file edit). Every
  * name reference on the site — nav title, footer, install commands, prose —
  * resolves from this object, either directly (`docusaurus.config.ts` spreads it
@@ -17,7 +17,7 @@ export const PROJECT = {
   /** One sentence. The whole pitch. */
   tagline: 'One audio engine for React Native — the same libmpv core on iOS and Android.',
   /** npm scope for the four packages (placeholder until the rename). */
-  scope: '@timbre',
+  scope: '@afkcodes',
   /** The four published packages, in dependency-neutral order. */
   packages: ['player', 'audio-session', 'media-session', 'cast'] as const,
   /** GitHub org/user. */
@@ -36,5 +36,5 @@ export const PROJECT = {
   pagesBaseUrl: '/rn-media/',
 } as const
 
-/** `@timbre/player`, `@timbre/media-session`, … from a bare package name. */
-export const pkg = (name: string): string => `${PROJECT.scope}/${name}`
+/** `@afkcodes/timbre-player`, `@afkcodes/timbre-media-session`, … from a bare package name. */
+export const pkg = (name: string): string => `${PROJECT.scope}/timbre-${name}`

@@ -72,7 +72,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function malformed(key: string, received: unknown): Error {
   return new Error(
-    `[@timbre/media-session] Expected \`ios.infoPlist.${key}\` to be ` +
+    `[@afkcodes/timbre-media-session] Expected \`ios.infoPlist.${key}\` to be ` +
       `${key.endsWith('Configurations') ? 'an object of role arrays' : 'an object'}, ` +
       `received ${Array.isArray(received) ? 'an array' : typeof received}. ` +
       'Fix it in your app config, or drop `carPlay: true` and write the scene ' +

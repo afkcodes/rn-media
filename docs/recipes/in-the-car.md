@@ -5,11 +5,11 @@ browses and a **tap** that plays. One handler serves both. Nothing here is
 platform-specific except the two lines of iOS config at the end.
 
 ```tsx
-import { Player } from '@timbre/player'
+import { Player } from '@afkcodes/timbre-player'
 import {
   BaseMediaHandler, BrowseError, BROWSE_ROOT, MediaService, useCarConnection,
   type BrowseItem, type MediaItem, type SearchFocus,
-} from '@timbre/media-session'
+} from '@afkcodes/timbre-media-session'
 
 const player = await Player.create({ prefetchPlaylist: true })
 
@@ -90,7 +90,7 @@ function MiniPlayer() {
 | Platform | What you add |
 |---|---|
 | Android | Nothing. The car manifest entry merges from the library |
-| iOS | A UIScene app and Apple's `com.apple.developer.carplay-audio` entitlement. Expo: `["@timbre/media-session", { "carPlay": true }]`. Bare: the two snippets in the [package README](../../packages/media-session/README.md#carplay) |
+| iOS | A UIScene app and Apple's `com.apple.developer.carplay-audio` entitlement. Expo: `["@afkcodes/timbre-media-session", { "carPlay": true }]`. Bare: the two snippets in the [package README](../../packages/media-session/README.md#carplay) |
 
 ## Constraints this shape runs into
 

@@ -20,8 +20,8 @@ against the packages' source, so nothing here can drift from the API.
 ```ts
 // src/playback.ts
 import { AppState } from 'react-native'
-import { Player } from '@timbre/player'
-import { AudioSession, AudioSessionPresets, wireAudioSession } from '@timbre/audio-session'
+import { Player } from '@afkcodes/timbre-player'
+import { AudioSession, AudioSessionPresets, wireAudioSession } from '@afkcodes/timbre-audio-session'
 import {
   BaseMediaHandler,
   MediaService,
@@ -32,7 +32,7 @@ import {
   type MediaRepeatMode,
   type PersistedMediaService,
   type SessionError,
-} from '@timbre/media-session'
+} from '@afkcodes/timbre-media-session'
 import { storage, type Track } from './library'
 
 let player: Player
@@ -168,7 +168,7 @@ One hook carries the curve, the presets, the persistence and the single `af`
 write.
 
 ```tsx
-import { useEqualizer, type Player } from '@timbre/player'
+import { useEqualizer, type Player } from '@afkcodes/timbre-player'
 import { Pressable, Text, View } from 'react-native'
 import { Slider } from './ui'
 import { storage } from './library'

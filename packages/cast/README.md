@@ -1,4 +1,4 @@
-# @timbre/cast
+# @afkcodes/timbre-cast
 
 First-party Google Cast **sender** binding for React Native, audio-scoped, built
 directly on the official SDKs
@@ -12,7 +12,7 @@ a URL and the receiver fetches, decodes and plays it. Your local player goes
 silent for the session and resumes at the receiver's position when you transfer
 back. This package ships both layers — the binding, and the automatic
 local↔remote handoff state machine `wireCastHandoff`, which lives here rather
-than in `@timbre/media-session` and talks to your player and queue through
+than in `@afkcodes/timbre-media-session` and talks to your player and queue through
 structural interfaces, so it works with any player
 ([ARCHITECTURE §25](../../ARCHITECTURE.md#25-casting-is-a-url-handoff-behind-the-existing-fan-out--and-the-handoff-lives-in-rn-mediacast-not-media-session)).
 
@@ -27,7 +27,7 @@ structural interfaces, so it works with any player
 ## Install
 
 ```sh
-npm install @timbre/cast react-native-nitro-modules
+npm install @afkcodes/timbre-cast react-native-nitro-modules
 ```
 
 ### Expo (prebuild)
@@ -40,7 +40,7 @@ string.
 {
   "expo": {
     "plugins": [
-      ["@timbre/cast", {
+      ["@afkcodes/timbre-cast", {
         // Omit for the Default Media Receiver (zero-config).
         "receiverAppId": "ABCD1234",
         // Optional custom text for the iOS local-network prompt.
@@ -87,7 +87,7 @@ devices on your Wi-Fi network.</string>
 ## Use
 
 ```ts
-import { Cast } from '@timbre/cast'
+import { Cast } from '@afkcodes/timbre-cast'
 
 // Once, early (idempotent).
 const state = await Cast.initialize()

@@ -48,10 +48,10 @@ is where the library modules are composed:
 ```sh
 cd apps/example/android
 ./gradlew :app:assembleDebug
-./gradlew :timbre_media-session:testReleaseUnitTest   # JVM half of media-session
-./gradlew :timbre_player:lintRelease \
-          :timbre_audio-session:lintRelease \
-          :timbre_media-session:lintRelease
+./gradlew :afkcodes_timbre-media-session:testReleaseUnitTest   # JVM half of media-session
+./gradlew :afkcodes_timbre-player:lintRelease \
+          :afkcodes_timbre-audio-session:lintRelease \
+          :afkcodes_timbre-media-session:lintRelease
 ```
 
 Those last two are exactly what `Build Android` runs in CI — a lint failure
@@ -100,7 +100,7 @@ first: `npm run codegen --prefix packages/<pkg>`.
   It reads the five shipped READMEs (root + the four packages) and the recipes
   in `docs/recipes/`, writes each block to a gitignored `.readme-samples/` as a
   standalone module with
-  `@timbre/*` mapped at the packages' `src`, and reports failures at
+  `@afkcodes/timbre-*` mapped at the packages' `src`, and reports failures at
   `README.md:LINE` — the README's line, not the generated file's. Fix the
   sample; never the check. A block that is deliberately partial (an options
   object quoted on its own) opts out with ` ```ts fragment `, and the summary

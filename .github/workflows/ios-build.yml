@@ -71,7 +71,7 @@ jobs:
       # (run 31784085458). The vendor built 4.8.6 with the 26.2 SDK, so 26.2 is
       # the floor that can link it; the macOS-15 image ships 26.0.1/26.1.1/26.2/26.3
       # (actions/runner-images images/macos/macos-15-Readme.md). This is a
-      # consumer-visible requirement of installing @timbre/cast, not just ours.
+      # consumer-visible requirement of installing @afkcodes/timbre-cast, not just ours.
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:

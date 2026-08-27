@@ -24,7 +24,7 @@ import type {
  *
  * This package gains **zero dependencies** from persistence, for the same
  * reason `wireAudioSession` takes a structural player rather than importing
- * `@timbre/player` (ARCHITECTURE §3): the moment a session library picks a
+ * `@afkcodes/timbre-player` (ARCHITECTURE §3): the moment a session library picks a
  * storage engine, half its users have to ship two.
  *
  * Both methods may be synchronous or return a promise; {@link withPersistence}

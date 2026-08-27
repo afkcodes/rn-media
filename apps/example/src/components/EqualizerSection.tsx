@@ -42,7 +42,7 @@ import {
   type AudioFilter,
   type Equalizer,
   type Player,
-} from '@timbre/player'
+} from '@afkcodes/timbre-player'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { ColumnRect } from './fader-geometry'
 import { bandAtX, gainAtY } from './fader-geometry'

@@ -20,7 +20,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Android half of `@timbre/cast`.
+ * Android half of `@afkcodes/timbre-cast`.
  *
  * Threading contract
  * ------------------

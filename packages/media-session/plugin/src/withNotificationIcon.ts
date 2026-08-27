@@ -44,7 +44,7 @@ export function resolveDrawableTarget(iconPath: string): DrawableTarget {
 
   if (directory === undefined) {
     throw new Error(
-      `[@timbre/media-session] \`androidNotificationIcon\` must be a ${Object.keys(
+      `[@afkcodes/timbre-media-session] \`androidNotificationIcon\` must be a ${Object.keys(
         DRAWABLE_DIRECTORY_BY_EXTENSION
       ).join('/')} file, received "${iconPath}".`
     )
@@ -53,7 +53,7 @@ export function resolveDrawableTarget(iconPath: string): DrawableTarget {
   const resourceName = path.basename(iconPath, path.extname(iconPath))
   if (!isValidAndroidAssetName(resourceName)) {
     throw new Error(
-      `[@timbre/media-session] "${resourceName}" is not a valid Android resource name. ` +
+      `[@afkcodes/timbre-media-session] "${resourceName}" is not a valid Android resource name. ` +
         'Rename the file to lowercase letters, digits and underscores, starting with a ' +
         'letter and avoiding Java keywords (e.g. `ic_notification.xml`).'
     )
@@ -89,7 +89,7 @@ export const withAndroidNotificationIcon: ConfigPlugin<string> = (
 
       if (!existsSync(source)) {
         throw new Error(
-          `[@timbre/media-session] \`androidNotificationIcon\` points at "${iconPath}", ` +
+          `[@afkcodes/timbre-media-session] \`androidNotificationIcon\` points at "${iconPath}", ` +
             `which does not exist (resolved to "${source}").`
         )
       }

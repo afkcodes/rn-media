@@ -23,8 +23,8 @@
  * `Playback.setShuffleEnabled`.
  */
 import React from 'react'
-import type { MediaRepeatMode } from '@timbre/media-session'
-import type { LoopMode } from '@timbre/player'
+import type { MediaRepeatMode } from '@afkcodes/timbre-media-session'
+import type { LoopMode } from '@afkcodes/timbre-player'
 import { loopToRepeat } from '../projections'
 import { Chip, ChipRow, Section } from './ui'
 

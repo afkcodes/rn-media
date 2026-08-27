@@ -1,11 +1,11 @@
 # Documentation site
 
-The docs site for the `@timbre/*` packages — Docusaurus 3 (React + MDX) with a
+The docs site for the `@afkcodes/timbre-*` packages — Docusaurus 3 (React + MDX) with a
 custom theme, plus a **fully generated** API reference (TypeDoc → Markdown) that
 reads each package's real `index.ts`.
 
 This is the **first pass**: the whole shell, the theme, and both quality gates
-proven on one vertical slice (the `@timbre/player` API in full, the
+proven on one vertical slice (the `@afkcodes/timbre-player` API in full, the
 music-player guide, the position-anchor concept). The remaining packages, guides
 and concepts are ported to these templates after review.
 
@@ -49,7 +49,7 @@ Both run in CI and must be green.
 
 ```sh
 npm run build        # then:
-npm run check:api    # every @timbre/player export is documented or @internal
+npm run check:api    # every @afkcodes/timbre-player export is documented or @internal
 npm run check:mdx    # every ```ts / ```tsx block on the site typechecks
 ```
 
@@ -61,7 +61,7 @@ npm run check:mdx    # every ```ts / ```tsx block on the site typechecks
 - **`check:mdx`** (`scripts/check-mdx-samples.mjs`, zero deps) extracts every
   `ts` / `tsx` fenced block from `docs/**` and `src/**` `.mdx` files, writes each
   as a standalone module, and runs `tsc` against the packages' `src` with
-  `@timbre/*` mapped there. A ` ```ts fragment ` fence opts a partial out. It
+  `@afkcodes/timbre-*` mapped there. A ` ```ts fragment ` fence opts a partial out. It
   mirrors the repo's `scripts/check-readme-samples.mjs` exactly. Reports the
   block count.
 

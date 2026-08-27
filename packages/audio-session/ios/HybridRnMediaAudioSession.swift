@@ -2,7 +2,7 @@
 //  HybridRnMediaAudioSession.swift
 //  RnMediaAudioSession
 //
-//  The iOS half of `@timbre/audio-session`.
+//  The iOS half of `@afkcodes/timbre-audio-session`.
 //
 
 // `AVAudioSession` lives in AVFAudio, which AVFoundation re-exports. Importing

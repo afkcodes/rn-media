@@ -1,17 +1,17 @@
 # Recipe: cast to a speaker
 
 Casting is a URL handoff, not an output route: mpv can never *be* the thing
-driving a Chromecast, so `@timbre/cast` pauses your player, hands the receiver
+driving a Chromecast, so `@afkcodes/timbre-cast` pauses your player, hands the receiver
 the queue as URLs, and lets it fetch and decode them. Every surface keeps
 rendering from the same three `media-session` channels, now mirroring the
 receiver instead of mpv.
 
 ```tsx
-import { Player } from '@timbre/player'
+import { Player } from '@afkcodes/timbre-player'
 import {
   Cast, CastButton, useIsCasting, wireCastHandoff,
   type CastHandoffQueueItem, type CastReceiverSnapshot,
-} from '@timbre/cast'
+} from '@afkcodes/timbre-cast'
 
 const player = await Player.create()
 let currentIndex = 0
@@ -33,7 +33,7 @@ const publishReceiverState = (s: CastReceiverSnapshot): void =>
   })
 
 const handoff = wireCastHandoff(
-  // Structural on both sides — the adapter imports nothing from @timbre/player.
+  // Structural on both sides — the adapter imports nothing from @afkcodes/timbre-player.
   { play: () => player.play(), pause: () => player.pause(), seekTo: (s) => player.seekTo(s),
     skipToIndex: (i) => player.playlist.jumpTo(i, { autoPlay: false }),
     getPosition: () => player.getPosition(), isPlaying: () => player.state.playing },
@@ -69,9 +69,9 @@ function CastRow() {
 | The receiver decodes far less than mpv | Ask `canCastMedia(item)` per track and grey the route out, instead of failing at load |
 | `service.setRemotePlayback({ volume })` declares playback remote | It points the app's volume control and the hardware keys at the receiver on Android; on iOS it is a documented no-op |
 | `<CastButton/>` is the platform's own button | On Android 13+ a tap opens the system output switcher; it hides itself when there is nothing to cast to |
-| The handoff lives in `@timbre/cast` | `media-session` stays player-agnostic and cast-free in both directions |
+| The handoff lives in `@afkcodes/timbre-cast` | `media-session` stays player-agnostic and cast-free in both directions |
 | Header auth does not travel | The Default Media Receiver cannot attach headers. Signed-query URLs work |
 
 Codec ceilings, live-stream rules and every failure mode:
-[`@timbre/cast`](../../packages/cast/README.md) ·
+[`@afkcodes/timbre-cast`](../../packages/cast/README.md) ·
 [design doc](../design/cast.md).

@@ -6,7 +6,7 @@ import { withMediaButtonReceiver } from './withMediaButtonReceiver'
 import { withAndroidNotificationIcon } from './withNotificationIcon'
 
 /**
- * Options for the `@timbre/media-session` Expo config plugin.
+ * Options for the `@afkcodes/timbre-media-session` Expo config plugin.
  *
  * Everything required for background playback is applied without options —
  * Android needs nothing at all (the library manifest merges the

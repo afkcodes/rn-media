@@ -5,8 +5,8 @@
  * `getService()` seams, kept out of `playback.ts` so the everyday transport
  * there stays the tutorial.
  */
-import type { ChapterEntry } from '@timbre/player'
-import type { SleepTimerState } from '@timbre/media-session'
+import type { ChapterEntry } from '@afkcodes/timbre-player'
+import type { SleepTimerState } from '@afkcodes/timbre-media-session'
 import { getPlayer, getService } from '../playback'
 
 /** Playback speed (mpv's `scaletempo2`; pitch stays independent — see below). */

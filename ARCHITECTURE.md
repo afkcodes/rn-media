@@ -15,16 +15,16 @@ this file changes in the same commit. Deeper detail lives in
             your app UI ─────────────┐
                                      ▼ (renders from the same broadcasts)
 ┌────────────────────────────────────────────────────────────────────┐
-│ @timbre/media-session      fan-in: notification · lock screen ·  │
+│ @afkcodes/timbre-media-session      fan-in: notification · lock screen ·  │
 │                              Bluetooth · watch → ONE JS handler    │
 │                              fan-out: playbackState/mediaItem/queue│
 │   Android: media3 MediaLibraryService + SimpleBasePlayer facade    │
 │   iOS: MPRemoteCommandCenter + MPNowPlayingInfoCenter              │
 ├────────────────────────────────────────────────────────────────────┤
-│ @timbre/audio-session      the single arbiter of audio focus,    │
+│ @afkcodes/timbre-audio-session      the single arbiter of audio focus,    │
 │                              AVAudioSession, interruptions, noisy  │
 ├────────────────────────────────────────────────────────────────────┤
-│ @timbre/player             TS Player (state reducer, hooks)      │
+│ @afkcodes/timbre-player             TS Player (state reducer, hooks)      │
 │   └─ Nitro pure-C++ HybridObject ── libmpv (mpv_handle per player) │
 ├────────────────────────────────────────────────────────────────────┤
 │ prebuilt libmpv binaries     pinned by SHA-256, built by our forks │
@@ -91,7 +91,7 @@ either direction.
 real bug.** `PlayerState.positionAnchor` is seconds (`{position, timestamp,
 rate}`) because seconds is mpv's unit; `PlayerState.positionAnchorMs` is
 milliseconds in `{value, at, rate}` — structurally the `PositionAnchor`
-`@timbre/media-session` broadcasts, matched by shape and never imported, so
+`@afkcodes/timbre-media-session` broadcasts, matched by shape and never imported, so
 neither package depends on the other (§3). The conversion used to be the app's,
 and it is a factor of a thousand and a `rate: 0` waiting to be typed wrong: the
 README carried "the lock-screen scrubber is off by 1000×" as a *pitfall*, i.e.
@@ -1221,7 +1221,7 @@ added as well, drawn with media3's state-dependent icons
 never central or back/forward, which belong to transport. The control is spelled
 `repeatMode` because a union member becomes a native enumerator verbatim and
 `repeat` is a Swift keyword; the same constraint that produced `defaultMode` in
-`@timbre/audio-session`. State rides the existing `playbackState` channel as
+`@afkcodes/timbre-audio-session`. State rides the existing `playbackState` channel as
 two additive, defaulted fields (`'off'` / `false`), and a press is a *request*:
 `onSetRepeatMode`/`onSetShuffle` are called and nothing moves until the app
 broadcasts — the acknowledge-by-broadcast contract (§9) that also completes
@@ -1337,7 +1337,7 @@ the event itself documents. The example app's banner now consumes this hook;
 the hand-rolled engine→controller→UI plumbing it replaced is gone, which is the
 point of the example.
 
-### 25. Casting is a URL handoff behind the existing fan-out — and the handoff lives in `@timbre/cast`, not media-session
+### 25. Casting is a URL handoff behind the existing fan-out — and the handoff lives in `@afkcodes/timbre-cast`, not media-session
 
 **The decision** (2026-08-13, design in `docs/design/cast.md` — this section
 records what shipped and why it is shaped this way). Cast receivers fetch and
@@ -1368,7 +1368,7 @@ in-app path (`castTo(deviceId)`) and the platform paths (cast dialog, Android
 13+ system output switcher) funnel into the same machine: a session appearing
 from anywhere triggers the same handoff.
 
-**Where it lives, and why.** In `@timbre/cast` — **`media-session` is
+**Where it lives, and why.** In `@afkcodes/timbre-cast` — **`media-session` is
 cast-free in both directions.** The media-session package's value is that it
 works with ANY player; teaching it about cast would have coupled it to one
 remote backend and doubled its test surface. Instead the handoff takes
@@ -1838,10 +1838,10 @@ choreography (discovery starts on first tap, never earlier).
 
 ### 26. `AVAudioSession` has exactly one owner, and it is not the engine
 
-`@timbre/player` sets **`audiounit-skip-session-management=yes`** on Apple
+`@afkcodes/timbre-player` sets **`audiounit-skip-session-management=yes`** on Apple
 platforms (`MpvClient::initialize`, `kAppleOnlyDefaults`), so `ao_audiounit`
 never touches the process-wide `AVAudioSession`. Ownership belongs to
-`@timbre/audio-session` — categories, modes, route sharing policy,
+`@afkcodes/timbre-audio-session` — categories, modes, route sharing policy,
 activation, interruptions, route changes — which is the same split Android
 already has, where this player requests no audio focus and `audio-session`
 requests all of it. iOS was the odd one out only because mpv did it silently.
@@ -1885,8 +1885,8 @@ proven: the iOS Simulator's `AVAudioSession` is a shim
 not the option is set, so the simulator cannot confirm it. Device confirmation
 is required before this section may claim the card is fixed.
 
-**Consequence for consumers.** An app using `@timbre/player` on iOS *without*
-`@timbre/audio-session` (or its own session code) now gets the process default
+**Consequence for consumers.** An app using `@afkcodes/timbre-player` on iOS *without*
+`@afkcodes/timbre-audio-session` (or its own session code) now gets the process default
 category rather than mpv's `.playback` — the same position it has always been in
 on Android. That is the ownership contract, not a regression, and an app that
 wants the old behaviour can pass `audiounit-skip-session-management=no` through
@@ -2780,7 +2780,7 @@ through the same fields, no new path.
   `ACTION_SCREEN_ON`/`ACTION_SCREEN_OFF` *is* the display state and cannot
   disagree with itself. The gate is now the AND of the two — either says
   inactive → pause, both must say active → resume — with the display signal as a
-  small Kotlin HybridObject in `@timbre/player` (`RnMediaScreenState`) whose
+  small Kotlin HybridObject in `@afkcodes/timbre-player` (`RnMediaScreenState`) whose
   receiver is derived from its listener set. iOS needs no second signal and gets
   a constant `true`: locking the device resigns the app's active state and
   backgrounds it, and there is no iOS state where the app is foreground-active
@@ -2879,8 +2879,8 @@ through the same fields, no new path.
   sources, so a green `assembleRelease` can package a stale JS bundle.**
   `BundleHermesCTask` declares exactly one source input — a file tree rooted at
   `react.root` (here `apps/example`) that excludes `**/node_modules/**` — while
-  Metro resolves `@timbre/*` from *source* (`"react-native": "src/index"`)
-  through the `node_modules/@timbre/*` symlinks. Every line of library code in
+  Metro resolves `@afkcodes/timbre-*` from *source* (`"react-native": "src/index"`)
+  through the `node_modules/@afkcodes/timbre-*` symlinks. Every line of library code in
   the bundle is therefore invisible to the up-to-date check. Bit us 2026-08-11:
   bundle written 12:11, fix in `packages/player/src` written 12:25, the 12:33
   build reported `createBundleReleaseJsAndAssets UP-TO-DATE` and shipped the
@@ -2935,7 +2935,7 @@ through the same fields, no new path.
   notification relies on) synchronously, right after `stopForeground`.
 - **Tests prove the code works, not that it ships. A missing workspace link is
   not a build error — it is a smaller APK.** Bug #51, 2026-08-14:
-  `@timbre/cast` passed 121 unit tests, ESLint, `tsc`, `lintRelease` and
+  `@afkcodes/timbre-cast` passed 121 unit tests, ESLint, `tsc`, `lintRelease` and
   `assembleRelease`, was installed on a device, and was simply not in the app.
   Its `node_modules` link was missing, React Native's autolinking therefore
   enumerated three native modules instead of four, Gradle never configured the

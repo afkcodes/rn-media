@@ -4,8 +4,8 @@ Live streams have no duration, no scrubber and no end. A server that hangs up is
 not the same event as a song finishing. All three are first-class.
 
 ```ts
-import { Player, type Metadata } from '@timbre/player'
-import { BaseMediaHandler, MediaService, type MediaItem } from '@timbre/media-session'
+import { Player, type Metadata } from '@afkcodes/timbre-player'
+import { BaseMediaHandler, MediaService, type MediaItem } from '@afkcodes/timbre-media-session'
 
 const player = await Player.create({
   // Real Shoutcast hosts reject the literal `libmpv`, which is why the default

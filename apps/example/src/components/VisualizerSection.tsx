@@ -11,7 +11,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text } from 'react-native'
-import { useVisualizer, type Player } from '@timbre/player'
+import { useVisualizer, type Player } from '@afkcodes/timbre-player'
 import { COLORS, TYPE } from '../theme'
 import { Chip, ChipRow, Detail, Section } from './ui'
 import {

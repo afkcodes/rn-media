@@ -2,7 +2,7 @@
 //  HybridRnMediaCast.swift
 //  RnMediaCast
 //
-//  The iOS half of `@timbre/cast`.
+//  The iOS half of `@afkcodes/timbre-cast`.
 //
 //  Threading contract
 //  ------------------

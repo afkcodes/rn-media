@@ -461,7 +461,7 @@ describe('repeat and shuffle on the playback state (B2)', () => {
 
   it('the repeat CONTROL is not named `repeat` — that is a Swift keyword', () => {
     // The member becomes a native enumerator verbatim, and the package has been
-    // bitten by this once already (`defaultMode` in @timbre/audio-session).
+    // bitten by this once already (`defaultMode` in @afkcodes/timbre-audio-session).
     expect(() =>
       normalizePlaybackState(bad({ controls: ['repeat'] }))
     ).toThrowError(/playbackState\.controls/)

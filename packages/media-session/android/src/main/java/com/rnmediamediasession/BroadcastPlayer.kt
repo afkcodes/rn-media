@@ -32,7 +32,7 @@ import com.margelo.nitro.rnmediamediasession.SessionErrorCode
  * handler and returns. That is the whole point of the package: media3 gets a
  * `Player` — and therefore hands us the session, the notification, Android Auto
  * and Bluetooth for free — while the actual audio is produced by whatever the
- * app uses (`@timbre/player`, RNTP, a TTS engine, anything).
+ * app uses (`@afkcodes/timbre-player`, RNTP, a TTS engine, anything).
  *
  * ## Position: no JS traffic, no timer
  * `State.setContentPositionMs(PositionSupplier)` takes a supplier that media3

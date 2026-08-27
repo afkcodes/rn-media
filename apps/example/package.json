@@ -1,5 +1,5 @@
 {
-  "name": "@timbre/example",
+  "name": "@afkcodes/timbre-example",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -13,10 +13,10 @@
   },
   "dependencies": {
     "@react-native/new-app-screen": "0.87.1",
-    "@timbre/audio-session": "*",
-    "@timbre/cast": "*",
-    "@timbre/media-session": "*",
-    "@timbre/player": "*",
+    "@afkcodes/timbre-audio-session": "*",
+    "@afkcodes/timbre-cast": "*",
+    "@afkcodes/timbre-media-session": "*",
+    "@afkcodes/timbre-player": "*",
     "react": "19.2.8",
     "react-native": "0.87.1",
     "react-native-mmkv": "^4.3.2",

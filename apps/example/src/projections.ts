@@ -11,12 +11,12 @@
  * - **Player → this screen** (`selectShell`): the small slice `App.tsx`
  *   subscribes to, so a buffered-position tick does not re-render the tree.
  */
-import type { LoopMode, PlayerState } from '@timbre/player'
+import type { LoopMode, PlayerState } from '@afkcodes/timbre-player'
 import type {
   MediaItem,
   MediaRepeatMode,
   PlaybackState,
-} from '@timbre/media-session'
+} from '@afkcodes/timbre-media-session'
 import type { Track } from './data/tracks'
 
 /* -------------------------------------------------------------------------- */

@@ -4,7 +4,7 @@
  * Data only — no player, no React. It is imported by the playback layer (which
  * loads it) and by the UI (which draws it), and it knows about neither.
  */
-import type { MediaItem } from '@timbre/media-session'
+import type { MediaItem } from '@afkcodes/timbre-media-session'
 
 export interface Track extends MediaItem {
   /** What the player loads. Kept out of `MediaItem`, which is metadata only. */

@@ -33,7 +33,7 @@ function isMediaButtonFilter(
  * Adds media3's `MediaButtonReceiver` to the app's manifest.
  *
  * ## Why a plugin can do what the library must not
- * `@timbre/media-session` deliberately does **not** merge this receiver in
+ * `@afkcodes/timbre-media-session` deliberately does **not** merge this receiver in
  * from its own manifest: an AAR's declaration lands in every app that installs
  * the package, changing media-button routing for apps that never asked for
  * playback resumption, and media3 reads the declaration as the app's *promise*

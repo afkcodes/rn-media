@@ -29,7 +29,7 @@ Every claim below is source-verified; the citation is the line that follows it.
 
 ---
 
-## 1. TS contract (`@timbre/media-session`) — VERBATIM, agents copy this
+## 1. TS contract (`@afkcodes/timbre-media-session`) — VERBATIM, agents copy this
 
 ```ts
 /** A node of the car browse tree. One item may be both browsable and playable

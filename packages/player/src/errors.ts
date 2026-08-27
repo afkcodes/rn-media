@@ -175,7 +175,7 @@ export interface RawMpvError {
 }
 
 /**
- * The typed error taxonomy of `@timbre/player`.
+ * The typed error taxonomy of `@afkcodes/timbre-player`.
  *
  * Every error surfaced by the {@link Player} — thrown from a method, delivered
  * to an `on('error')` listener, or stored in `PlayerState.error` — is one of

@@ -9,8 +9,8 @@
  */
 import React from 'react'
 import { StyleSheet, View } from 'react-native'
-import type { Player } from '@timbre/player'
-import type { ReplayGainMode } from '@timbre/player'
+import type { Player } from '@afkcodes/timbre-player'
+import type { ReplayGainMode } from '@afkcodes/timbre-player'
 import { SPACE } from '../theme'
 import type { ShellState } from '../projections'
 import { invalidateBrowse, setPitchSemitones, setRate } from './extras'

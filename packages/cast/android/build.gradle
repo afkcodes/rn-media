@@ -153,7 +153,7 @@ dependencies {
   // own `SessionProvider` or `SessionTransferCallback` needs the framework
   // types on its compile classpath — and two Cast framework versions in one
   // app is a guaranteed `NoSuchMethodError`, same reasoning as media3 in
-  // @timbre/media-session.
+  // @afkcodes/timbre-media-session.
   //
   // The framework itself is a thin shell: the real implementation is a
   // dynamite module loaded from Google Play services at runtime, which is why

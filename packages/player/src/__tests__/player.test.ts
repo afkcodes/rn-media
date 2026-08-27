@@ -584,7 +584,7 @@ describe('Player — transport commands', () => {
     expect(client.written.get(MpvProperty.volume)).toBe(100)
   })
 
-  // `wireAudioSession` (@timbre/audio-session) requires this method on the
+  // `wireAudioSession` (@afkcodes/timbre-audio-session) requires this method on the
   // structural player it ducks; the audio-session spec names our Player as a
   // supported target, so it is part of the cross-package contract.
   it('getVolume reads mpv back and converts 0..100 to 0..1', async () => {

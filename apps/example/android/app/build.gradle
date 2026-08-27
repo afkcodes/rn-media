@@ -60,8 +60,8 @@ react {
  * The RN Gradle plugin's bundling task (`createBundle<Variant>JsAndAssets`, a
  * `BundleHermesCTask`) declares exactly one source input: a file tree rooted at `react.root`
  * — this app, `apps/example` — which additionally excludes `**\/node_modules/**`. In this npm
- * workspace, Metro resolves `@timbre/*` from *source* (`"react-native": "src/index"` in each
- * package.json), reached through the `node_modules/@timbre/*` symlinks. So every line of
+ * workspace, Metro resolves `@afkcodes/timbre-*` from *source* (`"react-native": "src/index"` in each
+ * package.json), reached through the `node_modules/@afkcodes/timbre-*` symlinks. So every line of
  * library code that ends up in the bundle is invisible to the task's up-to-date check.
  *
  * What that cost us on 2026-08-11: a fix in `packages/player/src` was written at 12:25, the
@@ -169,7 +169,7 @@ dependencies {
     androidTestImplementation "androidx.test:core:1.7.0"
     androidTestImplementation "androidx.test:runner:1.7.0"
     // `MediaBrowser` — the real client Android Auto is — needs no line here:
-    // @timbre/media-session declares media3-session with `api`, so it is on
+    // @afkcodes/timbre-media-session declares media3-session with `api`, so it is on
     // this module's compile classpath already, at the one version the app
     // resolves. Declaring it again is how two media3 versions end up in one
     // app, which is a guaranteed NoSuchMethodError.

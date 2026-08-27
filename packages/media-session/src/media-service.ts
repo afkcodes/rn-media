@@ -83,7 +83,7 @@ function defaultOnHandlerError(
  *
  * Exported (rather than only the singleton) so the entire fan-in/fan-out
  * pipeline can be exercised against a fake `RnMediaMediaSession` with no
- * device — the same pattern `@timbre/audio-session` uses.
+ * device — the same pattern `@afkcodes/timbre-audio-session` uses.
  */
 export function createMediaService(
   native: RnMediaMediaSession

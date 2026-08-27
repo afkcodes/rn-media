@@ -19,7 +19,7 @@
  * already showing a list does not ask again on its own.
  */
 import React from 'react'
-import { useCarConnection } from '@timbre/media-session'
+import { useCarConnection } from '@afkcodes/timbre-media-session'
 import { Chip, ChipRow, Detail, Section } from '../components/ui'
 
 const LABELS: Record<string, string> = {

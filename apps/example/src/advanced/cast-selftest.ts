@@ -12,7 +12,7 @@
  * Deliberately allowed to use JS timers: a self-test is user-initiated and
  * foreground — the one place timers are legal in this codebase.
  */
-import { Cast } from '@timbre/cast'
+import { Cast } from '@afkcodes/timbre-cast'
 import { getPlayer } from '../playback'
 import { cast, jumpTo, pause, play, seekTo } from './cast-wiring'
 

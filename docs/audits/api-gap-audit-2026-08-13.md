@@ -13,7 +13,7 @@ pitch investigation (roadmap #5).
 
 ## 0. Inventory of what we ship today
 
-### `@timbre/player`
+### `@afkcodes/timbre-player`
 
 **`Player`** — `create(PlayerOptions)`, `load(src, LoadOptions)`,
 `loadPlaylist(sources, LoadPlaylistOptions)`, `play` / `pause` / `toggle`,
@@ -58,13 +58,13 @@ firequalizer acompressor alimiter dynaudnorm loudnorm crossfeed` + upstream
 `afade`, `astats`, `ebur128`, `adelay`, `compand`, `agate`, `speechnorm`,
 `stereotools`/`extrastereo`, `bs2b`.
 
-### `@timbre/audio-session`
+### `@afkcodes/timbre-audio-session`
 `AudioSession` / `createAudioSession`, `AudioSessionPresets` (music, speech, …),
 `wireAudioSession({duckVolume, resumeAfterInterruption})`; `configure`,
 `activate`, `deactivate`, `addListener('interruption'|'becomingNoisy'|
 'routeChange')`.
 
-### `@timbre/media-session`
+### `@afkcodes/timbre-media-session`
 `MediaService.init` / `createMediaService`, `setPlaybackState` / `setMediaItem` /
 `setQueue`, `stopService`, `setSleepTimer` / `cancelSleepTimer` /
 `getSleepTimerRemaining`, `setResumptionSnapshot`; `BaseMediaHandler`,
@@ -211,7 +211,7 @@ already reaches. No native code, no engine flag, no new package.
 | **Recording / microphone** (expo-audio `AudioRecorder`, `AudioStream`, nitro-sound) | Different product. This is a *playback* library; recording would drag in permissions, encoders and a whole second lifecycle. Deliberate-no. |
 | **Server-side progress sync** (RNTP V5 `progressSync` HTTP POST) | App-level concern with an opinionated wire format baked into a player. Our `positionAnchor` + milestones (A8) give apps everything they need to do it themselves. Deliberate-no. |
 | **Crossfade** | Already built, listened to, and scrapped by owner decision. Stated in README. |
-| **Offline waveform / peaks extraction** (whole-file analysis for a static waveform) | Not a playback-time concern; needs a decode-faster-than-realtime path libmpv's client API does not offer. Belongs in `@timbre/downloads` or a separate tool. Deliberate-no *for `player`*; note as a downloads-package candidate. |
+| **Offline waveform / peaks extraction** (whole-file analysis for a static waveform) | Not a playback-time concern; needs a decode-faster-than-realtime path libmpv's client API does not offer. Belongs in `@afkcodes/timbre-downloads` or a separate tool. Deliberate-no *for `player`*; note as a downloads-package candidate. |
 | **EQ / speed / settings persistence** | App storage is the app's. `defineEqualizerPreset` + a plain object is enough; a storage opinion in a player package is a liability. Deliberate-no. |
 | **`setAllowsExternalPlayback` (iOS)** | An AVPlayer knob with no mpv equivalent; iOS system routing already handles AirPlay audio. Deliberate-no. |
 | **`SilenceAudioSource` / `StreamAudioSource`-style app-supplied byte ranges** | The source-resolver + (future) downloads package cover the real use cases without inventing a stream protocol across the bridge. Deliberate-no for now. |
@@ -323,7 +323,7 @@ the `setProperty*` binding we already ship. Almost all of Tier E is TS-only.
 | E9 | **Seek precision control.** `seekTo` always takes mpv's default. Scrubbing a 3-hour podcast wants fast keyframe seeks; the final drop wants exact. | `seek <target> [<flags>]` — flags `relative` (default), `absolute`, `absolute-percent`, `relative-percent`, `keyframes` (*"Always restart playback at keyframe boundaries (fast)"*), `exact` (*"Always do exact/hr/precise seeks (slow)"*), combinable with `+`. Default: `exact` for absolute seeks. Also `--hr-seek` default is `default` = *"Like absolute, but enable hr-seeks in audio-only cases"* — so our current behaviour is already exact; the gap is the **fast** option, not correctness. | TS-only | **Add now** (bundle with A2 `seekBy`) |
 | E10 | **HLS variant selection.** just_audio has `setPreferredPeakBitRate`; we always take mpv's default (highest). On metered mobile data that is a user-visible cost. | `--hls-bitrate=<no\|min\|max\|<rate>>`, default `max`; a numeric value picks *"the stream with the highest rate equal or below the option value"*. | TS-only | **Add now** (trivial) |
 | E11 | **Network/buffer tuning knobs.** We expose `cacheSecs` only. RNTP V4 exposes `minBuffer`/`maxBuffer`/`backBuffer`/`playBuffer`/`maxCacheSize`; queue-player exposes `networkTimeoutMs`. | `--network-timeout=<seconds>` (default 60; `0` = FFmpeg defaults; **ignored on RTSP by design**), `--demuxer-max-bytes` (150 MiB), `--demuxer-readahead-secs` (1), `--force-seekable`, `--stream-lavf-o`, `--cache-pause-wait` (1 s) / `--cache-pause-initial`. **And the one worth calling out for a mobile library: `--demuxer-hysteresis-secs`** (default 0 = off) — *"This can provide significant power savings and reduce load by making the demuxer only buffer ahead in chunks at a time rather than buffering ahead nonstop… A value of 10 seconds probably works well for most usecases."* A battery win we are leaving on the table on a project that measures screen-off CPU. Note also `--cache-secs` is documented as *only useful for limiting* readahead — real depth tuning goes through `--demuxer-max-bytes`. | TS-only | **Add now** (`networkTimeout` + `demuxerHysteresisSecs` at minimum) |
-| E12 | **Disk-backed cache.** Partial answer to queue-player's lookahead cache. **Be honest about what it is:** `--cache-on-disk` — *"Write packet data to a temporary file, instead of keeping them in memory… The cache file is deleted when playback is closed."* Append-only, non-persistent. It relieves memory pressure on long streams; it is **not** offline playback. | `--cache-on-disk=<yes\|no>` (requires `--cache`), `--cache-dir`. | TS-only | Roadmap — and note in docs that real offline is `@timbre/downloads` |
+| E12 | **Disk-backed cache.** Partial answer to queue-player's lookahead cache. **Be honest about what it is:** `--cache-on-disk` — *"Write packet data to a temporary file, instead of keeping them in memory… The cache file is deleted when playback is closed."* Append-only, non-persistent. It relieves memory pressure on long streams; it is **not** offline playback. | `--cache-on-disk=<yes\|no>` (requires `--cache`), `--cache-dir`. | TS-only | Roadmap — and note in docs that real offline is `@afkcodes/timbre-downloads` |
 | E13 | **`audio-delay`.** Bluetooth latency compensation; standard in every serious audio app's settings screen. | `--audio-delay=<sec>` — *"Audio delay in seconds (positive or negative float value)"*, settable at runtime as the `audio-delay` property. | TS-only | Roadmap (cheap, bundle with a settings release) |
 | E14 | **Mono downmix.** Accessibility feature (single-sided hearing loss) present in both OS accessibility menus and in several music apps. | `--audio-channels=<auto-safe\|auto\|layouts>` explicitly supports *"`--audio-channels=<stereo\|mono>` — Force a downmix to stereo or mono."* **No filter needed, no engine flag needed.** | TS-only | **Add now** (trivial, real accessibility win) |
 | E15 | **Balance / pan.** The sibling of E14 and the other half of the accessibility story. | Needs the `pan` filter, which is **NOT** in our compiled allow-list (`aresample aformat anull volume bass treble lowpass highpass anequalizer superequalizer firequalizer acompressor alimiter dynaudnorm loudnorm crossfeed` + `equalizer`). | **Engine flag** (`--enable-filter=pan`, +KB, LGPL-clean — `pan` is not GPL-gated) | Roadmap — bundle into the next engine flags release |
