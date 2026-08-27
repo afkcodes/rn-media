@@ -32,12 +32,13 @@ namespace margelo::nitro::rnmediamediasession {
     BACKGROUNDPLAYBACKUNAVAILABLE      SWIFT_NAME(backgroundplaybackunavailable) = 0,
     PLAYBACKRESUMPTIONFAILED      SWIFT_NAME(playbackresumptionfailed) = 1,
     PLAYBACKRESUMPTIONUNAVAILABLE      SWIFT_NAME(playbackresumptionunavailable) = 2,
-    ARTWORKFAILED      SWIFT_NAME(artworkfailed) = 3,
-    METADATAMISMATCH      SWIFT_NAME(metadatamismatch) = 4,
-    ICONNOTFOUND      SWIFT_NAME(iconnotfound) = 5,
-    LOCALAUDIOSLOTUNAVAILABLE      SWIFT_NAME(localaudioslotunavailable) = 6,
-    PLAYFROMMEDIAIDUNHANDLED      SWIFT_NAME(playfrommediaidunhandled) = 7,
-    BROWSEROOTREJECTED      SWIFT_NAME(browserootrejected) = 8,
+    PLAYBACKRESUMPTIONNOTWIRED      SWIFT_NAME(playbackresumptionnotwired) = 3,
+    ARTWORKFAILED      SWIFT_NAME(artworkfailed) = 4,
+    METADATAMISMATCH      SWIFT_NAME(metadatamismatch) = 5,
+    ICONNOTFOUND      SWIFT_NAME(iconnotfound) = 6,
+    LOCALAUDIOSLOTUNAVAILABLE      SWIFT_NAME(localaudioslotunavailable) = 7,
+    PLAYFROMMEDIAIDUNHANDLED      SWIFT_NAME(playfrommediaidunhandled) = 8,
+    BROWSEROOTREJECTED      SWIFT_NAME(browserootrejected) = 9,
   } CLOSED_ENUM;
 
 } // namespace margelo::nitro::rnmediamediasession
@@ -53,6 +54,7 @@ namespace margelo::nitro {
         case hashString("backgroundPlaybackUnavailable"): return margelo::nitro::rnmediamediasession::SessionErrorCode::BACKGROUNDPLAYBACKUNAVAILABLE;
         case hashString("playbackResumptionFailed"): return margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYBACKRESUMPTIONFAILED;
         case hashString("playbackResumptionUnavailable"): return margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYBACKRESUMPTIONUNAVAILABLE;
+        case hashString("playbackResumptionNotWired"): return margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYBACKRESUMPTIONNOTWIRED;
         case hashString("artworkFailed"): return margelo::nitro::rnmediamediasession::SessionErrorCode::ARTWORKFAILED;
         case hashString("metadataMismatch"): return margelo::nitro::rnmediamediasession::SessionErrorCode::METADATAMISMATCH;
         case hashString("iconNotFound"): return margelo::nitro::rnmediamediasession::SessionErrorCode::ICONNOTFOUND;
@@ -68,6 +70,7 @@ namespace margelo::nitro {
         case margelo::nitro::rnmediamediasession::SessionErrorCode::BACKGROUNDPLAYBACKUNAVAILABLE: return JSIConverter<std::string>::toJSI(runtime, "backgroundPlaybackUnavailable");
         case margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYBACKRESUMPTIONFAILED: return JSIConverter<std::string>::toJSI(runtime, "playbackResumptionFailed");
         case margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYBACKRESUMPTIONUNAVAILABLE: return JSIConverter<std::string>::toJSI(runtime, "playbackResumptionUnavailable");
+        case margelo::nitro::rnmediamediasession::SessionErrorCode::PLAYBACKRESUMPTIONNOTWIRED: return JSIConverter<std::string>::toJSI(runtime, "playbackResumptionNotWired");
         case margelo::nitro::rnmediamediasession::SessionErrorCode::ARTWORKFAILED: return JSIConverter<std::string>::toJSI(runtime, "artworkFailed");
         case margelo::nitro::rnmediamediasession::SessionErrorCode::METADATAMISMATCH: return JSIConverter<std::string>::toJSI(runtime, "metadataMismatch");
         case margelo::nitro::rnmediamediasession::SessionErrorCode::ICONNOTFOUND: return JSIConverter<std::string>::toJSI(runtime, "iconNotFound");
@@ -88,6 +91,7 @@ namespace margelo::nitro {
         case hashString("backgroundPlaybackUnavailable"):
         case hashString("playbackResumptionFailed"):
         case hashString("playbackResumptionUnavailable"):
+        case hashString("playbackResumptionNotWired"):
         case hashString("artworkFailed"):
         case hashString("metadataMismatch"):
         case hashString("iconNotFound"):

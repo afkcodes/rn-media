@@ -1,4 +1,4 @@
-import { MediaSessionError } from './errors'
+import { invalidArgument, MediaSessionError } from './errors'
 import {
   normalizePlaybackState,
   validateMediaItem,
@@ -141,6 +141,49 @@ interface PersistedRecord {
 /*                                  Options                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The default {@link PersistenceAutosaveOptions.intervalMs}: **30 seconds**.
+ *
+ * Chosen from what each end costs, not from taste:
+ * - **The write.** One `setItem` of a few kilobytes per interval — 120 an hour
+ *   of continuous playback, two a minute. Async engines do it off the JS
+ *   thread; MMKV's synchronous write of a payload this size is microseconds.
+ *   That is not a hot path by any reading of "performance first", and it is
+ *   several orders of magnitude away from the per-*frame* traffic the
+ *   discontinuity rule exists to forbid.
+ * - **The loss.** An un-warned kill costs at most one interval of position.
+ *   Thirty seconds is under the threshold where a listener notices being put
+ *   back in the wrong place; a minute or more is not, and past that the write
+ *   you saved is worth less than the position you lost.
+ *
+ * Deliberately not a fraction of the track: an interval that depends on
+ * `duration` is a number nobody can reason about, and it does not exist for a
+ * live stream at all.
+ */
+export const DEFAULT_AUTOSAVE_INTERVAL_MS = 30_000
+
+/**
+ * The floor under {@link PersistenceAutosaveOptions.intervalMs}: **1 second**.
+ *
+ * Below this an "autosave" stops being a checkpoint and becomes the per-tick
+ * write this package's central design rule forbids (ARCHITECTURE §7). Rejected
+ * rather than clamped — a number silently multiplied by 10 is worse than a
+ * number refused at the call site.
+ */
+export const MIN_AUTOSAVE_INTERVAL_MS = 1_000
+
+/** See {@link PersistenceOptions.autosave}. */
+export interface PersistenceAutosaveOptions {
+  /**
+   * How long after the last write to checkpoint again, in milliseconds.
+   *
+   * @default {@link DEFAULT_AUTOSAVE_INTERVAL_MS}
+   * @throws {MediaSessionError} `invalidArgument` for a non-finite value or one
+   * below {@link MIN_AUTOSAVE_INTERVAL_MS}.
+   */
+  intervalMs?: number
+}
+
 export interface PersistenceOptions {
   /** @default {@link DEFAULT_PERSISTENCE_KEY} */
   key?: string
@@ -154,10 +197,82 @@ export interface PersistenceOptions {
   onError?: (error: unknown) => void
   /** Injected clock. Exists so tests are deterministic. @default `Date.now` */
   now?: () => number
+  /**
+   * Checkpoint the position while a track plays through uninterrupted. **On by
+   * default**, every {@link DEFAULT_AUTOSAVE_INTERVAL_MS} ms; `false` turns it
+   * off entirely and restores the broadcast-only behaviour.
+   *
+   * Read by {@link withPersistence} only — {@link restorePersisted} and
+   * {@link clearPersisted} share this options type but do not write on a timer.
+   *
+   * ## What it does, and what it deliberately does not
+   * Broadcasts are discontinuity-only by design (ARCHITECTURE §7), so a
+   * 40-minute track played straight through used to produce **no write at all**
+   * and restore at whatever the last play/seek/track-change said. A default
+   * that saves nothing is not a defensible default, so the timer is on.
+   *
+   * What it costs is exactly one storage `setItem` per interval, and it costs
+   * nothing else: the tick **re-projects the anchor the app already broadcast**
+   * (`value + (now − at) × rate`) in JavaScript. It asks no player for a
+   * position, and it does not cross the bridge — the native resumption mirror
+   * is refreshed by broadcasts and {@link PersistedMediaService.save} only, so
+   * that a checkpoint can never become per-tick bridge traffic.
+   *
+   * ## When it runs
+   * Only while the last broadcast said `playing` with a rate above zero — there
+   * is nothing to re-project otherwise, and a paused session's record is
+   * already correct. It stops on the next non-playing broadcast, on
+   * {@link MediaServiceApi.stopService} and on
+   * {@link PersistedMediaService.clear}, and it re-arms from the *last write*
+   * rather than on a fixed cadence, so an app that broadcasts often costs
+   * nothing extra.
+   *
+   * ## The two things it does not fix
+   * - **The restored position is still always paused** — freezing the anchor at
+   *   write time is what makes a restore honest, whatever wrote it (see
+   *   {@link withPersistence}).
+   * - **Android freezes JS timers once the Activity is gone.** That is a React
+   *   Native platform behaviour, not something this package can reach: with no
+   *   Activity, `setTimeout` stops firing and so does this. Autosave therefore
+   *   covers the foreground; keep `service.save()` on `AppState` leaving
+   *   `active` — that fires at exactly the moment autosave stops — and in
+   *   `onTaskRemoved`, and the two together leave no uncovered window that
+   *   anything could have covered.
+   */
+  autosave?: PersistenceAutosaveOptions | false
 }
 
 function defaultOnError(error: unknown): void {
   console.error('[media-session] persisting the session failed:', error)
+}
+
+/**
+ * `undefined` means "no autosave"; a number is a validated interval.
+ *
+ * Kept as one function so the default, the opt-out and the floor are decided in
+ * one place rather than three.
+ */
+function resolveAutosaveInterval(
+  autosave: PersistenceAutosaveOptions | false | undefined
+): number | undefined {
+  if (autosave === false) return undefined
+  const interval = autosave?.intervalMs
+  if (interval === undefined) return DEFAULT_AUTOSAVE_INTERVAL_MS
+  if (!Number.isFinite(interval)) {
+    throw invalidArgument(
+      `options.autosave.intervalMs must be a finite number of milliseconds, got ` +
+        `${JSON.stringify(interval)}. Pass \`autosave: false\` to turn autosave off.`
+    )
+  }
+  if (interval < MIN_AUTOSAVE_INTERVAL_MS) {
+    throw invalidArgument(
+      `options.autosave.intervalMs must be >= ${MIN_AUTOSAVE_INTERVAL_MS} ` +
+        `(got ${interval}). Anything faster is the per-tick write this package's ` +
+        `discontinuity rule exists to prevent; pass \`autosave: false\` to turn ` +
+        `autosave off instead.`
+    )
+  }
+  return interval
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
@@ -242,15 +357,14 @@ export interface PersistedMediaService extends MediaServiceApi {
    *
    * ## Why this exists
    * The tee saves on every broadcast, and broadcasts are discontinuity-only by
-   * design — so during a long uninterrupted track *nothing is written*, and the
-   * position on disk stays frozen at the last play/seek/track change. The
-   * library will not fix that with a timer: a periodic save is exactly the
-   * per-tick write this package exists to avoid, and on Android the JS timer
-   * driving it would freeze in the background anyway.
+   * design. {@link PersistenceOptions.autosave} covers the resulting gap while
+   * JavaScript timers run — but on Android they stop the moment the Activity is
+   * gone, which is a React Native platform behaviour and not something this
+   * package can reach from JavaScript.
    *
-   * So the *moment* is the app's call, and this is how it takes it. Each
-   * `save()` re-projects the live anchor to right now, so the record is as
-   * fresh as the call. Good moments:
+   * So the *moment* stays the app's to take, and this is how it takes it. Each
+   * `save()` re-projects the live anchor to right now and refreshes the native
+   * resumption mirror too, so the record is as fresh as the call. Good moments:
    *
    * ```ts
    * AppState.addEventListener('change', (s) => {
@@ -259,12 +373,14 @@ export interface PersistedMediaService extends MediaServiceApi {
    * ```
    *
    * …and `onTaskRemoved` (the app was swiped away), and just before a
-   * deliberate `stopService()`.
+   * deliberate `stopService()`. The first of those is the important one: it
+   * fires at exactly the instant autosave stops being able to fire.
    *
    * Honest limit: nothing can checkpoint a process that is killed with no
-   * warning while playing in the background. The position then restores to the
-   * last checkpoint — usually the start of the current track, which is a
-   * defensible answer and never a wrong one.
+   * warning while playing in the background *with no Activity*. The position
+   * then restores to the last checkpoint — with autosave on, at worst one
+   * interval before the app was backgrounded, which is a defensible answer and
+   * never a wrong one.
    */
   save(): void
   /**
@@ -306,12 +422,21 @@ export interface PersistedMediaService extends MediaServiceApi {
  * service.setPlaybackState(state)  // saved
  * ```
  *
- * ## Writes happen on discontinuities, never on a tick
- * There is no timer here and no polling — the only thing that triggers a write
- * is one of the three broadcast setters, and those are already
- * discontinuity-only by the package's central design rule (ARCHITECTURE §7).
- * A per-tick write would need a per-tick broadcast, which would be a bug one
- * layer up.
+ * ## Writes happen on discontinuities, plus one checkpoint per 30 s of playback
+ * The three broadcast setters are the primary trigger, and those are already
+ * discontinuity-only by the package's central design rule (ARCHITECTURE §7) —
+ * nothing here polls a player, and no state is ever *read* on a tick.
+ *
+ * On top of that, {@link PersistenceOptions.autosave} (on by default) re-arms a
+ * single JS timer while the last broadcast said `playing`, and each tick
+ * re-projects the anchor the app already gave us and writes it. That exists
+ * because the discontinuity rule, applied alone, means a track played straight
+ * through writes *nothing* — the position on disk stays at the last
+ * play/seek/track change for the length of the track. The cost is one storage
+ * `setItem` per interval and no bridge traffic at all: a tick deliberately does
+ * **not** refresh the native resumption mirror, because that call crosses into
+ * native and a per-tick native call is precisely what this package forbids.
+ * Broadcasts and {@link PersistedMediaService.save} refresh both copies.
  *
  * ## Write scheduling
  * The latest snapshot always wins and writes never overlap:
@@ -347,6 +472,9 @@ export function withPersistence(
   const key = options.key ?? DEFAULT_PERSISTENCE_KEY
   const onError = options.onError ?? defaultOnError
   const now = options.now ?? Date.now
+  // Validated here rather than at the first tick: a typo in an interval must
+  // fail at the call site that wrote it, not silently 40 minutes later.
+  const autosaveMs = resolveAutosaveInterval(options.autosave)
 
   let playbackState: PlaybackState | undefined
   let mediaItem: MediaItem | undefined
@@ -436,10 +564,74 @@ export function withPersistence(
    * returns. It is a no-op on iOS and when `android.playbackResumption` is off.
    */
   function writeSnapshot(): void {
+    write(true)
+  }
+
+  /**
+   * @param reachNative refresh the native resumption mirror too. `false` for an
+   * autosave tick, and that is the whole reason this parameter exists: the
+   * mirror write is a bridge call, and a bridge call on a timer is exactly what
+   * CLAUDE.md principle 1 forbids. The mirror therefore holds the position of
+   * the last *broadcast* (or `save()`), which is precisely what it held before
+   * autosave existed — never staler, and refreshed by the next of either.
+   */
+  function write(reachNative: boolean): void {
     const payload = serialize()
     queued = payload
-    mirror(payload)
+    if (reachNative) mirror(payload)
     drain()
+    armAutosave()
+  }
+
+  /* ------------------------------ Autosave ------------------------------- */
+
+  /** The pending checkpoint, or `undefined` when nothing is scheduled. */
+  let autosaveTimer: ReturnType<typeof setTimeout> | undefined
+
+  /**
+   * Is there anything for a tick to re-project?
+   *
+   * `playing` **and** a live rate: the two together are what make
+   * `value + (now − at) × rate` move. A `paused` record is already correct on
+   * disk, and re-writing it every interval would be a write that changes
+   * nothing but `savedAt`.
+   */
+  function autosaveIsDue(): boolean {
+    return (
+      autosaveMs !== undefined &&
+      playbackState !== undefined &&
+      playbackState.status === 'playing' &&
+      playbackState.position.rate > 0
+    )
+  }
+
+  /**
+   * Re-arm (or cancel) the checkpoint. Called after **every** write, so the
+   * timer measures from the last write of any kind rather than running on a
+   * fixed cadence — an app that broadcasts every ten seconds therefore costs no
+   * autosave writes at all, and a tick can never land on top of a broadcast
+   * that just wrote the same bytes.
+   */
+  function armAutosave(): void {
+    stopAutosave()
+    if (autosaveMs === undefined || !autosaveIsDue()) return
+    const handle = setTimeout(() => {
+      autosaveTimer = undefined
+      // `false`: storage only. See `write`.
+      write(false)
+    }, autosaveMs)
+    // Node keeps a process alive for a pending timer; React Native does not
+    // have `unref` at all. Guarded rather than assumed so a vitest run is not
+    // held open by a session no test stopped, and so this is a no-op on device.
+    const unref = (handle as unknown as { unref?: () => void }).unref
+    if (typeof unref === 'function') unref.call(handle)
+    autosaveTimer = handle
+  }
+
+  function stopAutosave(): void {
+    if (autosaveTimer === undefined) return
+    clearTimeout(autosaveTimer)
+    autosaveTimer = undefined
   }
 
   function mirror(payload: string | undefined): void {
@@ -488,6 +680,9 @@ export function withPersistence(
     },
 
     async clear(): Promise<void> {
+      // Before the await, deliberately: "forget this session" must not race a
+      // checkpoint that would write it straight back. A later broadcast re-arms.
+      stopAutosave()
       // Storage first: if it rejects, the caller hears about it and the mirror
       // is still consistent with what is on disk.
       await clearPersisted(storage, { key, now })
@@ -510,8 +705,13 @@ export function withPersistence(
       service.setRemotePlayback(remote)
     },
 
-    stopService(): Promise<void> {
-      return service.stopService()
+    async stopService(): Promise<void> {
+      await service.stopService()
+      // Only after it resolved: a *failed* stop leaves the session up and
+      // playing, and silently dropping its checkpoints would be the pitfall
+      // this feature exists to close. The record itself is deliberately left
+      // intact — stop is not forget.
+      stopAutosave()
     },
 
     // Pass-through: the sleep timer is native state with a native lifetime and

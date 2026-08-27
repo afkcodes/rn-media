@@ -648,8 +648,9 @@ killable service?* — added to `media-session` and verified on device
 `withPersistence(service, storage)` wraps `MediaServiceApi`; `storage` is
 structural `{getItem, setItem}` — the `wireAudioSession` philosophy (§3), so
 AsyncStorage, MMKV and a `Map` all fit and none is depended on. Writes are
-triggered *only* by a broadcast, which is already discontinuity-only (§7); no
-timer was added and none may be. A sync engine is written through synchronously,
+triggered by a broadcast, which is already discontinuity-only (§7), and — since
+2026-08-27, see decision 3 below — by one JS-side checkpoint per 30 s of
+playback. A sync engine is written through synchronously,
 an async one gets one write in flight with intermediate snapshots coalescing, so
 three channel broadcasts in a tick cost one round trip and a late `setItem`
 cannot resurrect stale state. The record is versioned and every bad-data outcome
@@ -671,16 +672,40 @@ The three non-obvious decisions:
    live stream has nothing to seek to and measures listening time, not a place
    in the content. Leaving it to implementors would make it a bug in most apps
    instead of a decision in one place.
-3. **Discontinuity-only writes have a cost, and it is paid explicitly.** A track
-   played straight through produces no broadcast and therefore no write — device
-   evidence: a 42 s play restored as `0:00`. The fix is *not* a periodic save
-   (that is the per-tick write the whole design forbids, and its JS timer would
-   freeze in the background anyway) but `service.save()`, which re-projects and
-   writes on demand; the app picks the moment (`AppState` leaving `active`,
-   `onTaskRemoved`, before `stopService`). With that, the same test restored
-   `0:42` across `am force-stop`. Nothing can checkpoint an un-warned kill; the
-   position then restores to the last checkpoint, which is never *wrong*, only
-   older.
+3. **Discontinuity-only writes have a cost, and it is now paid by a bounded
+   timer plus an explicit `save()` — not by `save()` alone.** A track played
+   straight through produces no broadcast and therefore no write — device
+   evidence: a 42 s play restored as `0:00`.
+
+   **Reversed 2026-08-27.** The original ruling here was "no timer was added and
+   none may be", with `service.save()` as the whole answer. That made the
+   library's *default* save nothing for the length of a track, which is not a
+   defensible default however well documented — the app has to write code before
+   the feature works at all. The rule it was defending is narrower than it was
+   applied: §7 forbids **streaming position across the bridge** and per-tick
+   *native* work. A JS-side checkpoint does neither. `PersistenceOptions.autosave`
+   (`{intervalMs?} | false`, default 30 000 ms) re-arms one `setTimeout` while
+   the last broadcast said `playing` with a live rate; each tick re-projects the
+   anchor the app already broadcast (`value + (now − at) × rate`) in JavaScript
+   and writes it. Nothing is read from a player, nothing crosses the bridge —
+   the native resumption mirror is deliberately **not** refreshed on a tick, for
+   exactly that reason, so it holds the last broadcast's position and is
+   refreshed by the next broadcast or `save()`. Cost: one `setItem` per
+   interval, two a minute, against at most 30 s of lost position. Intervals
+   below 1 s are rejected rather than clamped — below that it *is* the per-tick
+   write §7 forbids. Unit-tested with fake timers, including an assertion that a
+   tick makes **zero** calls on the native hybrid object.
+
+   What the reversal does not change: **`service.save()` is still required**, and
+   for the reason the original ruling half-named. Android stops JS timers once
+   the Activity is gone (`JavaTimerManager.onHostPause`), so autosave covers the
+   foreground and nothing more. The app still picks the background moments
+   (`AppState` leaving `active` — the exact instant the timer stops —
+   `onTaskRemoved`, before `stopService`). With `save()` alone the device test
+   restored `0:42` across `am force-stop`; autosave is what makes the *foreground*
+   case work with no app code at all. Nothing can checkpoint an un-warned kill;
+   the position then restores to the last checkpoint, which is never *wrong*,
+   only older — and now at most one interval older.
 
 **The sleep timer is native because our own Platform truth says it must be.**
 `setSleepTimer/cancelSleepTimer/getSleepTimerRemaining` + an `onSleepTimer`
@@ -796,14 +821,40 @@ Six decisions worth the words:
    survive regeneration), the config plugin's opt-in `playbackResumption`
    option, which injects it idempotently — and its absence is a log line at
    `init`.
-4. **Failure is bounded and says which half broke.** 10 s covers a React cold
-   start several times over; on expiry the log distinguishes "the runtime never
-   started" from "the runtime started but `MediaService.init` was never called"
-   — and, since #47, splits the second into "the live runtime was asked to
-   re-init and did not" versus "nothing could have asked it", because the fixes
-   differ (see decisions 5 and 6). Not configurable — an app that needs longer
-   has a startup problem no timeout fixes. Brownfield (`Application` is not a
-   `ReactApplication`) degrades to the old behaviour with one warning.
+4. **Failure is bounded, says which half broke, and no longer waits for the
+   deadline to say it.** 10 s covers a React cold start several times over; on
+   expiry the report distinguishes "the runtime never started" from "the runtime
+   started but `MediaService.init` was never called" — and, since #47, splits
+   the second into "the live runtime was asked to re-init and did not" versus
+   "nothing could have asked it", because the fixes differ (see decisions 5 and
+   6). Not configurable — an app that needs longer has a startup problem no
+   timeout fixes. Brownfield (`Application` is not a `ReactApplication`) degrades
+   to the old behaviour with one warning.
+
+   **Amended 2026-08-27: the silence in between is itself the bug.** A
+   misconfigured resumption used to produce *nothing at all* for ten seconds and
+   then a log line, and that log line was the only artefact — the failure was
+   reported as `playbackResumptionFailed`, whose delivery is best-effort by
+   nature. Two changes. First, a **probe** at `runtimeReady + 3 s` raises a new
+   code, `playbackResumptionNotWired` (fatal, Android-raised, present in the
+   generated enum on both platforms per the parity gate). That instant is the
+   earliest the answer is *knowable*, not merely the earliest it is convenient:
+   a `ReactContext` cannot exist before the bundle has been evaluated, so
+   module scope has already run and `init` has either been called or never will
+   be; 3 s is ~18× the 170 ms the device measurement below spends between
+   runtime-ready and `init` complete, and is an allowance for the app's own
+   prologue, nothing else. Second, delivery: a handler existing *is* an
+   initialized session, which is the very thing whose absence these codes
+   report, so neither can ever be delivered at the moment it is raised. Both are
+   logged immediately and **held for the next `initialize`**, diagnosis before
+   outcome, in a list rather than the single slot that previously existed (which
+   would have dropped the diagnosis in favour of the failure). The diagnosis is
+   held *on probation*: an `initialize` that arrives before the deadline
+   **disproves** it — the call whose absence it reports has just happened — so
+   it is discarded rather than delivered, and an app whose own init path is
+   merely slow is never accused of not having one. The message decision is a
+   pure function (`RevivalDiagnosis`), unit-tested on both arms, including the
+   fix string verbatim; the watchdog's existing prose moved there unchanged.
 5. **"Module scope" is not enough — init must be reachable through a bare
    side-effect import from the entry file** (bug #47, diagnosed on device
    2026-08-13). Metro's release-mode inline requires (`inlineRequires: true`,
@@ -1877,10 +1928,13 @@ as it already was on iOS. Replacing media3's loader is safe because
 `MediaSession.BuilderBase.ensureBitmapLoaderIsSizeLimited` (1.11.0, read from
 the AAR) applies the same size-limiting and caching wrappers to an app-supplied
 loader as to its own default; the object graph is media3's plus one decorator.
-The four Android-only codes each belong to a feature that is *already*
-Android-only under a documented ceiling (resumption ×2, `holdLocalAudioSlot`,
+The five Android-only codes each belong to a feature that is *already*
+Android-only under a documented ceiling (resumption ×3, `holdLocalAudioSlot`,
 drawable-named icons). There is no iOS-only code, and that is stated in the
-TSDoc and the README rather than hidden.
+TSDoc and the README rather than hidden. "Android-only" means *raised* by
+Android only: every code exists in the generated Swift and C++ enums too, which
+is what keeps an OTA'd bundle and a fixed binary from disagreeing about the
+taxonomy.
 
 Three properties are load-bearing:
 
@@ -1897,7 +1951,12 @@ Three properties are load-bearing:
   held and flushed to the next `initialize` — the stop-then-resumption-card case,
   where the runtime is alive. After a true process death it stays a log line,
   because replaying it into a later launch would attribute a stale error to the
-  wrong run.
+  wrong run. Since 2026-08-27 the hold is a small list, because one abandoned
+  revival now produces two reports (§20 decision 4: the `playbackResumptionNotWired`
+  diagnosis at 3 s and the `playbackResumptionFailed` outcome at 10 s), and a
+  single slot would have dropped the more useful of them. The diagnosis is held
+  conditionally — an `initialize` arriving before the deadline is a *disproof*,
+  not a delivery cue, and discards it.
 
 Two sites stay log-only by ruling rather than by omission: a sleep timer that
 fires with no session, and one that fires with no `pause` capability advertised.

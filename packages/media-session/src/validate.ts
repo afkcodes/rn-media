@@ -681,6 +681,10 @@ export const SESSION_ERROR_SEVERITY: Readonly<
   playbackResumptionFailed: 'fatal',
   // The feature is inert, but nothing the user asked for has failed yet.
   playbackResumptionUnavailable: 'degraded',
+  // The cause of the line above it: the runtime came up and `init` never did,
+  // so the press on the resumption card is going nowhere. Graded like the
+  // failure it explains — nothing about it degrades.
+  playbackResumptionNotWired: 'fatal',
   artworkFailed: 'degraded',
   metadataMismatch: 'degraded',
   iconNotFound: 'degraded',

@@ -461,6 +461,10 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     // call init by itself, and the TS side swallows a request that races an
     // init already in flight, so the two paths cannot double-initialize.
     pending.requestDelivered = MediaSessionController.requestRevival()
+    // From here the only thing that can save the revival is an `initialize`.
+    // Give the app's own init prologue a moment, then say so out loud rather
+    // than leaving seven more seconds of silence — see [probe].
+    main.postDelayed(probe, REVIVAL_PROBE_MS)
     Log.i(
       TAG,
       "Playback resumption: JS runtime up after " +
@@ -486,6 +490,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     val pending = revival ?: return false
     revival = null
     main.removeCallbacks(watchdog)
+    main.removeCallbacks(probe)
     val now = SystemClock.elapsedRealtime()
     Log.i(
       TAG,
@@ -497,35 +502,49 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   }
 
   /**
+   * The **probe**: the earliest instant "this revival is not going to finish"
+   * is knowable, rather than the instant it becomes final.
+   *
+   * Armed by [onRuntimeReady] and therefore only ever reached with a live
+   * `ReactContext` — which is the fact that makes it honest. A `ReactContext`
+   * exists only *after* the bundle has been loaded and evaluated, so JS module
+   * scope has already run: if `MediaService.init(...)` was reachable from it,
+   * it has already been called, and only the app's own async prologue (an
+   * `await` before `init`) can still be in the way. [REVIVAL_PROBE_MS] is the
+   * allowance for that prologue, and it is generous — the device measurement in
+   * the README has `init` completing 170 ms after the runtime appears.
+   *
+   * It does **not** end the revival. The deadline still belongs to [watchdog];
+   * this only takes the seven seconds of silence in between and turns them into
+   * a sentence naming the fix. And because "nobody is initialized" is exactly
+   * the condition being reported, the report cannot be delivered on the spot —
+   * it is logged now and held for the next `initialize`, where an `initialize`
+   * arriving in time instead throws it away (see
+   * `SessionErrorReporter.provisionalDiagnosis`).
+   */
+  private val probe = Runnable {
+    val pending = revival ?: return@Runnable
+    // Defensive: the probe is only armed from the runtime-ready hook.
+    if (pending.runtimeReadyAtMs == 0L) return@Runnable
+    SessionErrors.reportResumptionDiagnosis(
+      RevivalDiagnosis.notWired(pending.requestDelivered, REVIVAL_PROBE_MS)
+    )
+  }
+
+  /**
    * The deadline. Fires only when a revival never finished, and its whole job
    * is to say *which* half did not happen — the two failures have completely
-   * different fixes and are indistinguishable from the outside.
+   * different fixes and are indistinguishable from the outside. The decision is
+   * [RevivalDiagnosis.abandonReason], which is where it is unit-tested.
    */
   private val watchdog = Runnable {
     val pending = revival ?: return@Runnable
     abandonRevival(
-      when {
-        pending.runtimeReadyAtMs == 0L ->
-          "the JS runtime did not start within $REVIVAL_TIMEOUT_MS ms"
-
-        pending.requestDelivered ->
-          "the app was asked to re-initialize (android.onRevivalRequested fired on the " +
-            "live runtime) but MediaService.init(...) never followed. That callback must " +
-            "run your init path — the same idempotent 'bring the session up' code your " +
-            "module scope runs, ending in MediaService.init(...)."
-
-        else ->
-          "the JS runtime started but MediaService.init(...) was never called. Two things " +
-            "have to be true for a revival to finish: (1) init must run at JS MODULE SCOPE, " +
-            "in a module your ENTRY file imports for its side effects " +
-            "(`import './src/playback'` in index.js) — Metro's release-mode inline requires " +
-            "defers a binding-only import (`import { x } from './m'`) to the first render, " +
-            "which a headless runtime never performs, so an init that is merely 'at module " +
-            "scope' of a lazily-required module still never runs; and (2) if this runtime " +
-            "was already alive (a stop-then-resume without process death), module scope " +
-            "cannot run twice — set android.onRevivalRequested to your init path so the " +
-            "service can ask for it."
-      }
+      RevivalDiagnosis.abandonReason(
+        runtimeReady = pending.runtimeReadyAtMs != 0L,
+        requestDelivered = pending.requestDelivered,
+        timeoutMs = REVIVAL_TIMEOUT_MS,
+      )
     )
   }
 
@@ -541,6 +560,11 @@ class RnMediaMediaSessionService : MediaLibraryService() {
     if (revival == null) return
     revival = null
     main.removeCallbacks(watchdog)
+    main.removeCallbacks(probe)
+    // The revival is over, so a diagnosis the probe raised while it was still
+    // running was right: promote it, ahead of the outcome below, so the app
+    // hears the cause before the consequence.
+    SessionErrors.confirmResumptionDiagnosis()
     // Reported, not merely logged — and the delivery is deliberately
     // best-effort, because this is the one code whose failure mode is precisely
     // "there is no session to report to". `reportResumptionFailure` holds it for
@@ -830,6 +854,7 @@ class RnMediaMediaSessionService : MediaLibraryService() {
   override fun onDestroy() {
     revival = null
     main.removeCallbacks(watchdog)
+    main.removeCallbacks(probe)
     session?.let {
       removeSession(it)
       it.release()
@@ -1963,6 +1988,24 @@ class RnMediaMediaSessionService : MediaLibraryService() {
      * this has a startup problem no timeout will fix.
      */
     private const val REVIVAL_TIMEOUT_MS = 10_000L
+
+    /**
+     * How long after the JS runtime appears before the silence is called out —
+     * see [probe]. Measured from `onRuntimeReady`, not from the start of the
+     * revival, which is what makes it a much smaller number than
+     * [REVIVAL_TIMEOUT_MS] without being a stricter deadline.
+     *
+     * By this point the bundle has been evaluated (a `ReactContext` cannot
+     * exist before it has), so module scope has run and `MediaService.init(...)`
+     * has either been called or never will be. All that can still be in flight
+     * is an app's own prologue before the call — an `await` on storage, a
+     * catalogue load. Three seconds is ~18× the 170 ms the device measurement in
+     * the README spends between runtime-ready and `init` complete, and being
+     * wrong in the generous direction costs a log line the next `initialize`
+     * throws away (`SessionErrorReporter.provisionalDiagnosis`) — nothing is
+     * ended early, and no app is accused of a mistake it did not make.
+     */
+    private const val REVIVAL_PROBE_MS = 3_000L
 
     /**
      * The four-tab root cap, and the default when a browser sends no

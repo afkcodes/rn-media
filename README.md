@@ -257,8 +257,8 @@ export async function start(): Promise<void> {
     if (track !== undefined) service.setMediaItem(toItem(track))
   })
 
-  // Broadcasts are discontinuity-only, so a track played straight through writes
-  // nothing. This is the moment you choose instead of the timer we refuse to run.
+  // Autosave checkpoints every 30 s while playing — but Android freezes JS
+  // timers once the Activity is gone, and this fires at exactly that instant.
   AppState.addEventListener('change', (next) => {
     if (next !== 'active') service.save()
   })
@@ -979,6 +979,7 @@ not drawn), `onSetRepeatMode`, `onSetShuffle`, `onSetDeviceVolume`,
 | `applyPersisted(service, session)` | Re-broadcast in the order the channels expect |
 | `clearPersisted(storage, options?)` | Forget the saved session (**storage only**) |
 | `PERSISTENCE_SCHEMA_VERSION`, `DEFAULT_PERSISTENCE_KEY` | Schema constants |
+| `options.autosave` | `{ intervalMs? } \| false`. **On by default at 30 s**: one `setItem` per interval while playing, re-projecting the anchor in JS — no bridge traffic, no polling |
 
 `storage` is anything with `{ getItem, setItem }`, sync or async — this package
 depends on none of them. The restored position is **always paused**: a saved
@@ -1066,8 +1067,8 @@ Every row here is a real bug someone hit, in this repo or in review.
 | The lock-screen scrubber is off by 1000× | `media-session`'s anchor is **milliseconds** (`{ value, at, rate }`); `PlayerState.positionAnchor` is **seconds** (`{ position, timestamp, rate }`) |
 | `stop()` emptied the queue — or didn't | `player.stop()` **keeps** the queue (mpv's own `stop` clears it; we inverted that). Pass `{ clearPlaylist: true }` for the destructive version |
 | The position never advances after a resume | A saved anchor restores with `rate: 0` and status `paused`, by design. Resume from a user gesture and broadcast a fresh anchor |
-| Playback resumption does nothing, then a log line 10 s later | `MediaService.init` is not reachable at JS **module scope**. Metro's inline requires defer a binding import to first *use*, and a revived runtime renders nothing — use a bare `import './src/playback'` in `index.js` |
-| A track played straight through saved nothing | Persistence writes on broadcasts, and broadcasts are discontinuity-only. Call `service.save()` on `AppState` change and in `onTaskRemoved` |
+| `onSessionError` says `playbackResumptionNotWired` | `MediaService.init` is not reachable at JS **module scope**. Metro's inline requires defer a binding import to first *use*, and a revived runtime renders nothing — use a bare `import './src/playback'` in `index.js`. Raised ~3 s after the revived runtime comes up, and again as `playbackResumptionFailed` at the 10 s deadline; both are held for your next `init` |
+| A track played straight through restores minutes behind | Autosave checkpoints every 30 s of playback, but **Android freezes JS timers once the Activity is gone** — so it covers the foreground only. Add `service.save()` on `AppState` leaving `active` (the exact instant autosave stops) and in `onTaskRemoved` |
 | Everything is 3 dB too loud (or quiet) | ReplayGain **and** `setLoudnessNormalization` are both on. Pick one — the gains stack |
 | The EQ screen's changes get wiped | While `useEqualizer` is mounted it owns `setAudioFilters`. Put the rest of your chain in its `extraFilters` option |
 | The cast build fails on `_OBJC_CLASS_$_UIGlassEffect` | `google-cast-sdk` 4.8.6 is built against the iOS 26.2 SDK. **Xcode 26+** is required to link it; the runtime floor stays iOS 16 |
@@ -1108,10 +1109,11 @@ Every row here is a real bug someone hit, in this repo or in review.
   the platform-split workaround a paid competitor ships is exactly what this
   project's parity gate rejects. **AirPlay audio *output* works today with zero
   code**: it is an ordinary iOS system output route.
-- **Persistence has two honest edges**: writes happen on broadcasts, so a track
-  played straight through saves nothing until you call `service.save()`; and a
-  live stream saves position `0`, because an offset into it has nothing to seek
-  back to.
+- **Persistence has two honest edges**: the 30 s autosave rides a JS timer, and
+  Android stops those once the Activity is gone — so a long background stretch
+  is checkpointed by your `service.save()` on `AppState`, not by the timer; and
+  a live stream saves position `0`, because an offset into it has nothing to
+  seek back to.
 - **CarPlay has never been run** — it compiles on CI and mirrors Android Auto's
   handler contract, but no Simulator or head-unit session has been observed
   (Apple hardware and the entitlement are both owner-side). Android Auto *is*

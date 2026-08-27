@@ -7,8 +7,9 @@
  * prose rather than as a crash.
  *
  * Writing is the easy half: `withPersistence(api, storage)` tees every broadcast
- * to disk. Because this app broadcasts only on discontinuities, a track played
- * straight through produces no write at all — so it also checkpoints on the way
+ * to disk, and — since this app broadcasts only on discontinuities — checkpoints
+ * the projected position every 30 s of playback on top of that. Android freezes
+ * JS timers once the Activity is gone, so this app also checkpoints on the way
  * out of the foreground, which is the last moment JavaScript is guaranteed to
  * run.
  */
@@ -28,8 +29,8 @@ export const PersistenceNote = React.memo(function PersistenceNote({
         media card: the media service revives this JS runtime, replays the
         command, and `onPlaybackResumption` shows up in logcat. That needs three
         things together — `playbackResumption: true`, the `MediaButtonReceiver`
-        in the manifest, and `withPersistence` — and the library logs which one
-        is missing.
+        in the manifest, and `withPersistence` — and the library reports which
+        one is missing on the session-error channel, in the strip above.
       </Detail>
     </Section>
   )

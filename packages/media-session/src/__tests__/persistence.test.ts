@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { MediaSessionError } from '../errors'
 import { createMediaService } from '../media-service'
 import {
   applyPersisted,
@@ -9,7 +10,12 @@ import {
   restorePersisted,
   withPersistence,
 } from '../persistence'
-import type { MediaSessionStorage } from '../persistence'
+import type {
+  MediaSessionStorage,
+  PersistedMediaService,
+  PersistenceOptions,
+} from '../persistence'
+import type { RnMediaMediaSession } from '../specs/media-session.nitro'
 import type { MediaServiceApi } from '../types'
 import {
   FakeNativeMediaSession,
@@ -472,7 +478,7 @@ describe('restorePersisted tolerates anything on disk', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('write behaviour', () => {
-  it('writes once per broadcast and never on a tick', async () => {
+  it('writes once per broadcast and nothing polls between them', async () => {
     const storage = new SyncStorage()
     const { api } = await service()
     const persisted = withPersistence(api, storage)
@@ -483,7 +489,9 @@ describe('write behaviour', () => {
 
     expect(storage.writes).toHaveLength(3)
     await new Promise((resolve) => setTimeout(resolve, 20))
-    // Nothing schedules itself: no timers, no polling.
+    // Nothing polls. The one timer this package owns is the 30 s autosave
+    // checkpoint (below), which is nowhere near due — three broadcasts in a
+    // tick still cost exactly three writes.
     expect(storage.writes).toHaveLength(3)
   })
 
@@ -636,6 +644,304 @@ describe('write behaviour', () => {
     expect(native.cancelSleepTimerCalls).toBe(1)
     // Not a broadcast channel: nothing was written.
     expect(storage.writes).toHaveLength(0)
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                                  Autosave                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('autosave checkpoints a track played straight through', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** A playing session with a 5-minute track and an injectable clock. */
+  async function playing(
+    storage: MediaSessionStorage,
+    options: PersistenceOptions = {},
+    native?: RnMediaMediaSession
+  ): Promise<{ persisted: PersistedMediaService; tick: (ms: number) => void }> {
+    const api = await createMediaService(
+      native ?? new FakeNativeMediaSession()
+    ).init(() => new RecordingHandler())
+    let clock = NOW
+    const persisted = withPersistence(api, storage, {
+      now: () => clock,
+      ...options,
+    })
+    persisted.setMediaItem(item('a', { duration: 300_000 }))
+    persisted.setPlaybackState(
+      playbackState({
+        status: 'playing',
+        position: { value: 0, at: NOW, rate: 1 },
+      })
+    )
+    return {
+      persisted,
+      // Move the injected clock and the timer wheel together, exactly as wall
+      // time moves them.
+      tick: (ms: number) => {
+        clock += ms
+        vi.advanceTimersByTime(ms)
+      },
+    }
+  }
+
+  function lastPosition(storage: SyncStorage): number {
+    const state = parse(storage.writes.at(-1) as string).playbackState as {
+      position: { value: number; rate: number }
+    }
+    return state.position.value
+  }
+
+  it('writes every 30 s while playing, projecting the anchor locally', async () => {
+    const storage = new SyncStorage()
+    const { tick } = await playing(storage)
+    expect(storage.writes).toHaveLength(2)
+
+    tick(30_000)
+    expect(storage.writes).toHaveLength(3)
+    // Nobody was asked where playback is: `value + (now − at) × rate`.
+    expect(lastPosition(storage)).toBe(30_000)
+
+    tick(30_000)
+    expect(storage.writes).toHaveLength(4)
+    expect(lastPosition(storage)).toBe(60_000)
+  })
+
+  it('projects at the broadcast rate, not at 1×', async () => {
+    const storage = new SyncStorage()
+    const api = await createMediaService(new FakeNativeMediaSession()).init(
+      () => new RecordingHandler()
+    )
+    let clock = NOW
+    const persisted = withPersistence(api, storage, { now: () => clock })
+    persisted.setMediaItem(item('a', { duration: 3_000_000 }))
+    persisted.setPlaybackState(
+      playbackState({
+        status: 'playing',
+        position: { value: 10_000, at: NOW, rate: 2 },
+      })
+    )
+
+    clock = NOW + 30_000
+    vi.advanceTimersByTime(30_000)
+    expect(lastPosition(storage)).toBe(70_000)
+  })
+
+  it('never touches native on a tick — no bridge traffic, ever', async () => {
+    const storage = new SyncStorage()
+    const native = new FakeNativeMediaSession()
+    const calls: string[] = []
+    // Counts *every* method that crosses into the hybrid object, not just the
+    // ones a fake happens to record. A checkpoint must cost zero of them.
+    const counting = new Proxy(native, {
+      get(target, property, receiver): unknown {
+        const value: unknown = Reflect.get(target, property, receiver)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]): unknown => {
+          calls.push(String(property))
+          return (value as (...a: unknown[]) => unknown).apply(target, args)
+        }
+      },
+    }) as unknown as RnMediaMediaSession
+
+    const { tick } = await playing(storage, {}, counting)
+    const before = calls.length
+    expect(native.resumptionSnapshots).toHaveLength(2)
+
+    tick(90_000)
+
+    expect(storage.writes).toHaveLength(5)
+    expect(calls.length).toBe(before)
+    // Specifically the mirror: it is the one native call a naive tick would
+    // make, and it stays at whatever the last broadcast wrote.
+    expect(native.resumptionSnapshots).toHaveLength(2)
+  })
+
+  it('stops the moment playback is not playing, and resumes with it', async () => {
+    const storage = new SyncStorage()
+    const { persisted, tick } = await playing(storage)
+    tick(30_000)
+    expect(storage.writes).toHaveLength(3)
+
+    persisted.setPlaybackState(
+      playbackState({
+        status: 'paused',
+        position: { value: 30_000, at: NOW + 30_000, rate: 0 },
+      })
+    )
+    expect(storage.writes).toHaveLength(4)
+
+    tick(600_000)
+    // Ten minutes paused: not one write. A paused record is already correct.
+    expect(storage.writes).toHaveLength(4)
+
+    persisted.setPlaybackState(
+      playbackState({
+        status: 'playing',
+        position: { value: 30_000, at: NOW + 630_000, rate: 1 },
+      })
+    )
+    expect(storage.writes).toHaveLength(5)
+    tick(30_000)
+    expect(storage.writes).toHaveLength(6)
+  })
+
+  it('does not run for a `playing` state with a zero rate', async () => {
+    const storage = new SyncStorage()
+    const api = await createMediaService(new FakeNativeMediaSession()).init(
+      () => new RecordingHandler()
+    )
+    withPersistence(api, storage, { now: () => NOW }).setPlaybackState(
+      playbackState({
+        status: 'playing',
+        position: { value: 5_000, at: NOW, rate: 0 },
+      })
+    )
+    expect(storage.writes).toHaveLength(1)
+    vi.advanceTimersByTime(600_000)
+    // Nothing to project: the anchor does not move.
+    expect(storage.writes).toHaveLength(1)
+  })
+
+  it('stops on stopService', async () => {
+    const storage = new SyncStorage()
+    const { persisted, tick } = await playing(storage)
+    await persisted.stopService()
+
+    tick(600_000)
+    expect(storage.writes).toHaveLength(2)
+    // …and stop is still not "forget".
+    expect((await restorePersisted(storage)).status).toBe('restored')
+  })
+
+  it('stops on clear() — a forgotten session is not written back', async () => {
+    const storage = new SyncStorage()
+    const { persisted, tick } = await playing(storage)
+    await persisted.clear()
+    const afterClear = storage.writes.length
+
+    tick(600_000)
+    expect(storage.writes).toHaveLength(afterClear)
+    expect((await restorePersisted(storage)).status).toBe('empty')
+  })
+
+  it('re-arms from the last write, not on a fixed cadence', async () => {
+    const storage = new SyncStorage()
+    const { persisted, tick } = await playing(storage)
+
+    tick(20_000)
+    expect(storage.writes).toHaveLength(2)
+    // A broadcast at 20 s writes — and pushes the checkpoint out to 50 s.
+    persisted.setPlaybackState(
+      playbackState({
+        status: 'playing',
+        position: { value: 20_000, at: NOW + 20_000, rate: 1 },
+      })
+    )
+    expect(storage.writes).toHaveLength(3)
+
+    tick(20_000)
+    expect(storage.writes).toHaveLength(3)
+    tick(10_000)
+    expect(storage.writes).toHaveLength(4)
+    expect(lastPosition(storage)).toBe(50_000)
+  })
+
+  it('honours a custom interval', async () => {
+    const storage = new SyncStorage()
+    const { tick } = await playing(storage, {
+      autosave: { intervalMs: 5_000 },
+    })
+
+    tick(5_000)
+    tick(5_000)
+    expect(storage.writes).toHaveLength(4)
+    expect(lastPosition(storage)).toBe(10_000)
+  })
+
+  it('writes nothing on a timer when turned off', async () => {
+    const storage = new SyncStorage()
+    const { tick } = await playing(storage, { autosave: false })
+
+    tick(3_600_000)
+    expect(storage.writes).toHaveLength(2)
+  })
+
+  it('rejects an interval fast enough to be a per-tick write', async () => {
+    const storage = new SyncStorage()
+    const { api } = await service()
+    function attempt(intervalMs: number): () => unknown {
+      return () => withPersistence(api, storage, { autosave: { intervalMs } })
+    }
+
+    expect(attempt(999)).toThrow(MediaSessionError)
+    expect(attempt(0)).toThrow(/must be >= 1000/)
+    expect(attempt(Number.NaN)).toThrow(/finite/)
+    expect(attempt(Number.POSITIVE_INFINITY)).toThrow(/finite/)
+    try {
+      attempt(-1)()
+    } catch (error) {
+      expect((error as MediaSessionError).code).toBe('invalidArgument')
+    }
+  })
+
+  it('a queue-index change is a broadcast, so it is saved without a tick', async () => {
+    const storage = new SyncStorage()
+    const { persisted } = await playing(storage)
+    const before = storage.writes.length
+
+    persisted.setPlaybackState(
+      playbackState({
+        status: 'playing',
+        queueIndex: 4,
+        position: { value: 0, at: NOW, rate: 1 },
+      })
+    )
+
+    expect(storage.writes).toHaveLength(before + 1)
+    expect(
+      (
+        parse(storage.writes.at(-1) as string).playbackState as {
+          queueIndex: number
+        }
+      ).queueIndex
+    ).toBe(4)
+  })
+
+  it('coalesces a checkpoint into a write already in flight', async () => {
+    const storage = new AsyncStorage(true)
+    const api = await createMediaService(new FakeNativeMediaSession()).init(
+      () => new RecordingHandler()
+    )
+    let clock = NOW
+    const persisted = withPersistence(api, storage, { now: () => clock })
+    persisted.setPlaybackState(
+      playbackState({
+        status: 'playing',
+        position: { value: 0, at: NOW, rate: 1 },
+      })
+    )
+    expect(storage.pending).toBe(1)
+
+    // Two checkpoints while the first write is still in flight.
+    clock = NOW + 30_000
+    vi.advanceTimersByTime(30_000)
+    clock = NOW + 60_000
+    vi.advanceTimersByTime(30_000)
+    expect(storage.pending).toBe(1)
+
+    storage.release()
+    await vi.advanceTimersByTimeAsync(0)
+    storage.release()
+    await vi.advanceTimersByTimeAsync(0)
+    // The newest snapshot won; the intermediate one never reached the disk.
+    expect(storage.writes).toHaveLength(2)
   })
 })
 

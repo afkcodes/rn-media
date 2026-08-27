@@ -47,10 +47,10 @@ internal class SessionErrorReporter(
   private val reported = Collections.synchronizedSet(mutableSetOf<String>())
 
   /**
-   * A resumption failure that happened while no handler existed, held for the
-   * next [onSessionInitialized].
+   * Reports about a resumption that happened while no handler existed, held for
+   * the next [onSessionInitialized] in the order they were raised.
    *
-   * The window is real and is the *normal* case for that code: a revival is
+   * The window is real and is the *normal* case for these codes: a revival is
    * abandoned precisely when no session is initialized. Two sub-cases —
    * - the process died and came back with no JavaScript: nothing is held,
    *   because this object died with it. Only the log remains, and that is
@@ -59,9 +59,35 @@ internal class SessionErrorReporter(
    * - `stopService()` then a resumption card in the *same* process: the runtime
    *   is alive, the app brings the session back up seconds later, and this is
    *   what makes the reason reach it when it does.
+   *
+   * A list rather than one slot because one abandoned revival now produces
+   * **two** reports — the diagnosis ([reportResumptionDiagnosis], raised
+   * seconds earlier and naming the cause) and the outcome
+   * ([reportResumptionFailure]) — and a single slot would silently drop the
+   * first, which is the useful one. At most one entry per code: a repeat is the
+   * same story told again, not news.
+   */
+  private val held = mutableListOf<Pair<SessionErrorCode, String>>()
+
+  /**
+   * A "your init never arrived" diagnosis raised **while the revival was still
+   * running**, and therefore not yet proven.
+   *
+   * It is deliberately not a report yet. The condition it describes — the JS
+   * runtime is up and `MediaService.init(...)` has not been called — is read a
+   * few seconds after the runtime appears, which is early enough to be useful
+   * and early enough to be wrong about an app whose own init path is simply
+   * slow. So it waits for one of two answers:
+   * - the revival is abandoned ([confirmResumptionDiagnosis]) — it was right,
+   *   and it becomes a held report;
+   * - an `initialize` arrives ([onSessionInitialized]) — it was wrong, and it
+   *   is dropped without ever reaching the app.
+   *
+   * `@Volatile`: written from the main looper (the service's probe), read on
+   * the JS thread (`initialize`).
    */
   @Volatile
-  private var pendingResumptionFailure: String? = null
+  private var provisionalDiagnosis: String? = null
 
   /**
    * Report [code] with [message], and say whether JavaScript actually got it.
@@ -97,31 +123,75 @@ internal class SessionErrorReporter(
    */
   fun reportResumptionFailure(message: String) {
     if (report(SessionErrorCode.PLAYBACKRESUMPTIONFAILED, message, severe = true)) return
-    pendingResumptionFailure = message
+    hold(SessionErrorCode.PLAYBACKRESUMPTIONFAILED, message)
+  }
+
+  /**
+   * The runtime is up and `MediaService.init(...)` has not followed. Logged
+   * **now** — that is the whole point, it is seconds ahead of the deadline —
+   * and held on probation until [confirmResumptionDiagnosis] or
+   * [onSessionInitialized] settles it.
+   *
+   * Never delivered on the spot, and not for want of trying: a handler existing
+   * *is* an initialized session, which is precisely the thing whose absence
+   * this reports. Delivering it to one would be reporting a problem to the
+   * proof that there is none. See [provisionalDiagnosis].
+   */
+  fun reportResumptionDiagnosis(message: String) {
+    log(false, message, null)
+    provisionalDiagnosis = message
+  }
+
+  /**
+   * The revival was abandoned, so a diagnosis raised while it ran was right
+   * after all: promote it to a held report, ahead of the failure that follows
+   * it.
+   *
+   * Call before [reportResumptionFailure] — the cause reads first, then the
+   * consequence.
+   */
+  fun confirmResumptionDiagnosis() {
+    val message = provisionalDiagnosis ?: return
+    provisionalDiagnosis = null
+    hold(SessionErrorCode.PLAYBACKRESUMPTIONNOTWIRED, message)
+  }
+
+  private fun hold(code: SessionErrorCode, message: String) {
+    synchronized(held) {
+      held.removeAll { it.first == code }
+      held.add(code to message)
+    }
   }
 
   /**
    * A session was just initialized: start the de-duplication over, then deliver
    * anything held while there was nobody to deliver it to.
    *
-   * The held message is prefixed rather than replayed verbatim: by the time it
-   * arrives the app is starting a *new* session, and an unqualified "playback
+   * An `initialize` also **disproves** an unsettled diagnosis, in the most
+   * direct way there is: the call whose absence it reports has just happened.
+   * That is what keeps an app whose own init path takes longer than the probe
+   * from ever being accused of not having one.
+   *
+   * Held messages are prefixed rather than replayed verbatim: by the time they
+   * arrive the app is starting a *new* session, and an unqualified "playback
    * resumption abandoned" would read as a failure of the one it is starting.
    */
   fun onSessionInitialized() {
     reported.clear()
-    val held = pendingResumptionFailure ?: return
-    pendingResumptionFailure = null
-    report(
-      SessionErrorCode.PLAYBACKRESUMPTIONFAILED,
-      "The playback resumption that ran before this session was abandoned: $held",
-      severe = true,
-    )
+    provisionalDiagnosis = null
+    val pending = synchronized(held) {
+      val copy = held.toList()
+      held.clear()
+      copy
+    }
+    for ((code, message) in pending) {
+      report(code, "${prefixFor(code)} $message", severe = true)
+    }
   }
 
   /**
-   * Forget what has been reported, and anything held. Called when a session is
-   * torn down.
+   * Forget what has been reported, and anything held or on probation. Called
+   * when a session is torn down.
    *
    * Held failures are dropped rather than carried across the teardown: a
    * resumption failure nobody was there to hear, followed by an explicit
@@ -129,7 +199,17 @@ internal class SessionErrorReporter(
    */
   fun reset() {
     reported.clear()
-    pendingResumptionFailure = null
+    provisionalDiagnosis = null
+    synchronized(held) { held.clear() }
+  }
+
+  private companion object {
+    fun prefixFor(code: SessionErrorCode): String = when (code) {
+      SessionErrorCode.PLAYBACKRESUMPTIONNOTWIRED ->
+        "The playback resumption that ran before this session never reached your app:"
+
+      else -> "The playback resumption that ran before this session was abandoned:"
+    }
   }
 }
 
@@ -181,6 +261,10 @@ internal object SessionErrors {
   ): Boolean = reporter.report(code, message, severe, dedupeKey, cause)
 
   fun reportResumptionFailure(message: String) = reporter.reportResumptionFailure(message)
+
+  fun reportResumptionDiagnosis(message: String) = reporter.reportResumptionDiagnosis(message)
+
+  fun confirmResumptionDiagnosis() = reporter.confirmResumptionDiagnosis()
 
   fun onSessionInitialized() = reporter.onSessionInitialized()
 

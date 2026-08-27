@@ -528,12 +528,13 @@ than on `code` if you want new codes handled sensibly on the day they are added.
 | `backgroundPlaybackUnavailable` | fatal | the OS refused the foreground service (Android 12+ background start) — playback runs on with **no notification and an unprotected process**. Per refused attempt | at `init`: the app's `Info.plist` has no `audio` in `UIBackgroundModes`, so iOS suspends the process the moment it backgrounds |
 | `playbackResumptionFailed` | fatal | a resumption started and never finished — the message says which half. Delivered to the *next* `init` when the runtime is alive but stopped; log-only when the process had no JS at all | not applicable (no resumption — see [The platform story](#the-platform-story-read-this-before-why-is-it-android-only)) |
 | `playbackResumptionUnavailable` | degraded | `playbackResumption` is on but inert: no `MediaButtonReceiver` in the manifest, or the native mirror could not be written | not applicable |
+| `playbackResumptionNotWired` | fatal | the *cause* of the row above it, raised ~3 s after a revived runtime comes up and ~7 s before the deadline: the runtime is alive and `MediaService.init(...)` has not been called. Names which of the two wirings is missing — a bare entry-file import, or `android.onRevivalRequested`. Held for the next `init`, and dropped if that `init` arrives before the deadline | not applicable |
 | `artworkFailed` | degraded | media3's `BitmapLoader` future failed (404, unreachable host, undecodable bytes). Once per URI | `ArtworkCache` could not build a `UIImage` — unparseable URI, transport error, non-2xx, or data `UIImage` refused |
 | `metadataMismatch` | degraded | `setMediaItem` does not describe the current queue entry, so the merge did not happen and its `duration` (and the scrubber) was dropped — see [the model](#the-model) | identical rule, identical message |
 | `iconNotFound` | degraded | a drawable *name* — `notificationIcon`, or a `customActions[].icon` — does not resolve, so a fallback icon is drawn. Once per name | not applicable (no small icon, no custom actions) |
 | `localAudioSlotUnavailable` | degraded | `holdLocalAudioSlot: true` but the silent output would not open, so the opt-in is inert — see [Two platform conditions](#two-platform-conditions-because-both-look-like-bugs) | not applicable (iOS cannot take the volume buttons over) |
 
-The four Android-only rows are not an asymmetry this channel introduces: each
+The five Android-only rows are not an asymmetry this channel introduces: each
 belongs to a feature that is *already* Android-only for a documented platform
 reason. There is no code only iOS can emit.
 
@@ -599,16 +600,43 @@ structural player rather than importing `@rn-media/player`.
 
 ### What is saved, and when
 
-- **Writes happen on discontinuities only.** The only automatic trigger is one
-  of the three broadcast setters, and those are already discontinuity-only by
-  design. There are no timers here and no polling.
+- **Every broadcast writes.** The three broadcast setters are the primary
+  trigger, and those are already discontinuity-only by design — a track change,
+  a seek, a pause, a queue-index change. Nothing polls a player and no state is
+  ever *read* on a timer.
 
-  The direct consequence, stated plainly: **a track played straight through
-  produces no write**, so the saved position stays wherever the last
-  play/seek/track-change left it. This package will not fix that with a timer —
-  a periodic save is exactly the per-tick write the whole design exists to
-  avoid, and on Android the JS timer driving it would freeze in the background
-  anyway. Instead you choose the moment:
+- **Playback also checkpoints itself every 30 s.** Broadcasts alone leave a real
+  gap: a 40-minute track played straight through produces no broadcast, so it
+  used to produce **no write at all**, and the saved position stayed at whatever
+  the last play/seek/track-change said. A default that saves nothing is not a
+  default worth having, so autosave is on.
+
+  ```ts
+  withPersistence(service, storage, {
+    autosave: { intervalMs: 30_000 },   // the default; `false` turns it off
+  })
+  ```
+
+  What it costs is **one storage `setItem` per interval, and nothing else**. A
+  tick re-projects the anchor the app already broadcast — `value + (now − at) ×
+  rate` — in JavaScript. It asks no player where playback is, and it does not
+  cross the bridge: the native resumption mirror is deliberately refreshed by
+  broadcasts and `save()` only, so a checkpoint can never become per-tick bridge
+  traffic. The timer runs only while the last broadcast said `playing` with a
+  rate above zero, stops on pause, on `stopService()` and on `clear()`, and
+  re-arms from the *last write* — an app that broadcasts every ten seconds pays
+  for no autosave writes at all. Intervals below 1 s are rejected rather than
+  clamped: below that it stops being a checkpoint and becomes the per-tick write
+  the design forbids.
+
+  It does not change what is restored. **The restored position is still always
+  paused** — see below; freezing the anchor at write time is what makes a
+  restore honest, whoever wrote it.
+
+- **Android freezes JS timers once the Activity is gone**, so autosave covers the
+  foreground and `service.save()` covers the rest. That is a React Native
+  platform behaviour, not something this package can reach — and the moment the
+  timer stops is the moment this fires:
 
   ```ts
   import { AppState } from 'react-native'
@@ -618,12 +646,13 @@ structural player rather than importing `@rn-media/player`.
   })
   ```
 
-  `service.save()` re-projects the live anchor to *right now* and writes, with
-  no broadcast. Other good moments: `onTaskRemoved` (the app was swiped away),
-  and just before a deliberate `stopService()`. Nothing can checkpoint a process
-  killed without warning while playing in the background; the position then
-  restores to the last checkpoint, which is a defensible answer and never a
-  wrong one.
+  `service.save()` re-projects the live anchor to *right now*, refreshes the
+  native mirror too, and writes, with no broadcast. Other good moments:
+  `onTaskRemoved` (the app was swiped away), and just before a deliberate
+  `stopService()`. Nothing can checkpoint a process killed without warning while
+  playing with no Activity; the position then restores to the last checkpoint —
+  at worst one interval before the app was backgrounded — which is a defensible
+  answer and never a wrong one.
 - A **synchronous** storage is written *inside* the setter, so the record is on
   disk before `setPlaybackState` returns. An **asynchronous** one gets at most
   one write in flight; snapshots produced while it is pending collapse into a
@@ -691,9 +720,10 @@ nothing that could not have been broadcast can be restored.
 | `applyPersisted(service, session)` | Re-broadcast in the order the channels expect |
 | `clearPersisted(storage, options?)` | Forget the saved session (**storage only**) |
 | `PERSISTENCE_SCHEMA_VERSION`, `DEFAULT_PERSISTENCE_KEY` | Schema constants |
+| `DEFAULT_AUTOSAVE_INTERVAL_MS`, `MIN_AUTOSAVE_INTERVAL_MS` | `30_000` and `1_000` |
 
-`options` is `{ key?, onError?, now? }`. Sleep-timer state is deliberately *not*
-persisted — see below. `service.clear()` and `clearPersisted(storage)` differ in
+`options` is `{ key?, onError?, now?, autosave? }`; only `withPersistence` reads
+`autosave`. Sleep-timer state is deliberately *not* persisted — see below. `service.clear()` and `clearPersisted(storage)` differ in
 one way that matters once resumption is on: `clear()` also forgets the native
 mirror, so the session stops being offered as a System UI resumption card.
 
@@ -735,7 +765,8 @@ regenerated — so the [config plugin](#options) writes it for you:
 ["@rn-media/media-session", { "playbackResumption": true }]
 ```
 
-Four requirements, and the library logs which one you are missing:
+Four requirements, and the library tells you which one you are missing — on the
+`onSessionError` channel, not only in logcat:
 
 1. **`playbackResumption: true`.** Off by default — this path starts a foreground
    service in a process the user did not open.
@@ -765,8 +796,20 @@ Four requirements, and the library logs which one you are missing:
      module-scoped its `init` is. A bare side-effect import has no bindings to
      defer; the entry file is the one module guaranteed to run.
 
-   This is the single most likely way to enable resumption and see it not
-   work; the service waits 10 s, logs exactly this, and stops cleanly.
+   This is the single most likely way to enable resumption and see it not work,
+   so it is **reported, not merely logged**. About three seconds after the
+   revived runtime comes up — the earliest moment the answer is knowable, since
+   a `ReactContext` exists only once your bundle has been evaluated — the
+   service raises `playbackResumptionNotWired` on the `onSessionError` channel,
+   naming this fix in these words. At the 10 s deadline it raises
+   `playbackResumptionFailed` as well and stops cleanly: the first is the cause,
+   the second the outcome.
+
+   Both are **held for your next `MediaService.init(...)`**, because "no session
+   is initialized" is precisely what they report and there is nobody to deliver
+   them to at the time. And an `init` that arrives *before* the deadline throws
+   the diagnosis away instead of delivering it — an app whose own init path is
+   merely slow is never accused of not having one.
 4. **`android.onRevivalRequested`** — the same recovery for a process that is
    still **alive**. `stopService()` ends background execution but deliberately
    keeps the persisted session (stop is not forget — see
@@ -784,8 +827,10 @@ Four requirements, and the library logs which one you are missing:
    }
    ```
 
-   Without it, play on the card after a stop silently does nothing for 10 s
-   and the service logs the reason.
+   Without it, play on the card after a stop does nothing — and says so:
+   `playbackResumptionNotWired` about three seconds in, naming this callback
+   rather than the module-scope fix above, because module scope cannot run twice
+   in a runtime that is already alive.
 
 ### What actually happens
 
@@ -1062,14 +1107,16 @@ What that does **not** cover:
   it logs and stops rather than showing a notification with dead buttons, and the
   state itself is not lost —
   [`withPersistence`](#surviving-process-death-withpersistence) saves the three
-  channels on every broadcast and the next launch restores queue, track and a
-  paused position. With
+  channels on every broadcast (plus a 30 s checkpoint while playing) and the
+  next launch restores queue, track and a paused position. With
   [`playbackResumption: true`](#playback-resumption-after-process-death) that
   media button (or the System UI resumption card) instead rebuilds the session
   natively and boots your runtime behind it.
 - **JS timers.** `setTimeout` inside your handler stops firing once the Activity
   is gone. That is an RN platform behaviour, not something this package can fix
-  — which is why the [sleep timer](#sleep-timer-native) is native.
+  — which is why the [sleep timer](#sleep-timer-native) is native, and why
+  persistence's 30 s autosave covers the foreground while `service.save()` on
+  `AppState` covers the transition out of it.
 - A **dev reload** destroys the runtime. The session is torn down first via
   `ReactHost.addBeforeDestroyListener`, so you never get a live notification
   wired to a dead runtime.
