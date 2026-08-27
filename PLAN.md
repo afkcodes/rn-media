@@ -284,9 +284,9 @@ Architectural consequences, enforced from day one:
 ## 7.9 IMPLEMENTATION STATUS (2026-08-09)
 
 **Phases 0–3 are COMPLETE and device-verified** (physical Android 16 device;
-iOS is code-complete and CI-built — it compiles, links and embeds the libmpv
-xcframeworks — but has never been run on a device; Expo config plugin from
-Phase 3 deferred).
+iOS playback and the media notification are device-verified by the owner;
+iOS cast and CarPlay are not yet tested; Expo config plugin from Phase 3
+deferred).
 Phase 4 (video plugin) not started; Phase 5 backlogged. Shipped and proven:
 
 - `@rn-media/player` — multi-instance libmpv Player; typed state/reducer;
@@ -465,7 +465,7 @@ amf/libcurl/subrandr); example-app screen-ON visualizer render cost (~80% —
 UI-layer refactor candidate, not engine); media-session shipped
 discontinuity filter + example 2 Hz sleep-timer poll (minor perf leftovers).
 
-**The gate that unlocks shipping:** iOS device testing → naming decision →
+**The gate that unlocks shipping:** naming decision → (iOS playback + notifications device-verified; iOS cast/CarPlay still to test) →
 npm publish (owner-gated, in that order; facts on record: bare `rn-media`
 squatted, `react-native-mpv` free, `@afkcodes` guaranteed).
 

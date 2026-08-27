@@ -15,8 +15,9 @@ Chromecast sender. The C++ core binds libmpv's client API through
 
 > **Status: v0.1, pre-release — nothing is on npm yet.** The install line below
 > is what it will be; today the packages are consumed from this workspace. The
-> Android stack is device-verified end to end. iOS is built and inspected by CI
-> and has never run on a device. APIs may still change.
+> Android stack is device-verified end to end. iOS playback and the media
+> notification are device-verified; cast and CarPlay on iOS are not yet. APIs
+> may still change.
 
 <p align="center">
   <img src="docs/assets/demo.gif" width="330"
@@ -191,8 +192,10 @@ Every export is tabulated in its package README.
 
 - **No DRM.** libmpv has no Widevine or FairPlay, so this cannot power a
   licensed-catalog streaming app.
-- **iOS has never run on a device.** CI compiles, links and inspects the shipped
-  binaries; no on-device playback has been observed. Expected to work, not proven.
+- **iOS cast and CarPlay are unverified on a device.** iOS playback and the
+  media notification are device-tested; `@rn-media/cast` and CarPlay have not
+  been run on Apple hardware — CI compiles and inspects them, but no session
+  has been observed.
 - **Force-quitting on iOS kills playback**, and nothing may restart the app for
   audio afterwards — which is why `playbackResumption` is Android-only.
 - **An iOS sleep timer armed over silence may never fire**, because iOS suspends
@@ -216,8 +219,9 @@ Every export is tabulated in its package README.
 
 ## Roadmap
 
-The gate that unlocks shipping, in order: on-device iOS verification → the
-naming decision → the first npm publish. Next up, owner-approved:
+The gate that unlocks shipping, in order: the naming decision → the first npm
+publish (iOS playback and notifications are device-verified; iOS cast and
+CarPlay remain to be tested). Next up, owner-approved:
 `@rn-media/downloads` (offline playback as a source resolver), LRC lyrics, then
 video as an additive plugin package. Full analysis: [`PLAN.md`](PLAN.md).
 
