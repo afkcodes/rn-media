@@ -82,15 +82,15 @@ describe('toCastPlaybackState', () => {
 })
 
 describe('toCastMediaItem', () => {
-  const aariAari = TRACKS[4] as Track
+  const sampleSong = TRACKS[4] as Track
 
   it('metadata comes from the JS queue (the source of truth), duration from the receiver', () => {
-    const item = toCastMediaItem(aariAari, snapshot())
+    const item = toCastMediaItem(sampleSong, snapshot())
     expect(item).toMatchObject({
-      id: 'aari-aari',
-      title: aariAari.title,
-      artist: aariAari.artist,
-      artworkUri: aariAari.artworkUri,
+      id: 'sample-song',
+      title: sampleSong.title,
+      artist: sampleSong.artist,
+      artworkUri: sampleSong.artworkUri,
       // 180.4 s → 180 400 ms: milliseconds carry the receiver's sub-second
       // truth (rounding the SECONDS first — the old bug — lost up to 500 ms).
       duration: 180_400,
@@ -115,8 +115,8 @@ describe('castUrlOf / castMimeOf — the resolver seam', () => {
   it('resolves demo:// through the catalogue, like the player resolver does', () => {
     const resolved = TRACKS[5] as Track
     expect(resolved.uri.startsWith('demo://')).toBe(true)
-    expect(castUrlOf(resolved)).toMatch(/^https:\/\/aac\.saavncdn\.com\//)
-    expect(castMimeOf(resolved)).toBe('audio/mp4')
+    expect(castUrlOf(resolved)).toMatch(/^https:\/\/commondatastorage\.googleapis\.com\//)
+    expect(castMimeOf(resolved)).toBe('audio/mpeg')
   })
 
   it('resolves the broken entry to the refused-connection target — the receiver-fetch demo', () => {

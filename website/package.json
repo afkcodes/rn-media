@@ -2,7 +2,7 @@
   "name": "@timbre/website",
   "version": "0.0.0",
   "private": true,
-  "description": "Documentation site for the rn-media packages (Docusaurus 3).",
+  "description": "Documentation site for the timbre packages (Docusaurus 3).",
   "scripts": {
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
