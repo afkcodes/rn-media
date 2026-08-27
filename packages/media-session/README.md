@@ -389,6 +389,7 @@ Passed as `["@rn-media/media-session", { … }]`.
 | Validation | `normalizePlaybackState`, `normalizeRemotePlayback`, `validateQueue`, `validateAnchor`, `validateSleepTimerSeconds` — what `MediaService` runs on every broadcast, exported so a host can pre-check |
 | Native layer | `RnMediaMediaSession`, `MediaSessionHandlers`, `NativeMediaItem`, `NativePlaybackState`, `NativeRemotePlayback`, `NativeSleepTimerState`, `MediaServiceController` — the Nitro contract, for a host that bypasses `MediaService` |
 | Shapes | `PositionAnchor` — `{ value, at, rate }`; `SleepTimerMode` — `'duration' \| 'trackEnd'`; `MediaRepeatMode` |
+| Config, state and factory | `MediaServiceConfig`, `PersistenceAutosaveOptions`, `RemotePlayback`, `SleepTimerState`, `createMediaService` (the un-decorated factory `MediaService.init` wraps) |
 
 ## Development
 
