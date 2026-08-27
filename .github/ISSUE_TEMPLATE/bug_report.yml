@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before filing: the root [README](https://github.com/afkcodes/rn-media/blob/main/README.md#limitations)
+        Before filing: the root [README](https://github.com/afkcodes/timbre/blob/main/README.md#limitations)
         lists what this library deliberately cannot do (DRM, Chromecast, iOS
         restart-after-force-quit). iOS is compiled by CI but has never run on a
         device — an iOS runtime report is welcome, just say so.

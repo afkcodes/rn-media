@@ -43,11 +43,11 @@
     "*.podspec",
     "README.md"
   ],
-  "repository": "https://github.com/afkcodes/rn-media.git",
+  "repository": "https://github.com/afkcodes/timbre.git",
   "author": "Ashish Kumar",
   "license": "MIT",
-  "bugs": "https://github.com/afkcodes/rn-media/issues",
-  "homepage": "https://github.com/afkcodes/rn-media#readme",
+  "bugs": "https://github.com/afkcodes/timbre/issues",
+  "homepage": "https://github.com/afkcodes/timbre#readme",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

@@ -6,8 +6,8 @@ body:
     attributes:
       value: |
         Two things worth checking first: the
-        [Roadmap](https://github.com/afkcodes/rn-media/blob/main/README.md#roadmap) (it may already be queued)
-        and [`ARCHITECTURE.md`](https://github.com/afkcodes/rn-media/blob/main/ARCHITECTURE.md) (it may already
+        [Roadmap](https://github.com/afkcodes/timbre/blob/main/README.md#roadmap) (it may already be queued)
+        and [`ARCHITECTURE.md`](https://github.com/afkcodes/timbre/blob/main/ARCHITECTURE.md) (it may already
         have been decided against, with reasons). Contradicting a decision is
         fine — just say which one, so the discussion starts in the right place.
 

@@ -14,7 +14,7 @@ Pod::Spec.new do |s|
   # does exist on visionOS/tvOS/watchOS; add those platforms when there is a
   # target that actually builds them, not before.
   s.platforms    = { :ios => min_ios_version_supported }
-  s.source       = { :git => "https://github.com/afkcodes/rn-media.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/afkcodes/timbre.git", :tag => "#{s.version}" }
 
   s.source_files = [
     # Implementation (Swift)
