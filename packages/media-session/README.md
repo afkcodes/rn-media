@@ -196,9 +196,10 @@ Two halves, and you almost always want both:
 
 ```ts
 service.setPlaybackState({
-  // …
-  capabilities: [/* … */ 'setRepeatMode', 'setShuffle'], // accept the commands
-  controls: [/* … */ 'shuffle', 'repeatMode'],           // draw the buttons
+  status: 'playing',
+  position: { value: 0, at: Date.now(), rate: 1 },
+  capabilities: ['play', 'pause', 'setRepeatMode', 'setShuffle'], // accept them
+  controls: ['pause', 'shuffle', 'repeatMode'],                   // draw them
   repeatMode: 'all',
   shuffleEnabled: true,
 })
@@ -252,6 +253,8 @@ precondition on the screen-off case, spelled out below — read it before you
 promise it to a user). Presses arrive on your handler:
 
 ```ts
+import { BaseMediaHandler } from '@rn-media/media-session'
+
 class MyHandler extends BaseMediaHandler {
   override onSetDeviceVolume(volume: number) {   // 0..1
     void backend.setVolume(volume)
@@ -406,6 +409,8 @@ Android, harmless on iOS.
 ## Jump intervals
 
 ```ts
+import { MediaService } from '@rn-media/media-session'
+
 await MediaService.init(() => new MyHandler(), {
   jumpForwardSeconds: 30,   // default 15
   jumpBackwardSeconds: 15,  // default 15
@@ -459,9 +464,10 @@ the edge.
 
 ```ts
 import {
-  BaseMediaHandler,
   CompositeMediaHandler,
+  MediaService,
   QueueHandler,
+  type MediaItem,
 } from '@rn-media/media-session'
 
 // Decorator: override one method, delegate the rest.
@@ -471,11 +477,11 @@ class Analytics extends CompositeMediaHandler {
 
 // Default queue navigation over the data you broadcast on channel 3.
 class MyQueueHandler extends QueueHandler {
-  async playQueueItem(item, index) { await player.load(item.id) }
+  async playQueueItem(item: MediaItem, index: number) { await player.load(item.id) }
 }
 const handler = new MyQueueHandler()
 handler.wrapAround = true
-handler.setQueue(items, 0) // stores AND broadcasts
+handler.setQueue([...items], 0) // stores AND broadcasts
 
 await MediaService.init(() => new Analytics(handler))
 ```
@@ -496,6 +502,8 @@ used to be a `Log.e` / `NSLog` and nothing else, which meant an app could ship a
 broken background story and only learn about it from a bug report.
 
 ```ts
+import { BaseMediaHandler, type SessionError } from '@rn-media/media-session'
+
 class Handler extends BaseMediaHandler {
   override onSessionError(error: SessionError) {
     if (error.severity === 'fatal') banner(error.message)
@@ -574,9 +582,11 @@ it as-is; MMKV, `expo-sqlite/kv-store` and a `Map` need two lines:
 
 ```ts
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { createMMKV } from 'react-native-mmkv'
+import { withPersistence } from '@rn-media/media-session'
+
 withPersistence(service, AsyncStorage)
 
-import { createMMKV } from 'react-native-mmkv'
 const mmkv = createMMKV()
 withPersistence(service, {
   getItem: (k) => mmkv.getString(k) ?? null,
@@ -657,6 +667,8 @@ Resume playback from a **user gesture**, not from the restore.
 ### Every failure is a value, not a throw
 
 ```ts
+import type { PersistedSession } from '@rn-media/media-session'
+
 type RestoreResult =
   | { status: 'restored'; session: PersistedSession }
   | { status: 'empty' }                                          // first launch, or cleared
@@ -692,6 +704,8 @@ reconnect or a headset play button bring the whole app back — foreground servi
 notification, queue, position and all — from a process Android had killed.
 
 ```ts
+import { MediaService, withPersistence } from '@rn-media/media-session'
+
 const service = withPersistence(
   await MediaService.init(() => new MyHandler(), {
     android: {
@@ -784,6 +798,8 @@ runtime boots behind a notification that is already correct. The `play` the user
 pressed is held and replayed on your handler once it arrives.
 
 ```ts
+import { BaseMediaHandler } from '@rn-media/media-session'
+
 class MyHandler extends BaseMediaHandler {
   override onPlaybackResumption() {
     // Optional and informational. The notification is already up and `play()`
@@ -834,6 +850,8 @@ Honest edges:
 ## Sleep timer (native)
 
 ```ts
+import { BaseMediaHandler } from '@rn-media/media-session'
+
 service.setSleepTimer(30 * 60)      // pause in 30 minutes
 service.setSleepTimerToTrackEnd()   // pause when THIS track finishes
 service.cancelSleepTimer()
@@ -1089,8 +1107,22 @@ already listed in the car. What you add is the tree.
 import { BaseMediaHandler, BROWSE_ROOT, BrowseError } from '@rn-media/media-session'
 import type { BrowseItem, SearchFocus } from '@rn-media/media-session'
 
+const toRow = (t: { id: string; title: string; artist: string }): BrowseItem => ({
+  id: `track:${t.id}`,
+  title: t.title,
+  subtitle: t.artist,
+  playable: true,
+})
+
 class Handler extends BaseMediaHandler {
   async getChildren(parentId: string): Promise<BrowseItem[]> {
+    if (!(await auth.isSignedIn())) {
+      // A browse error is a screen, not an exception — see rule 3 below.
+      throw new BrowseError('authenticationExpired', 'Sign in to browse', {
+        label: 'Sign in',
+        url: 'myapp://signin',
+      })
+    }
     if (parentId === BROWSE_ROOT) {
       // The car's tabs: at most four, all browsable (see below).
       return [
@@ -1098,11 +1130,25 @@ class Handler extends BaseMediaHandler {
         { id: 'albums', title: 'Albums', browsable: true, childStyle: 'grid' },
       ]
     }
-    return loadChildren(parentId)
+    if (parentId === 'albums') {
+      return (await catalogue.albums()).map((a) => ({
+        id: `album:${a.id}`,
+        title: a.title,
+        subtitle: a.artist,
+        // An item may be BOTH: the tap plays, the chevron opens the track list.
+        browsable: true,
+        playable: true,
+      }))
+    }
+    if (parentId.startsWith('album:')) {
+      return (await catalogue.tracks(parentId.slice('album:'.length))).map(toRow)
+    }
+    return [] // an unknown parent is an empty list, never an error
   }
 
   async getMediaItem(id: string): Promise<BrowseItem | undefined> {
-    return loadOne(id)
+    const tracks = await catalogue.tracks(id)
+    return tracks.map(toRow).find((row) => row.id === id)
   }
 
   // A tap in the car. Build the queue, broadcast it, play — exactly like
@@ -1113,11 +1159,24 @@ class Handler extends BaseMediaHandler {
 
   // Optional. Its *absence* is advertised: without it, voice playback is
   // answered `ERROR_NOT_SUPPORTED` instead of playing something arbitrary.
-  playFromSearch(query: string, focus: SearchFocus): void { … }
+  async playFromSearch(query: string, focus: SearchFocus): Promise<void> {
+    const [hit] = await this.search(focus.title ?? focus.artist ?? query)
+    if (hit !== undefined) this.playFromMediaId(hit.id)
+  }
 
   // Optional. Without it Android Auto hides its search tab entirely
   // (`SEARCH_SUPPORTED=false`) rather than showing one that answers nothing.
-  async search(query: string): Promise<BrowseItem[]> { … }
+  async search(query: string): Promise<BrowseItem[]> {
+    return (await catalogue.search(query)).map(toRow)
+  }
+
+  private async playAlbumOrTrack(id: string): Promise<void> {
+    const tracks = id.startsWith('album:')
+      ? await catalogue.tracks(id.slice('album:'.length))
+      : await catalogue.search(id.slice('track:'.length))
+    service.setQueue(tracks.map((t) => ({ id: t.id, title: t.title })))
+    // …then load the queue into your player and broadcast `status: 'playing'`.
+  }
 }
 ```
 
@@ -1179,6 +1238,8 @@ mirror is the only thing that can build a session at all.
 ### Is a car connected?
 
 ```ts
+import { useCarConnection } from '@rn-media/media-session'
+
 const car = useCarConnection()   // { kind: 'none' | 'androidAuto' | 'automotiveOs' | 'carPlay' }
 ```
 
@@ -1217,6 +1278,9 @@ screen you already feed through `MPNowPlayingInfoCenter`.
 You write **one** handler. Nothing below is iOS-specific application code.
 
 ```ts
+import { BaseMediaHandler, BROWSE_ROOT } from '@rn-media/media-session'
+import type { BrowseItem } from '@rn-media/media-session'
+
 class Handler extends BaseMediaHandler {
   async getChildren(parentId: string): Promise<BrowseItem[]> {
     if (parentId === BROWSE_ROOT) {
@@ -1461,3 +1525,17 @@ CI runs both of these on every Android-touching change:
 npm run test:android  # :rn-media_media-session:testReleaseUnitTest
 npm run lint:android  # :rn-media_media-session:lintRelease
 ```
+
+## Also exported
+
+| Group | Exports |
+|---|---|
+| Config | `MediaSessionConfig`, `AndroidMediaSessionConfig`, `IosMediaSessionConfig`; `MediaCustomAction` — `{ name, title, icon? }`; the defaults `DEFAULT_JUMP_SECONDS`, `DEFAULT_SUPPORTED_PLAYBACK_RATES`, `DEFAULT_REPEAT_MODE`, `DEFAULT_SHUFFLE_ENABLED`, `DEFAULT_STOP_FOREGROUND_ON_PAUSE`, `DEFAULT_PLAYBACK_RESUMPTION`, `DEFAULT_REMOTE_VOLUME_CONTROL`, `DEFAULT_REMOTE_VOLUME_STEPS`, `MAX_COMPACT_CONTROLS`, `MAX_STOP_FOREGROUND_TIMEOUT_MS` |
+| Errors | `SessionErrorCode`, `SessionErrorSeverity`, `SESSION_ERROR_SEVERITY` (the channel, see [`onSessionError`](#when-the-session-itself-fails-onsessionerror)); `MediaSessionErrorCode` — `'invalidArgument' \| 'alreadyInitialized' \| 'notInitialized'` (the thrown kind); `toSessionError` |
+| The car | `BrowseStyle` — `'list' \| 'grid' \| 'categoryList' \| 'categoryGrid'`; `BrowseMediaType`; `BrowseErrorCode`; `isBrowseError(x)`; `MAX_ROOT_TABS` = `4`; `capRootTabs(items)` (the same cap both platforms apply) |
+| Persistence | `PersistedSession`, `PersistenceOptions`, `RestoreResult` |
+| Queue helper | `QueueHandlerOptions`, `QueueHandlerMethods`, `QueueBroadcaster` |
+| Remote playback | `RemoteVolumeControl`, `RemoteVolumeDirection` |
+| Validation | `normalizePlaybackState`, `normalizeRemotePlayback`, `validateQueue`, `validateAnchor`, `validateSleepTimerSeconds` — what `MediaService` runs on every broadcast, exported so a host can pre-check |
+| Native layer | `RnMediaMediaSession`, `MediaSessionHandlers`, `NativeMediaItem`, `NativePlaybackState`, `NativeRemotePlayback`, `NativeSleepTimerState`, `MediaServiceController` — the Nitro contract, for a host that bypasses `MediaService` |
+| Shapes | `PositionAnchor` — `{ value, at, rate }`, the projected position every broadcast carries; `SleepTimerMode` — `'duration' \| 'trackEnd'` |

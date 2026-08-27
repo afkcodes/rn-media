@@ -34,7 +34,8 @@ iOS side is maintained today.
 ## The loop
 
 ```sh
-npm run typecheck                          # all three packages, strict, no emit
+npm run typecheck                          # every package, strict, no emit
+npm run check:readme                       # every README ```ts block, same types
 npm --prefix packages/player run test      # vitest, device-free
 npm --prefix packages/audio-session run test
 npm --prefix packages/media-session run test
@@ -90,15 +91,22 @@ first: `npm run codegen --prefix packages/<pkg>`.
 - **iOS is CI-verified only.** It compiles, links, and embeds the frameworks;
   no on-device run has happened. Do not upgrade an iOS claim past what CI
   actually proves — `8c2dee8` exists because that line was crossed once.
-- **Every README code sample typechecks.** Before merging a docs change, extract
-  the ` ```ts ` / ` ```tsx ` blocks into a scratch file under `apps/example/`
-  and run the example app's typecheck against the real workspace types:
+- **Every README code sample typechecks**, and one command proves it:
 
   ```sh
-  # write the snippet to apps/example/__snippet_check.tsx, then:
-  npm --prefix apps/example run typecheck
-  rm apps/example/__snippet_check.tsx
+  npm run check:readme      # extracts every ```ts / ```tsx block, tsc --noEmit
   ```
+
+  It reads the five shipped READMEs (root + the four packages), writes each
+  block to a gitignored `.readme-samples/` as a standalone module with
+  `@rn-media/*` mapped at the packages' `src`, and reports failures at
+  `README.md:LINE` — the README's line, not the generated file's. Fix the
+  sample; never the check. A block that is deliberately partial (an options
+  object quoted on its own) opts out with ` ```ts fragment `, and the summary
+  prints how many did, so the count stays honest. The small list of ambient
+  declarations a sample may lean on — the `station` the prose introduced, the
+  `player` an earlier block created — lives in `AMBIENTS` in
+  `scripts/check-readme-samples.mjs`, per README, and is meant to stay small.
 
   This is not ceremony: the sweep in `ff6cadc` caught three invalid
   `MediaControl` names and a seconds-vs-milliseconds anchor that would have put

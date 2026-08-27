@@ -8,6 +8,7 @@
     "test": "npm --prefix packages/player run test && npm --prefix apps/example run test",
     "lint": "npm --prefix apps/example run lint",
     "release": "npm --prefix packages/player run release",
+    "check:readme": "node scripts/check-readme-samples.mjs",
     "check:upstream": "node scripts/check-upstream.mjs",
     "check:links": "node scripts/check-workspace-links.mjs",
     "check:apk": "node scripts/check-workspace-links.mjs --apk apps/example/android/app/build/outputs/apk/debug/app-debug.apk"

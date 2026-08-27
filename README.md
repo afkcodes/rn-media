@@ -42,6 +42,9 @@ cd ios && pod install   # downloads + verifies the pinned libmpv xcframeworks
 import { Player } from '@rn-media/player'
 import { BaseMediaHandler, MediaService } from '@rn-media/media-session'
 
+const track = { id: 'a1', title: 'Anthem', url: 'https://cdn.example/1.flac', durationMs: 214_000 }
+const next = { id: 'a2', title: 'Coda', url: 'https://cdn.example/2.flac', durationMs: 190_000 }
+
 const player = await Player.create({ prefetchPlaylist: true })
 await player.loadPlaylist([track.url, next.url])   // one mpv playlist — gapless
 player.play()                                      // …and that is audio playing
@@ -336,7 +339,7 @@ is not the same event as a song finishing. All three are first-class here.
 
 ```ts
 import { Player, type Metadata } from '@rn-media/player'
-import { MediaService, type MediaItem } from '@rn-media/media-session'
+import { BaseMediaHandler, MediaService, type MediaItem } from '@rn-media/media-session'
 
 const player = await Player.create({
   // Real Shoutcast hosts 401 the literal `libmpv`, which is why the default UA
@@ -345,6 +348,16 @@ const player = await Player.create({
   cacheSecs: 30,                                 // mpv's own default is ~1000 HOURS
   networkReconnect: { maxDelaySeconds: 20 },     // native, inside libavformat
   retry: { maxAttempts: 3, retryLiveEof: true }, // re-attempt a POLITE hang-up too
+})
+
+// Three commands is the whole handler: a station has nowhere to skip to.
+class Handler extends BaseMediaHandler {
+  override play(): void { player.play() }
+  override pause(): void { player.pause() }
+  override async stop(): Promise<void> { await player.stop() }
+}
+const service = await MediaService.init(() => new Handler(), {
+  android: { notificationChannelId: 'radio', notificationChannelName: 'Radio' },
 })
 
 await player.load(station.url)
@@ -520,7 +533,9 @@ const player = await Player.create({
                                 // URL's real expiry, and long enough to cover a track
 })
 
-// The queue is logical. Nothing here expires, so it persists and restores cleanly.
+// The queue is logical: your ids, not URLs. Nothing here expires, so it
+// persists and restores cleanly.
+const tracks = await catalogue.tracks('album:1')
 await player.loadPlaylist(
   tracks.map((t) => `myapp://track/${t.id}`),
   {
@@ -574,11 +589,18 @@ Android Auto and CarPlay are the same feature seen twice: a **tree** the car
 browses and a **tap** that plays. One handler serves both — nothing here is
 platform-specific except the two lines of iOS config at the end.
 
-```ts
+```tsx
+import { Player } from '@rn-media/player'
 import {
   BaseMediaHandler, BrowseError, BROWSE_ROOT, MediaService, useCarConnection,
-  type BrowseItem, type SearchFocus,
+  type BrowseItem, type MediaItem, type SearchFocus,
 } from '@rn-media/media-session'
+
+const player = await Player.create({ prefetchPlaylist: true })
+
+const toMediaItem = (t: {
+  id: string; title: string; artist: string; coverUrl: string
+}): MediaItem => ({ id: t.id, title: t.title, artist: t.artist, artworkUri: t.coverUrl })
 
 class Handler extends BaseMediaHandler {
   // The root's children are the car's TABS: at most four, browsable only.
@@ -624,8 +646,8 @@ class Handler extends BaseMediaHandler {
 
   // "Play some jazz" — Android Auto / Assistant. `query` can be '' ("play something").
   async playFromSearch(query: string, focus: SearchFocus) {
-    const hit = query === '' ? await catalogue.recent(1) : await catalogue.search(query, focus)
-    if (hit.length > 0) await this.playFromMediaId(`track:${hit[0].id}`)
+    const [hit] = query === '' ? await catalogue.recent(1) : await catalogue.search(query, focus)
+    if (hit !== undefined) await this.playFromMediaId(`track:${hit.id}`)
   }
 
   // Auto's search tab. CarPlay audio apps have no search template, so iOS never calls it.
@@ -664,20 +686,46 @@ surface keeps rendering from the same three `media-session` channels, now
 mirroring the receiver instead of mpv. No second UI, no new fan-out path.
 
 ```tsx
-import { CastButton, useIsCasting, wireCastHandoff } from '@rn-media/cast'
+import { Player } from '@rn-media/player'
+import {
+  Cast, CastButton, useIsCasting, wireCastHandoff,
+  type CastHandoffQueueItem, type CastReceiverSnapshot,
+} from '@rn-media/cast'
+
+const player = await Player.create()
+let currentIndex = 0
+const items: CastHandoffQueueItem[] = (await catalogue.tracks('album:1')).map((t) => ({
+  id: t.id,
+  url: t.streamUrl,        // what the RECEIVER fetches — resolve signed URLs here
+  mimeType: 'audio/mpeg',
+  metadata: { title: t.title, artist: t.artist, artworkUrl: t.coverUrl },
+}))
+
+// The same three channels, now fed by the receiver instead of mpv. `at` is the
+// receiver's anchor timestamp: project it locally, never poll.
+const publishReceiverState = (s: CastReceiverSnapshot): void =>
+  service.setPlaybackState({
+    status: s.playing ? 'playing' : 'paused',
+    position: { value: Math.round(s.position * 1000), at: s.at, rate: s.rate },
+    queueIndex: s.itemIndex,
+    capabilities: ['play', 'pause', 'seek', 'skipToNext', 'skipToPrevious'],
+  })
 
 const handoff = wireCastHandoff(
-  // Structural on both sides — nothing here imports @rn-media/player.
+  // Structural on both sides — the adapter imports nothing from @rn-media/player.
   { play: () => player.play(), pause: () => player.pause(), seekTo: (s) => player.seekTo(s),
     skipToIndex: (i) => player.playlist.jumpTo(i, { autoPlay: false }),
     getPosition: () => player.getPosition(), isPlaying: () => player.state.playing },
   { snapshot: () => ({ items, index: currentIndex, position: player.getPosition(),
                        playWhenReady: player.state.playing }),
-    onReceiverState: (s) => publishReceiverState(s),   // an anchor: project, never poll
-    onItemsSkipped: (skipped) => showCastNotice(skipped) },
+    onReceiverState: publishReceiverState,
+    onItemsSkipped: (skipped) => console.warn(`${skipped.length} track(s) cannot cast`) },
 )
-await handoff.castTo(deviceId)   // or the user taps the button below, same machine
-await handoff.stopCasting()      // back to local, at the receiver's position
+
+const [device] = await Cast.getCastDevices()
+if (device !== undefined) await handoff.castTo(device.id)  // or the user taps the
+await handoff.stopCasting()   // button below — same machine. Back to local, at the
+                              // receiver's position.
 
 function CastRow() {
   const casting = useIsCasting()   // 'transferring' counts — no flicker mid-transfer
