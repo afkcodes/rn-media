@@ -2571,6 +2571,18 @@ the URI reaches mpv unchanged, and it fails exactly as it did before. That is
 capability detection rather than `Platform.OS`, which also keeps `react-native`
 out of the playback path (§5).
 
+
+**Device proof (POCO F4, 2026-08-27).** The example's dev-only `ContentUriProbe`
+loaded `content://media/external/audio/media/5491` (a scanned MediaStore row)
+and reported `status=ready seekable=true isLive=false duration=180.00`, then
+`Seek +30s` → `pos=30.00`. The rewrite ran end to end — `HybridRnMediaContentSource`
+created, `openContentUri` invoked, `fd://` opened, mpv played and seeked. The
+first attempt surfaced the typed `SecurityException` the resolver raises for a
+MediaStore id with no read grant (the app had not gone through a picker); the
+example manifest now declares `READ_MEDIA_AUDIO`, which is what any MediaStore
+browser holds, and playback followed. A file-backed row is seekable and carries
+a duration; a pipe-backed provider would surface `seekable=false` / `isLive=true`
+through the same fields, no new path.
 ## Platform truths we build around (learned, verified)
 
 - **`UInt(_: Double)` traps in Swift where `Double.toInt()` is total in
