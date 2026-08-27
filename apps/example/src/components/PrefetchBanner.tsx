@@ -25,7 +25,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { usePrefetchStatus, type Player } from '@rn-media/player'
+import { usePrefetchStatus, type Player } from '@timbre/player'
 import { COLORS, SPACE, TYPE } from '../theme'
 import { Chip, Detail, Strip } from './ui'
 

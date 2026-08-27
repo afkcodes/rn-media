@@ -11,8 +11,8 @@
  * unit — the media handler calls exactly these methods — so there is one
  * implementation of "play" in the app, not one per surface.
  */
-import type { LoopMode, Player } from '@rn-media/player'
-import { AudioSession } from '@rn-media/audio-session'
+import type { LoopMode, Player } from '@timbre/player'
+import { AudioSession } from '@timbre/audio-session'
 
 export interface TransportHooks {
   readonly player: () => Player | undefined

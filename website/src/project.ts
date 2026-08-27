@@ -1,7 +1,7 @@
 /**
  * The ONE place the project's identity lives.
  *
- * The npm scope is still the `@rn-media/*` placeholder (CLAUDE.md: the final
+ * The npm scope is still the `@timbre/*` placeholder (CLAUDE.md: the final
  * name is a pending decision and the rename must stay a one-file edit). Every
  * name reference on the site — nav title, footer, install commands, prose —
  * resolves from this object, either directly (`docusaurus.config.ts` spreads it
@@ -13,11 +13,11 @@
  */
 export const PROJECT = {
   /** Display name, used in the navbar, titles and prose. */
-  name: 'rn-media',
+  name: 'timbre',
   /** One sentence. The whole pitch. */
   tagline: 'One audio engine for React Native — the same libmpv core on iOS and Android.',
   /** npm scope for the four packages (placeholder until the rename). */
-  scope: '@rn-media',
+  scope: '@timbre',
   /** The four published packages, in dependency-neutral order. */
   packages: ['player', 'audio-session', 'media-session', 'cast'] as const,
   /** GitHub org/user. */
@@ -30,11 +30,11 @@ export const PROJECT = {
    * The future documentation domain. Not yet public (spec §6, name gate); the
    * GitHub Pages URL below is what CI builds against until then.
    */
-  futureDomain: 'https://rn-media.dev',
+  futureDomain: 'https://timbre.afk.codes',
   /** GitHub Pages origin + base, used until the domain is chosen. */
   pagesUrl: 'https://afkcodes.github.io',
   pagesBaseUrl: '/rn-media/',
 } as const
 
-/** `@rn-media/player`, `@rn-media/media-session`, … from a bare package name. */
+/** `@timbre/player`, `@timbre/media-session`, … from a bare package name. */
 export const pkg = (name: string): string => `${PROJECT.scope}/${name}`

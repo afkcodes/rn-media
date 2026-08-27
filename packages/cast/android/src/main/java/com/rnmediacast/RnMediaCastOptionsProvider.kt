@@ -17,7 +17,7 @@ import com.google.android.gms.cast.framework.media.CastMediaOptions
  * (README). It is deliberately NOT merged in from this library's own
  * manifest: an AAR forcing its provider on every consumer would collide with
  * apps that already have one (manifest-merger conflict), exactly the
- * media-button-receiver reasoning in `@rn-media/media-session`.
+ * media-button-receiver reasoning in `@timbre/media-session`.
  */
 class RnMediaCastOptionsProvider : OptionsProvider {
 

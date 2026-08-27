@@ -2,7 +2,7 @@
 //  HybridRnMediaCast.swift
 //  RnMediaCast
 //
-//  The iOS half of `@rn-media/cast`.
+//  The iOS half of `@timbre/cast`.
 //
 //  Threading contract
 //  ------------------

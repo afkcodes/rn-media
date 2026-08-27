@@ -5,7 +5,7 @@
  * storage picker hands back, and this app deliberately has no picker
  * dependency — its queue is a fixed demo list. But the rewrite that makes
  * `content://` playable (`ContentResolver` → mpv's `fd://`, see
- * `@rn-media/player`'s README under "Platform parity") is exactly the kind of
+ * `@timbre/player`'s README under "Platform parity") is exactly the kind of
  * thing a unit test cannot prove: the question is whether libmpv can read a
  * descriptor another process opened, and whether that descriptor seeks. So this
  * is the on-device harness for it — paste or type a `content://` URI, load it,
@@ -27,7 +27,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text, TextInput, View } from 'react-native'
-import type { Player } from '@rn-media/player'
+import type { Player } from '@timbre/player'
 import { COLORS, SPACE, TYPE } from '../theme'
 import { Chip, ChipRow, Detail, Section } from './ui'
 

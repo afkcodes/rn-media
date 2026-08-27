@@ -1,7 +1,7 @@
 import type { CastIdleReason } from './specs/cast.nitro'
 
 /**
- * Why a `@rn-media/cast` call or session failed.
+ * Why a `@timbre/cast` call or session failed.
  *
  * A closed union rather than free-form messages so callers can branch (and so
  * tests assert on the code, not on prose) — CLAUDE.md principle 6. The codes

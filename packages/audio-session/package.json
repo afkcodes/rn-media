@@ -1,5 +1,5 @@
 {
-  "name": "@rn-media/audio-session",
+  "name": "@timbre/audio-session",
   "version": "0.1.0",
   "description": "Single arbiter of the OS audio session: focus, interruptions, becoming-noisy and route changes, powered by Nitro Modules",
   "main": "./lib/commonjs/index.js",

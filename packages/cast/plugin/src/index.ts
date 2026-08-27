@@ -4,7 +4,7 @@ import { withCastAndroid } from './withCastAndroid'
 import { withCastIosDeploymentTarget, withCastIosPlist } from './withCastIos'
 
 /**
- * Options for the `@rn-media/cast` Expo config plugin.
+ * Options for the `@timbre/cast` Expo config plugin.
  *
  * Zero props is a working setup: the Default Media Receiver, generated
  * Bonjour strings, a stock local-network prompt text, and the shipped

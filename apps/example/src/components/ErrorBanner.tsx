@@ -29,7 +29,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import type { PlayerError, PlayerErrorCode } from '@rn-media/player'
+import type { PlayerError, PlayerErrorCode } from '@timbre/player'
 import { COLORS, SPACE, TYPE } from '../theme'
 import { Strip } from './ui'
 

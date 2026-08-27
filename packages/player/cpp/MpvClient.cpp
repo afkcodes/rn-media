@@ -30,7 +30,7 @@ constexpr const char* kAudioOnlyDefaults[][2] = {
 /// preferred channel count, and it does so on every AO open — i.e. at every
 /// playback start, not once. That is wrong for this library twice over.
 ///
-/// 1. **Ownership.** `@rn-media/audio-session` is the package that owns the
+/// 1. **Ownership.** `@timbre/audio-session` is the package that owns the
 ///    session (categories, interruptions, route changes), exactly as it owns
 ///    audio focus on Android — where this player requests none. Two owners is
 ///    worse than either, which is why our fork's patch 007 added this option
@@ -42,7 +42,7 @@ constexpr const char* kAudioOnlyDefaults[][2] = {
 /// 2. **It broke the iOS now-playing surface.** mpv calls
 ///    `setCategory:withOptions:error:`, the variant that cannot carry a route
 ///    sharing policy, so the `.longFormAudio` policy
-///    `@rn-media/audio-session` sets was reset to `.default` and the mode was
+///    `@timbre/audio-session` sets was reset to `.default` and the mode was
 ///    forced to `.moviePlayback` — after which CoreAudio refused the output
 ///    client (`AQIONode.cpp: is NOT Now Playing eligible`) and iOS showed no
 ///    Lock Screen / Control Center card, however correct

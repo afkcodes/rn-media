@@ -352,7 +352,7 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
    * thing.
    *
    * [AudioFocusRequest] is API 26+. This package's `minSdkVersion` is 24 (it
-   * follows `@rn-media/player`), so API 24/25 falls back to
+   * follows `@timbre/player`), so API 24/25 falls back to
    * `requestAudioFocus(listener, streamType, durationHint)` — the API Google
    * documents for "Android 7.1 (API level 25) and lower"
    * (https://developer.android.com/media/optimize/audio-focus).
@@ -362,7 +362,7 @@ class HybridRnMediaAudioSession : HybridRnMediaAudioSessionSpec() {
    * ("Add `AudioManagerCompat` and `AudioFocusRequestCompat` to replace the
    * equivalent classes in `androidx.media`" — androidx/media RELEASENOTES 1.6.0),
    * and depending on media3 here would couple this package to the media3
-   * version that `@rn-media/media-session` picks. Two SDK levels of `if` is
+   * version that `@timbre/media-session` picks. Two SDK levels of `if` is
    * cheaper than a shared dependency.
    */
   private class FocusRequest(

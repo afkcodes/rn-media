@@ -21,7 +21,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { CastButton, useCastState, useIsCasting } from '@rn-media/cast'
+import { CastButton, useCastState, useIsCasting } from '@timbre/cast'
 import type { CastIntegration } from '../playback/cast'
 import type { CastSelfTestResult } from '../playback/cast-selftest'
 import type { Track } from '../data/tracks'

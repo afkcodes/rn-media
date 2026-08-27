@@ -4,7 +4,7 @@
  * types only, plain Node.
  */
 import { describe, expect, it } from 'vitest'
-import type { CastReceiverSnapshot } from '@rn-media/cast'
+import type { CastReceiverSnapshot } from '@timbre/cast'
 import {
   DEMO_BROKEN_TARGET,
   DEMO_BROKEN_URI,

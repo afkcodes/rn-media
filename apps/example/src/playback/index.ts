@@ -9,7 +9,7 @@
  */
 import { useEffect, useReducer } from 'react'
 import { AppState } from 'react-native'
-import type { Player } from '@rn-media/player'
+import type { Player } from '@timbre/player'
 import { Playback } from './controller'
 
 export { Playback } from './controller'

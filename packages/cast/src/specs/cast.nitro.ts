@@ -308,7 +308,7 @@ export interface NativeDeviceVolumeEvent {
  *
  * Listener registration is id-based (Nitro callbacks are opaque native
  * closures; identity comparison across the bridge is not dependable) — same
- * contract as `@rn-media/audio-session`.
+ * contract as `@timbre/audio-session`.
  */
 export interface RnMediaCast extends HybridObject<{
   ios: 'swift'

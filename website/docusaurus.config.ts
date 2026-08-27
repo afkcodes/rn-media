@@ -47,7 +47,7 @@ const config: Config = {
     [
       'docusaurus-plugin-typedoc',
       {
-        // The generated API reference for @rn-media/player — every index.ts
+        // The generated API reference for @timbre/player — every index.ts
         // export rendered from its real TSDoc. This is the mechanism that makes
         // "nothing missed" provable (spec §2.1).
         id: 'player-api',

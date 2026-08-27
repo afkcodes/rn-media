@@ -1,5 +1,5 @@
 /**
- * The cast side of the playback layer: `@rn-media/cast` wired to this app.
+ * The cast side of the playback layer: `@timbre/cast` wired to this app.
  *
  * Three responsibilities, in the order they matter:
  *
@@ -35,8 +35,8 @@ import {
   type CastHandoffQueueSnapshot,
   type CastReceiverSnapshot,
   type SkippedCastItem,
-} from '@rn-media/cast'
-import type { Player, PlayerState } from '@rn-media/player'
+} from '@timbre/cast'
+import type { Player, PlayerState } from '@timbre/player'
 import { DEMO_SCHEME, type Track } from '../data/tracks'
 import { castMimeOf, castUrlOf } from './cast-broadcast'
 

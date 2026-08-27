@@ -11,11 +11,11 @@ import {
   type PlayerError,
   type PlayerState,
   type Unsubscribe,
-} from '@rn-media/player'
+} from '@timbre/player'
 import {
   AudioSessionPresets,
   wireAudioSession,
-} from '@rn-media/audio-session'
+} from '@timbre/audio-session'
 import { TRACKS } from '../data/tracks'
 import { createDemoResolver } from './resolver'
 

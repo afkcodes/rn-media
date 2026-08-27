@@ -22,7 +22,7 @@ export const withBackgroundAudio: ConfigPlugin = (config) =>
 
     if (existing !== undefined && !Array.isArray(existing)) {
       throw new Error(
-        '[@rn-media/media-session] Expected `ios.infoPlist.UIBackgroundModes` to be an ' +
+        '[@timbre/media-session] Expected `ios.infoPlist.UIBackgroundModes` to be an ' +
           `array of strings, received ${typeof existing}. Fix it in your app config, ` +
           'e.g. `"UIBackgroundModes": ["audio"]`.'
       )

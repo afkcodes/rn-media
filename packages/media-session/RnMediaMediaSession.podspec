@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.license      = package["license"]
   s.authors      = package["author"]
 
-  # iOS only, matching `@rn-media/player` and `@rn-media/audio-session`.
+  # iOS only, matching `@timbre/player` and `@timbre/audio-session`.
   # MPNowPlayingInfoCenter/MPRemoteCommandCenter exist on tvOS/visionOS too; add
   # those platforms when there is a target that actually builds them.
   s.platforms    = { :ios => min_ios_version_supported }

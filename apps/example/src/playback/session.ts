@@ -8,7 +8,7 @@
  * apart.
  *
  * Split out of the controller on purpose: this file would be almost unchanged
- * in an app that used a different player, because `@rn-media/media-session`
+ * in an app that used a different player, because `@timbre/media-session`
  * does not know or care what makes the sound.
  */
 import {
@@ -19,9 +19,9 @@ import {
   type PersistedMediaService,
   type PersistedSession,
   type SleepTimerState,
-} from '@rn-media/media-session'
-import type { PlayerState } from '@rn-media/player'
-import type { CastDeviceVolume, CastReceiverSnapshot } from '@rn-media/cast'
+} from '@timbre/media-session'
+import type { PlayerState } from '@timbre/player'
+import type { CastDeviceVolume, CastReceiverSnapshot } from '@timbre/cast'
 import { ACCENT_ARGB } from '../theme'
 import type { Track } from '../data/tracks'
 import { durationMs, nowPlaying, toMediaItem, toPlaybackState } from './broadcast'
@@ -228,8 +228,8 @@ export class SessionBridge {
    * about what is playing, and is sticky — the receiver's own status updates
    * flow through `publishCast` and neither carry nor clear it.
    *
-   * Nothing here is Cast-specific on the library side; `@rn-media/media-session`
-   * has no idea a receiver exists (and no dependency on `@rn-media/cast`). Any
+   * Nothing here is Cast-specific on the library side; `@timbre/media-session`
+   * has no idea a receiver exists (and no dependency on `@timbre/cast`). Any
    * remote backend publishes the same shape.
    */
   publishRemotePlayback(volume: CastDeviceVolume | undefined): void {

@@ -35,7 +35,7 @@ enum CarPlayEvent: Sendable {
 }
 
 /**
- * The CarPlay half of `@rn-media/media-session`.
+ * The CarPlay half of `@timbre/media-session`.
  *
  * ## Ownership
  * A singleton, for the reason CLAUDE.md permits one: iOS gives an app exactly

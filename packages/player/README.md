@@ -1,11 +1,11 @@
-# @rn-media/player
+# @timbre/player
 
 React Native audio player built on libmpv, powered by Nitro Modules. One mpv
 core per `Player`, a gapless queue, a typed filter/EQ chain, a spectrum
 visualizer, and a raw escape hatch onto mpv's client API.
 
-[![Version](https://img.shields.io/npm/v/@rn-media/player.svg)](https://www.npmjs.com/package/@rn-media/player)
-[![License](https://img.shields.io/npm/l/@rn-media/player.svg)](https://github.com/afkcodes/rn-media/blob/main/LICENSE)
+[![Version](https://img.shields.io/npm/v/@timbre/player.svg)](https://www.npmjs.com/package/@timbre/player)
+[![License](https://img.shields.io/npm/l/@timbre/player.svg)](https://github.com/afkcodes/rn-media/blob/main/LICENSE)
 
 ## Requirements
 
@@ -13,19 +13,19 @@ visualizer, and a raw escape hatch onto mpv's client API.
 |---|---|
 | React Native | **>= 0.82** (New Architecture only); Node >= 18 |
 | Android | minSdk 24. This package's manifest merges no permissions — not even `RECORD_AUDIO` |
-| iOS | Add `UIBackgroundModes: audio` to your `Info.plist`, or install `@rn-media/media-session` and let its Expo plugin merge it. This package configures no `AVAudioSession`. Install [`@rn-media/audio-session`](../audio-session/README.md) or write your own session code, or the process default category applies and background audio does not work. Pass `audiounit-skip-session-management=no` in `mpvOptions` to hand the job back to the engine ([ARCHITECTURE §26](../../ARCHITECTURE.md#26-avaudiosession-has-exactly-one-owner-and-it-is-not-the-engine)) |
+| iOS | Add `UIBackgroundModes: audio` to your `Info.plist`, or install `@timbre/media-session` and let its Expo plugin merge it. This package configures no `AVAudioSession`. Install [`@timbre/audio-session`](../audio-session/README.md) or write your own session code, or the process default category applies and background audio does not work. Pass `audiounit-skip-session-management=no` in `mpvOptions` to hand the job back to the engine ([ARCHITECTURE §26](../../ARCHITECTURE.md#26-avaudiosession-has-exactly-one-owner-and-it-is-not-the-engine)) |
 
 ## Installation
 
 ```bash
-npm install @rn-media/player react-native-nitro-modules
+npm install @timbre/player react-native-nitro-modules
 ```
 
 ## Usage
 
 ```tsx
 import { Button } from 'react-native';
-import { usePlayer, usePlayerState, useProgress } from '@rn-media/player';
+import { usePlayer, usePlayerState, useProgress } from '@timbre/player';
 
 function Screen() {
   const { player } = usePlayer({ volume: 0.8, setup: p => p.load('https://x/a.flac') });
@@ -61,7 +61,7 @@ Outside React, `await Player.create(options)` gives the same object, and
 | `cacheSecs` | `30` | mpv's own default is ~1000 hours, which on a radio stream downloads for hours even while paused. Startup is unaffected: `cache-pause-initial` is `no` |
 | `prefetchPlaylist` | `false` | Opens the next entry as soon as the current one is fully read. 25 ms handover with it; 644 ms and a logged device underrun without |
 | `gaplessAudio` | `'weak'` | `'weak'` keeps the device open while the output format matches; `'yes'` always, resampling later entries into the first entry's format; `'no'` never. Pin `--audio-samplerate`/`--audio-format` if you choose `'yes'` |
-| `userAgent` | `rn-media (libmpv)` | Real Shoutcast hosts reject the literal `libmpv` |
+| `userAgent` | `timbre (libmpv)` | Real Shoutcast hosts reject the literal `libmpv` |
 | `replayGain` | off | `{ mode, preamp?, clip?, fallback? }` — see [Audio processing](#audio-processing) |
 | `networkReconnect` | on | `{ enabled?, maxDelaySeconds? }` — FFmpeg's own retry, inside libavformat |
 | `retry` | `{ maxAttempts: 2 }` | `{ maxAttempts, retryLiveEof? }` — whether the queue moves on |
@@ -190,7 +190,7 @@ an extra observed property does not become a `Player` event, and video stays out
 ## Audio filters and EQ
 
 ```ts
-import { AudioFilters, EQUALIZER_PRESETS, equalizerBandLabel, equalizerPresetChain } from '@rn-media/player'
+import { AudioFilters, EQUALIZER_PRESETS, equalizerBandLabel, equalizerPresetChain } from '@timbre/player'
 
 player.setAudioFilters([AudioFilters.bass({ gain: 4 }), AudioFilters.crossfeed({ strength: 0.3 })])
 
@@ -273,7 +273,7 @@ For queues whose entries cannot be written down ahead of time: a signed CDN link
 that expires in minutes, a transcode session created per track.
 
 ```ts
-import { Player, type SourceResolver } from '@rn-media/player';
+import { Player, type SourceResolver } from '@timbre/player';
 
 const resolve: SourceResolver = async ({ uri }) => {
   if (!uri.startsWith('library://')) return uri;                    // pass through
@@ -383,7 +383,7 @@ protocol, once per URI, for the life of the player
 | Group | Exports |
 |---|---|
 | Error taxonomy | `PlayerError` — the union `NetworkError \| UnsupportedFormatError \| LoadFailedError \| DisposedError \| InvalidStateError \| UnsupportedError \| RawMpvError`; `PlayerErrorCode`; `PlayerErrorException`; `Retryable`; `toPlayerError(thrown, uri?)`, `isRetryableErrno(errno)`, `isNetworkUri(uri)`; `EndFileOutcome` / `classifyEndFile` |
-| Defaults | `DEFAULT_USER_AGENT` = `'rn-media (libmpv)'`, `DEFAULT_CACHE_SECS` = `30`, `DEFAULT_RETRY_MAX_ATTEMPTS` = `2`, `DEFAULT_RECONNECT_DELAY_MAX_SECONDS` = `5`, `DEFAULT_RESOLVER_TIMEOUT_MS` = `10_000`, `DEFAULT_RESOLVER_TTL_MS` = `600_000`, `DEFAULT_VISUALIZER_FPS` = `30` |
+| Defaults | `DEFAULT_USER_AGENT` = `'timbre (libmpv)'`, `DEFAULT_CACHE_SECS` = `30`, `DEFAULT_RETRY_MAX_ATTEMPTS` = `2`, `DEFAULT_RECONNECT_DELAY_MAX_SECONDS` = `5`, `DEFAULT_RESOLVER_TIMEOUT_MS` = `10_000`, `DEFAULT_RESOLVER_TTL_MS` = `600_000`, `DEFAULT_VISUALIZER_FPS` = `30` |
 | Option types | `RetryOptions`, `NetworkReconnectOptions`, `SourceResolverOptions`, `VisualizerOptions`, `VolumeOptions`, `GaplessAudioMode`, `ReplayGainMode`, `HttpHeaders` |
 | Equaliser | `EqualizerPreset`, `EqualizerPresetId`, `EqualizerBand`, `EqualizerGainRange`, `EqualizerSettings`, `EqualizerStorage`, `UseEqualizerOptions`, `EQUALIZER_PREAMP_LABEL`, `EQUALIZER_LIMITER_LABEL`, `LOUDNESS_NORMALIZATION_LABEL`, `EQUALIZER_SCHEMA_VERSION`, `DEFAULT_EQUALIZER_STORAGE_KEY` |
 | Filters | `CompressorOptions`, `LimiterOptions`, `LoudnormOptions`, `DynamicNormalizerOptions`, `CrossfeedOptions`, `ShelfOptions`, `PassOptions`, `BiquadWidthType`, `assertValidAudioFilters` |

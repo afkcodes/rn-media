@@ -33,7 +33,7 @@ import type { HybridObject } from 'react-native-nitro-modules'
  * is the member, upper-cased with separators stripped (`skipToNext` →
  * `SKIPTONEXT`, Swift `.skiptonext`). Members must therefore stay distinct
  * case-insensitively, and must not collide with a C macro or a Swift keyword —
- * the same constraint that forced `defaultMode` in `@rn-media/audio-session`.
+ * the same constraint that forced `defaultMode` in `@timbre/audio-session`.
  */
 export type MediaPlaybackStatus =
   'playing' | 'paused' | 'buffering' | 'stopped' | 'error'
@@ -90,7 +90,7 @@ export type MediaControl =
    *
    * Named `repeatMode` rather than the obvious `repeat` because a member becomes
    * a native enumerator verbatim, and `repeat` is a **Swift keyword** — the same
-   * collision that forced `defaultMode` in `@rn-media/audio-session`. Swift may
+   * collision that forced `defaultMode` in `@timbre/audio-session`. Swift may
    * well accept `.repeat` after a dot; "may well" is not something to discover
    * on a macOS CI box that this Linux dev machine cannot run.
    */
@@ -165,7 +165,7 @@ export type MediaCapability =
  * Deliberately three members and no integer count: this is the *session's*
  * vocabulary, and it is exactly what both platforms can express —
  * media3's `Player.REPEAT_MODE_OFF/_ONE/_ALL` (0/1/2) and MediaPlayer's
- * `MPRepeatType.off/.one/.all`. `@rn-media/player`'s richer `loopRaw` (mpv
+ * `MPRepeatType.off/.one/.all`. `@timbre/player`'s richer `loopRaw` (mpv
  * accepts a repeat *count*) does not fit on a notification button and is not
  * flattened into a lie here — an app playing "repeat this track 3×" broadcasts
  * whichever of these three is the honest summary.

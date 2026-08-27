@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
 
   # NOT the repo-wide 15.1 floor: the google-cast-sdk pod requires iOS 16.0
   # (its own podspec floor since 4.8.x). This is a consumer-visible bump that
-  # only apps installing @rn-media/cast pay — documented loudly in the README
+  # only apps installing @timbre/cast pay — documented loudly in the README
   # and warned about by the Expo plugin. CocoaPods enforces it at install
   # time, which is the honest failure mode (an app on 15.1 gets a clear
   # resolver error, not a runtime crash).

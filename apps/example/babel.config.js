@@ -1,7 +1,7 @@
 const path = require('path');
 
 /**
- * Resolve every `@rn-media/*` import to the package's TypeScript source, so the
+ * Resolve every `@timbre/*` import to the package's TypeScript source, so the
  * example app exercises the code under review rather than a stale `lib/` build.
  */
 const alias = Object.fromEntries(

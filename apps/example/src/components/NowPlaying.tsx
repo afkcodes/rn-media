@@ -30,7 +30,7 @@
  */
 import React from 'react'
 import { Image, StyleSheet, Text, View } from 'react-native'
-import type { ChapterEntry, Progress } from '@rn-media/player'
+import type { ChapterEntry, Progress } from '@timbre/player'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { Track } from '../data/tracks'
 import type { ShellState } from '../playback/shell'

@@ -6,9 +6,9 @@
  * everything here is about the *read* on launch, which is the half with
  * branches worth showing.
  */
-import { restorePersisted, type MediaSessionStorage } from '@rn-media/media-session'
-import type { PersistedSession } from '@rn-media/media-session'
-import type { EqualizerStorage } from '@rn-media/player'
+import { restorePersisted, type MediaSessionStorage } from '@timbre/media-session'
+import type { PersistedSession } from '@timbre/media-session'
+import type { EqualizerStorage } from '@timbre/player'
 import { createMMKV } from 'react-native-mmkv'
 import { TRACKS } from '../data/tracks'
 import { formatTime } from '../components/SeekBar'
@@ -17,7 +17,7 @@ import { formatTime } from '../components/SeekBar'
  * Persistence storage for the media session — **an app-level choice, not the
  * library's**.
  *
- * `@rn-media/media-session` takes `{ getItem, setItem }` structurally and
+ * `@timbre/media-session` takes `{ getItem, setItem }` structurally and
  * depends on nothing; this app happens to use `react-native-mmkv` (an
  * example-only dependency) because it is *synchronous*, so a broadcast is on
  * disk before `setPlaybackState` returns — which is what makes surviving
@@ -35,8 +35,8 @@ export const sessionStorage: MediaSessionStorage = {
  * The same engine again, handed to `useEqualizer` so the user's curve and their
  * saved presets survive a restart.
  *
- * Deliberately the *same object*, not a second one: `@rn-media/player`'s
- * `EqualizerStorage` and `@rn-media/media-session`'s `MediaSessionStorage` are
+ * Deliberately the *same object*, not a second one: `@timbre/player`'s
+ * `EqualizerStorage` and `@timbre/media-session`'s `MediaSessionStorage` are
  * structurally identical two-method interfaces, which is exactly what lets one
  * app-chosen engine serve both libraries. Neither package depends on it, and
  * neither knows the other is using it — swap in AsyncStorage here and both

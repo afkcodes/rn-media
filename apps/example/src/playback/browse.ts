@@ -21,7 +21,7 @@
  * back, app decides what plays, broadcast acknowledges) is identical either
  * way.
  */
-import { BROWSE_ROOT, BrowseError, type BrowseItem } from '@rn-media/media-session'
+import { BROWSE_ROOT, BrowseError, type BrowseItem } from '@timbre/media-session'
 import { TRACKS, type Track } from '../data/tracks'
 
 /** Tab ids. Opaque to the car; meaningful only here. */

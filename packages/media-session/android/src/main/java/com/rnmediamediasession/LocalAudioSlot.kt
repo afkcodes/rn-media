@@ -52,7 +52,7 @@ import com.margelo.nitro.rnmediamediasession.SessionErrorCode
  * - **No audio focus.** An `AudioTrack` never requests focus on its own
  *   (`PlayerBase` registration and `AudioManager.requestAudioFocus` are
  *   unrelated paths — `AudioTrack.java` contains no focus call at all), so this
- *   cannot fight `@rn-media/audio-session`'s focus wiring or duck anybody.
+ *   cannot fight `@timbre/audio-session`'s focus wiring or duck anybody.
  *
  *   The *reverse* coupling exists and is accepted: `USAGE_MEDIA` is fadeable by
  *   default (`FadeManagerConfiguration.DEFAULT_FADEABLE_USAGES`), so if the app

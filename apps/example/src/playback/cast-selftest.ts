@@ -12,7 +12,7 @@
  * Deliberately allowed to use JS timers: a self-test is user-initiated and
  * foreground — the one place timers are legal in this codebase.
  */
-import { Cast } from '@rn-media/cast'
+import { Cast } from '@timbre/cast'
 import type { Playback } from './controller'
 
 const TAG = '[cast-test]'

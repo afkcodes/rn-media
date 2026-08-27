@@ -9,7 +9,7 @@ import CarPlay
 import UIKit
 
 /**
- * The CarPlay scene delegate `@rn-media/media-session` ships so an app does not
+ * The CarPlay scene delegate `@timbre/media-session` ships so an app does not
  * have to write one.
  *
  * ## Why it is `@objc` with a bare name

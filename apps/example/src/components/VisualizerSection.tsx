@@ -22,7 +22,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text } from 'react-native'
-import { useVisualizer, type Player } from '@rn-media/player'
+import { useVisualizer, type Player } from '@timbre/player'
 import { COLORS, TYPE } from '../theme'
 import { Chip, ChipRow, Section } from './ui'
 import {

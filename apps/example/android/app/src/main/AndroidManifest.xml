@@ -40,7 +40,7 @@
         headset/Bluetooth play to a receiver that can start the service into a
         dead process.
 
-        Deliberately NOT merged in from @rn-media/media-session: it changes how
+        Deliberately NOT merged in from @timbre/media-session: it changes how
         media buttons are routed for every app that installs the package, and
         the feature it enables is opt-in (`android.playbackResumption`). Adding
         it is one copy-paste, and the library logs when it is missing.
@@ -54,7 +54,7 @@
       </receiver>
 
       <!--
-        @rn-media/cast (pasted by hand — this is a bare-RN app; the Expo
+        @timbre/cast (pasted by hand — this is a bare-RN app; the Expo
         plugin writes exactly this pair for prebuild apps).
 
         The Cast framework instantiates the OptionsProvider reflectively at

@@ -6,7 +6,7 @@
  *
  * It extracts every ```ts / ```tsx fenced block out of every `website/**\/*.mdx`
  * page, writes each as a standalone module, and runs `tsc --noEmit` over them
- * with `@rn-media/*` mapped to the workspace packages' `src` — the real export
+ * with `@timbre/*` mapped to the workspace packages' `src` — the real export
  * surface, not a built `lib/`. A sample that drifts from the code becomes a
  * build error with an `.mdx:LINE` on it.
  *
@@ -50,7 +50,7 @@ declare module '@react-native-async-storage/async-storage' {
  * the README harness's, because the site's guides are the same programs.
  */
 const RECIPE_BACKEND = `
-declare const service: import('@rn-media/media-session').MediaServiceApi
+declare const service: import('@timbre/media-session').MediaServiceApi
 declare const station: { id: string; name: string; url: string; logoUri: string }
 declare const episode: { id: string; url: string }
 declare const progress: {
@@ -66,7 +66,7 @@ declare const catalogue: {
   tracks(albumId: string): Promise<CatalogueTrack[]>
   track(id: string): Promise<CatalogueTrack>
   recent(limit: number): Promise<CatalogueTrack[]>
-  search(query: string, focus?: import('@rn-media/media-session').SearchFocus): Promise<CatalogueTrack[]>
+  search(query: string, focus?: import('@timbre/media-session').SearchFocus): Promise<CatalogueTrack[]>
 }
 interface CatalogueTrack {
   id: string
@@ -146,12 +146,12 @@ const PAGES = [
   { slug: 'concept-position-anchor', file: 'docs/concepts/position-anchor.mdx' },
 ]
 
-/** `@rn-media/*` resolves to the workspace source, three levels up from a slug. */
+/** `@timbre/*` resolves to the workspace source, three levels up from a slug. */
 const PATHS = {
-  '@rn-media/player': ['../../../packages/player/src'],
-  '@rn-media/audio-session': ['../../../packages/audio-session/src'],
-  '@rn-media/media-session': ['../../../packages/media-session/src'],
-  '@rn-media/cast': ['../../../packages/cast/src'],
+  '@timbre/player': ['../../../packages/player/src'],
+  '@timbre/audio-session': ['../../../packages/audio-session/src'],
+  '@timbre/media-session': ['../../../packages/media-session/src'],
+  '@timbre/cast': ['../../../packages/cast/src'],
 }
 
 /**

@@ -26,7 +26,7 @@
  * root looks the track up in `playback.queue` — the one place both
  * subscriptions have already been read.
  */
-import type { LoopMode, PlayerState } from '@rn-media/player'
+import type { LoopMode, PlayerState } from '@timbre/player'
 import type { TrackFacts } from './broadcast'
 
 export interface ShellState extends TrackFacts {

@@ -1,5 +1,5 @@
 /**
- * `@rn-media/player` — a React Native audio player built on libmpv.
+ * `@timbre/player` — a React Native audio player built on libmpv.
  *
  * Two layers, both public:
  *
