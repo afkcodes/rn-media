@@ -48,10 +48,10 @@ is where the library modules are composed:
 ```sh
 cd apps/example/android
 ./gradlew :app:assembleDebug
-./gradlew :rn-media_media-session:testReleaseUnitTest   # JVM half of media-session
-./gradlew :rn-media_player:lintRelease \
-          :rn-media_audio-session:lintRelease \
-          :rn-media_media-session:lintRelease
+./gradlew :timbre_media-session:testReleaseUnitTest   # JVM half of media-session
+./gradlew :timbre_player:lintRelease \
+          :timbre_audio-session:lintRelease \
+          :timbre_media-session:lintRelease
 ```
 
 Those last two are exactly what `Build Android` runs in CI — a lint failure
