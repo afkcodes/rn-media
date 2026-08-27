@@ -4,7 +4,7 @@
  * events (and effect completions) back into the machine.
  *
  * Deliberately a *cast-package* module, not a media-session one:
- * `@timbre/media-session` stays cast-free in both directions. The handoff
+ * `@afkcodes/timbre-media-session` stays cast-free in both directions. The handoff
  * talks to the app through structural interfaces only — the same discipline as
  * audio-session's `AudioSessionPlayerLike` — and the app routes the outputs
  * (`onReceiverState`, `onTransfer`, …) into its own media-session broadcasts.
@@ -34,7 +34,7 @@ import type { CastApi, EndSessionOptions, Unsubscribe } from './types'
  *
  * Structural on purpose: our `Player` behind an app adapter, any other RN
  * player, or a test fake all satisfy it. This package must never import
- * `@timbre/player`.
+ * `@afkcodes/timbre-player`.
  */
 export interface CastHandoffLocalPlayer {
   /** Resume local playback (a transfer-back with `playWhenReady`). */

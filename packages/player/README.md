@@ -1,11 +1,11 @@
-# @timbre/player
+# @afkcodes/timbre-player
 
 React Native audio player built on libmpv, powered by Nitro Modules. One mpv
 core per `Player`, a gapless queue, a typed filter/EQ chain, a spectrum
 visualizer, and a raw escape hatch onto mpv's client API.
 
-[![Version](https://img.shields.io/npm/v/@timbre/player.svg)](https://www.npmjs.com/package/@timbre/player)
-[![License](https://img.shields.io/npm/l/@timbre/player.svg)](https://github.com/afkcodes/timbre/blob/main/LICENSE)
+[![Version](https://img.shields.io/npm/v/@afkcodes/timbre-player.svg)](https://www.npmjs.com/package/@afkcodes/timbre-player)
+[![License](https://img.shields.io/npm/l/@afkcodes/timbre-player.svg)](https://github.com/afkcodes/timbre/blob/main/LICENSE)
 
 ## Requirements
 
@@ -13,19 +13,19 @@ visualizer, and a raw escape hatch onto mpv's client API.
 |---|---|
 | React Native | **>= 0.82** (New Architecture only); Node >= 18 |
 | Android | minSdk 24. This package's manifest merges no permissions — not even `RECORD_AUDIO` |
-| iOS | Add `UIBackgroundModes: audio` to your `Info.plist`, or install `@timbre/media-session` and let its Expo plugin merge it. This package configures no `AVAudioSession`. Install [`@timbre/audio-session`](../audio-session/README.md) or write your own session code, or the process default category applies and background audio does not work. Pass `audiounit-skip-session-management=no` in `mpvOptions` to hand the job back to the engine ([ARCHITECTURE §26](../../ARCHITECTURE.md#26-avaudiosession-has-exactly-one-owner-and-it-is-not-the-engine)) |
+| iOS | Add `UIBackgroundModes: audio` to your `Info.plist`, or install `@afkcodes/timbre-media-session` and let its Expo plugin merge it. This package configures no `AVAudioSession`. Install [`@afkcodes/timbre-audio-session`](../audio-session/README.md) or write your own session code, or the process default category applies and background audio does not work. Pass `audiounit-skip-session-management=no` in `mpvOptions` to hand the job back to the engine ([ARCHITECTURE §26](../../ARCHITECTURE.md#26-avaudiosession-has-exactly-one-owner-and-it-is-not-the-engine)) |
 
 ## Installation
 
 ```bash
-npm install @timbre/player react-native-nitro-modules
+npm install @afkcodes/timbre-player react-native-nitro-modules
 ```
 
 ## Usage
 
 ```tsx
 import { Button } from 'react-native';
-import { usePlayer, usePlayerState, useProgress } from '@timbre/player';
+import { usePlayer, usePlayerState, useProgress } from '@afkcodes/timbre-player';
 
 function Screen() {
   const { player } = usePlayer({ volume: 0.8, setup: p => p.load('https://x/a.flac') });
@@ -190,7 +190,7 @@ an extra observed property does not become a `Player` event, and video stays out
 ## Audio filters and EQ
 
 ```ts
-import { AudioFilters, EQUALIZER_PRESETS, equalizerBandLabel, equalizerPresetChain } from '@timbre/player'
+import { AudioFilters, EQUALIZER_PRESETS, equalizerBandLabel, equalizerPresetChain } from '@afkcodes/timbre-player'
 
 player.setAudioFilters([AudioFilters.bass({ gain: 4 }), AudioFilters.crossfeed({ strength: 0.3 })])
 
@@ -273,7 +273,7 @@ For queues whose entries cannot be written down ahead of time: a signed CDN link
 that expires in minutes, a transcode session created per track.
 
 ```ts
-import { Player, type SourceResolver } from '@timbre/player';
+import { Player, type SourceResolver } from '@afkcodes/timbre-player';
 
 const resolve: SourceResolver = async ({ uri }) => {
   if (!uri.startsWith('library://')) return uri;                    // pass through

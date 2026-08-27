@@ -1044,7 +1044,7 @@ export interface MediaServiceApi {
    * Is a car connected right now?
    *
    * Synchronous and cheap. The reactive twin is `useCarConnection()` from
-   * `@timbre/media-session/hooks`, which re-renders on every transition.
+   * `@afkcodes/timbre-media-session/hooks`, which re-renders on every transition.
    */
   getCarConnection(): CarConnection
 }

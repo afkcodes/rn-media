@@ -19,14 +19,14 @@
  *    reuses the prefetched stream only if the two URLs match byte for byte. A
  *    resolver that mints a fresh nonce per call silently *defeats* prefetching,
  *    which is worse than never prefetching. Sign once per track, not once per
- *    call. (Full reasoning: `SourceResolver`'s TSDoc in `@timbre/player`.)
+ *    call. (Full reasoning: `SourceResolver`'s TSDoc in `@afkcodes/timbre-player`.)
  * 3. **You are allowed to be slow — off the critical path.** The player
  *    resolves the current and next entries as the queue moves, typically a
  *    whole track before mpv asks, so the artificial latency below is paid while
  *    something else is playing. Only a *cache miss at play time* holds mpv's
  *    core, and only for `resolverTimeoutMs`.
  */
-import type { SourceResolver } from '@timbre/player'
+import type { SourceResolver } from '@afkcodes/timbre-player'
 import {
   DEMO_BROKEN_TARGET,
   DEMO_BROKEN_URI,

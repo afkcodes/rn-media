@@ -29,7 +29,7 @@ import type { CastConnectionState } from './specs/cast.nitro'
  *
  * @example
  * ```tsx
- * import { useCastState } from '@timbre/cast'
+ * import { useCastState } from '@afkcodes/timbre-cast'
  *
  * function CastStatus() {
  *   const state = useCastState()
@@ -63,7 +63,7 @@ export function useCastState(): CastConnectionState {
  *
  * @example
  * ```tsx
- * import { useIsCasting } from '@timbre/cast'
+ * import { useIsCasting } from '@afkcodes/timbre-cast'
  *
  * function VolumeRow() {
  *   const casting = useIsCasting()
@@ -103,7 +103,7 @@ function identity(state: CastConnectionState): CastConnectionState {
  * The projection is applied *before* the value reaches state, which is what
  * makes a hook that only asked a yes/no question skip the renders that do not
  * change the answer — the same trade `usePlayerState`'s selector overload makes
- * in `@timbre/player`.
+ * in `@afkcodes/timbre-player`.
  *
  * @param select - Pure projection of the connection state. Must be a stable
  * reference (module scope or `useCallback`); it is a subscription dependency.

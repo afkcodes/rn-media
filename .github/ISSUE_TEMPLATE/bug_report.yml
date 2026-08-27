@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in @timbre/player, /audio-session or /media-session behaves wrong
+description: Something in @afkcodes/timbre-player, /audio-session or /media-session behaves wrong
 labels: ['bug']
 body:
   - type: markdown
@@ -16,9 +16,9 @@ body:
       label: Package
       multiple: true
       options:
-        - '@timbre/player'
-        - '@timbre/audio-session'
-        - '@timbre/media-session'
+        - '@afkcodes/timbre-player'
+        - '@afkcodes/timbre-audio-session'
+        - '@afkcodes/timbre-media-session'
         - 'example app / build'
     validations:
       required: true
@@ -58,7 +58,7 @@ body:
     id: versions
     attributes:
       label: Package versions
-      description: '`@timbre/*` versions, plus `react-native-nitro-modules`.'
+      description: '`@afkcodes/timbre-*` versions, plus `react-native-nitro-modules`.'
       placeholder: 'player 0.1.0, media-session 0.1.0, nitro-modules 0.32.0'
     validations:
       required: true

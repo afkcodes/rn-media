@@ -12,7 +12,7 @@ import type {
   Player,
   ReplayGainMode,
   ReplayGainOptions,
-} from '@timbre/player'
+} from '@afkcodes/timbre-player'
 
 /**
  * The exact `setReplayGain` payload each UI mode writes.

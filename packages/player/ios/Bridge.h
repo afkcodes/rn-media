@@ -1,6 +1,6 @@
 //
 //  Bridge.h
-//  @timbre/player
+//  @afkcodes/timbre-player
 //
 //  Created by Ashish Kumar on 9/8/2026
 //

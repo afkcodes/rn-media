@@ -19,8 +19,8 @@
  *    own controls call, cast-or-local by the same `cast.owns` rule.
  */
 import React from 'react'
-import { CompositeMediaHandler, type MediaHandler } from '@timbre/media-session'
-import type { CastReceiverSnapshot } from '@timbre/cast'
+import { CompositeMediaHandler, type MediaHandler } from '@afkcodes/timbre-media-session'
+import type { CastReceiverSnapshot } from '@afkcodes/timbre-cast'
 import { CastIntegration } from '../cast'
 import { toCastMediaItem, toCastPlaybackState } from '../cast-broadcast'
 import type { Track } from '../data/tracks'

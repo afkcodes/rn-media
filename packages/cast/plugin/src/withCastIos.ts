@@ -37,7 +37,7 @@ export const withCastIosPlist: ConfigPlugin<{
     const existing = plist.NSBonjourServices
     if (existing !== undefined && !Array.isArray(existing)) {
       throw new Error(
-        '[@timbre/cast] Expected `ios.infoPlist.NSBonjourServices` to be an ' +
+        '[@afkcodes/timbre-cast] Expected `ios.infoPlist.NSBonjourServices` to be an ' +
           `array of strings, received ${typeof existing}. Fix it in your app config.`
       )
     }
@@ -80,7 +80,7 @@ export const withCastIosDeploymentTarget: ConfigPlugin = (config) =>
       compareVersions(current, REQUIRED_IOS_VERSION) < 0
     ) {
       console.warn(
-        `[@timbre/cast] Raising ios.deploymentTarget from ${current ?? 'the RN default'} ` +
+        `[@afkcodes/timbre-cast] Raising ios.deploymentTarget from ${current ?? 'the RN default'} ` +
           `to ${REQUIRED_IOS_VERSION}: the google-cast-sdk pod requires iOS ${REQUIRED_IOS_VERSION}. ` +
           'Devices on older iOS versions will not be able to install the app.'
       )

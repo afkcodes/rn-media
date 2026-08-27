@@ -101,7 +101,7 @@ let instance: AudioSessionApi | undefined
  * The process-wide audio session.
  *
  * The native hybrid object is created on first use, not at import time — this
- * keeps `import '@timbre/audio-session'` free of native side effects (and
+ * keeps `import '@afkcodes/timbre-audio-session'` free of native side effects (and
  * keeps the module importable in a plain Node/vitest process).
  *
  * A singleton is the deliberate exception to CLAUDE.md principle 5: the OS

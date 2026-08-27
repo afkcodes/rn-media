@@ -6,7 +6,7 @@
  *
  * The library that picks a storage engine makes half its users ship two. So
  * this package gains **zero dependencies** from persistence — exactly the
- * precedent `@timbre/media-session` set with `MediaSessionStorage`, and for
+ * precedent `@afkcodes/timbre-media-session` set with `MediaSessionStorage`, and for
  * the same reason. `AsyncStorage`, `react-native-mmkv`, `expo-sqlite/kv-store`
  * and a five-line in-memory map all already satisfy
  * {@link EqualizerStorage} structurally.
@@ -29,7 +29,7 @@ import type { EqualizerPreset } from './equalizer-presets'
 /**
  * Where an equaliser is written. **Injected, structurally typed, and never
  * depended on** — the same two-method shape as
- * `@timbre/media-session`'s `MediaSessionStorage`, deliberately, so an app
+ * `@afkcodes/timbre-media-session`'s `MediaSessionStorage`, deliberately, so an app
  * can hand both libraries the same object.
  *
  * Both methods may be synchronous or return a promise; `useEqualizer` handles

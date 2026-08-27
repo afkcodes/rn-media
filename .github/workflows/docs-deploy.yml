@@ -42,7 +42,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      # The site maps @timbre/* to the packages' source and typechecks samples
+      # The site maps @afkcodes/timbre-* to the packages' source and typechecks samples
       # against it, so the whole workspace must be installed.
       - name: Install workspace
         run: npm ci

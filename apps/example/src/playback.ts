@@ -19,12 +19,12 @@ import {
   toPlayerError,
   type PlayerError,
   type PlayerState,
-} from '@timbre/player'
+} from '@afkcodes/timbre-player'
 import {
   AudioSession,
   AudioSessionPresets,
   wireAudioSession,
-} from '@timbre/audio-session'
+} from '@afkcodes/timbre-audio-session'
 import {
   applyPersisted,
   BaseMediaHandler,
@@ -40,7 +40,7 @@ import {
   type PersistedSession,
   type SearchFocus,
   type SessionError,
-} from '@timbre/media-session'
+} from '@afkcodes/timbre-media-session'
 import { TRACKS, type Track } from './data/tracks'
 import { createDemoResolver } from './resolver'
 import { sessionStorage } from './storage'

@@ -19,7 +19,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { CastButton } from '@timbre/cast'
+import { CastButton } from '@afkcodes/timbre-cast'
 import type { CastIntegration } from '../cast'
 import { COLORS, SPACE, TYPE } from '../theme'
 import { Chip, ChipRow, Detail, Dot, Section, Strip } from './ui'

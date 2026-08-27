@@ -33,7 +33,7 @@ const REPO_ROOT = dirname(WEBSITE_ROOT)
  */
 const PACKAGE_NAMES = ['player', 'audio-session', 'media-session', 'cast']
 const PACKAGES = PACKAGE_NAMES.map((name) => ({
-  name: `@timbre/${name}`,
+  name: `@afkcodes/timbre-${name}`,
   indexFile: join(REPO_ROOT, `packages/${name}/src/index.ts`),
   srcDir: join(REPO_ROOT, `packages/${name}/src`),
   apiDir: join(WEBSITE_ROOT, `docs/api/${name}`),

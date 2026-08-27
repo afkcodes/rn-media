@@ -1,4 +1,4 @@
-# Spec: `@timbre/media-session`
+# Spec: `@afkcodes/timbre-media-session`
 
 Architect-owned contract. The audio_service analog and this library's differentiator:
 a **player-agnostic** media-session / background-playback / remote-control layer.
@@ -9,8 +9,8 @@ docs, never memory. Read PLAN.md §5 first; the design decisions there are settl
 ## Shape
 
 - Nitro module, langs **kotlin + swift**. Package `packages/media-session`,
-  npm `@timbre/media-session`. Singleton service (the OS media session is singular).
-- No dependency on `@timbre/player`. The handler interface is the only contract.
+  npm `@afkcodes/timbre-media-session`. Singleton service (the OS media session is singular).
+- No dependency on `@afkcodes/timbre-player`. The handler interface is the only contract.
 
 ## Core model (audio_service's proven fan-in/fan-out)
 

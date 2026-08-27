@@ -4,8 +4,8 @@ Chapters, speed, ±30 s, a sleep timer that survives the screen going off, and
 resuming exactly where the listener stopped.
 
 ```ts
-import { Player } from '@timbre/player'
-import { BaseMediaHandler, MediaService, type MediaServiceApi } from '@timbre/media-session'
+import { Player } from '@afkcodes/timbre-player'
+import { BaseMediaHandler, MediaService, type MediaServiceApi } from '@afkcodes/timbre-media-session'
 
 const player = await Player.create({ rate: 1.0 })
 

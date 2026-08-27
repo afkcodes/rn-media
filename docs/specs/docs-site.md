@@ -18,7 +18,7 @@ sample typechecks) and **design** (clean, minimal, not stock Docusaurus).
   than promised.
 - **Name centralized** in `docusaurus.config.ts` (one `PROJECT` object:
   npm scope, title, repo URL, domain). No hardcoded `rn-media` in content —
-  the npm name is still the `@timbre/*` placeholder and the rename must stay
+  the npm name is still the `@afkcodes/timbre-*` placeholder and the rename must stay
   cheap (CLAUDE.md).
 - **GitHub Pages** via a `docs-deploy.yml` Action on push to main.
 - Lives in `website/`. Zero coupling to the packages' build.
@@ -117,7 +117,7 @@ approves the look and the machinery before the content port:
 1. `website/` Docusaurus scaffold, TypeScript, the `PROJECT` config object.
 2. The **custom theme** (§4) applied — this is what the owner reviews for
    "cleaner": home + nav + one content page + one API page must look finished.
-3. **TypeDoc wired** and generating the `@timbre/player` API section in full
+3. **TypeDoc wired** and generating the `@afkcodes/timbre-player` API section in full
    (all 191 index entries visible), plus the coverage check (§2.1) passing.
 4. **The MDX sample harness** wired and green on the pages that exist.
 5. One **guide** ported end to end (music-player) and one **concept** page

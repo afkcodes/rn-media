@@ -87,7 +87,7 @@ Pod::Spec.new do |s|
   # CoreFoundation, libz, libiconv, libSystem) and resolve them at runtime; our
   # own sources call none of those APIs directly. media_kit_libs_ios_audio
   # declares none either. AVFoundation/AVAudioSession belongs to
-  # `@timbre/audio-session`, not here.
+  # `@afkcodes/timbre-audio-session`, not here.
 
   s.pod_target_xcconfig = {
     # mpv client API headers. We use the vendored copy in

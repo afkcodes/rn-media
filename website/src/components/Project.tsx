@@ -8,7 +8,7 @@ import { PROJECT, pkg } from '../project'
  * prose goes through one of these, so nothing under `docs/` or `src/pages/`
  * hardcodes it — the rename stays a one-file edit (see src/project.ts).
  *
- * Code samples still import the literal `@timbre/*` specifier: that string is
+ * Code samples still import the literal `@afkcodes/timbre-*` specifier: that string is
  * executable and is what the MDX sample harness typechecks against the
  * packages' source. Those are the only literal occurrences, and they are meant
  * to be literal.
@@ -22,7 +22,7 @@ export function NpmScope(): React.JSX.Element {
   return <code>{PROJECT.scope}</code>
 }
 
-/** `<Pkg name="player" />` → `@timbre/player`. */
+/** `<Pkg name="player" />` → `@afkcodes/timbre-player`. */
 export function Pkg({ name }: { name: string }): React.JSX.Element {
   return <code>{pkg(name)}</code>
 }

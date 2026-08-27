@@ -22,7 +22,7 @@ import {
   toPlayerError,
   type LoudnessNormalizationOptions,
   type Player,
-} from '@timbre/player'
+} from '@afkcodes/timbre-player'
 import { COLORS, TYPE } from '../theme'
 import { Chip, ChipRow, Section } from '../components/ui'
 

@@ -50,7 +50,7 @@ const config: Config = {
   plugins: PROJECT.packages.map((name) => [
     'docusaurus-plugin-typedoc',
     {
-      // The generated API reference for one @timbre/* package — every index.ts
+      // The generated API reference for one @afkcodes/timbre-* package — every index.ts
       // export rendered from its real TSDoc. This is the mechanism that makes
       // "nothing missed" provable across all four packages (spec §2.1).
       id: `${name}-api`,

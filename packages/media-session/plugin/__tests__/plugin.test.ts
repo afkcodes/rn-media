@@ -17,7 +17,7 @@ import withRnMediaMediaSessionRunOnce, {
   withRnMediaMediaSession,
 } from '../src/index'
 
-const PLUGIN_NAME = '@timbre/media-session'
+const PLUGIN_NAME = '@afkcodes/timbre-media-session'
 
 /** `@expo/config-plugins` does not re-export it; take it off the plugin type. */
 type ExpoConfig = Parameters<ConfigPlugin>[0]

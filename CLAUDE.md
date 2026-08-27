@@ -107,5 +107,5 @@ Key contracts (details in PLAN.md):
 
 - Dev machine is Linux: Android builds/tests run locally (SDK+NDK present); iOS code
   is written here but compiled only on CI/macOS — structure iOS work so CI catches it.
-- Naming: npm scope is `@timbre/*` (chosen name);
+- Naming: npm scope is `@afkcodes/timbre-*` (chosen name);
   keep the name in as few places as possible to make the rename cheap.

@@ -61,7 +61,7 @@ export interface PositionAnchor {
  * @remarks
  * **Why a second shape exists at all.** {@link PositionAnchor} is seconds
  * (`{ position, timestamp, rate }`) because that is mpv's unit; media3,
- * `MPNowPlayingInfoCenter` and therefore `@timbre/media-session`'s
+ * `MPNowPlayingInfoCenter` and therefore `@afkcodes/timbre-media-session`'s
  * `PlaybackState.position` are milliseconds (`{ value, at, rate }`). Converting
  * at the call site is a one-line arithmetic chore that was silently getting the
  * factor of 1000 wrong in real integrations — a lock-screen scrubber that
@@ -69,8 +69,8 @@ export interface PositionAnchor {
  * conversion, done once, in the reducer, in the exact shape the session layer
  * accepts.
  *
- * **Structural, not imported.** `@timbre/player` does not depend on
- * `@timbre/media-session` (nor the other way round — see CLAUDE.md §2): the
+ * **Structural, not imported.** `@afkcodes/timbre-player` does not depend on
+ * `@afkcodes/timbre-media-session` (nor the other way round — see CLAUDE.md §2): the
  * two types match by *shape*, which is all a structural type system needs, and
  * the player stays usable with any session layer.
  *

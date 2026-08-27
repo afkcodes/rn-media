@@ -24,7 +24,7 @@ import type { HybridObject } from 'react-native-nitro-modules'
  * **This is a device-global fact, so this object is a singleton** — one display
  * per device, exactly like audio focus is one focus per device (CLAUDE.md §5:
  * singletons only where the OS itself is singular). It lives in
- * `@timbre/player` rather than in `@timbre/audio-session` because its only
+ * `@afkcodes/timbre-player` rather than in `@afkcodes/timbre-audio-session` because its only
  * consumer is the player's visualizer, and a player-only install must not have
  * to pull in a second native module to stop burning battery.
  *
@@ -59,7 +59,7 @@ export interface RnMediaScreenState extends HybridObject<{
    * the current one — read {@link interactive} for that.
    * @returns An id to hand back to {@link removeScreenStateListener}. Ids are
    * used rather than function identity for the reason
-   * `@timbre/audio-session` documents: a Nitro callback is an opaque native
+   * `@afkcodes/timbre-audio-session` documents: a Nitro callback is an opaque native
    * closure and cannot be compared across the bridge.
    *
    * @remarks

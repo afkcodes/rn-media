@@ -1,5 +1,5 @@
 {
-  "name": "@timbre/player",
+  "name": "@afkcodes/timbre-player",
   "version": "0.1.0",
   "description": "React Native audio player built on libmpv, powered by Nitro Modules",
   "main": "./lib/commonjs/index.js",

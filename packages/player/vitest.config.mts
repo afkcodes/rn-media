@@ -8,8 +8,8 @@ import { defineConfig } from 'vitest/config'
  * `src/__tests__/fake-mpv-client.ts` in plain Node. `src/player.ts` does import
  * `src/native-client.ts` statically, though, so the *module graph* reaches
  * `react-native-nitro-modules` (which needs a React Native runtime) — hence the
- * stub alias below, the same one `@timbre/audio-session` and
- * `@timbre/media-session` use. The only DOM need is
+ * stub alias below, the same one `@afkcodes/timbre-audio-session` and
+ * `@afkcodes/timbre-media-session` use. The only DOM need is
  * `@testing-library/react`'s renderer, hence the `jsdom` environment.
  */
 export default defineConfig({

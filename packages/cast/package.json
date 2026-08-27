@@ -1,5 +1,5 @@
 {
-  "name": "@timbre/cast",
+  "name": "@afkcodes/timbre-cast",
   "version": "0.1.0",
   "description": "First-party Google Cast sender binding, audio-scoped: discovery, sessions, RemoteMediaClient + receiver queue, typed errors \u2014 powered by Nitro Modules",
   "main": "./lib/commonjs/index.js",
@@ -13,8 +13,8 @@
     "release": "semantic-release",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:android": "cd ../../apps/example/android && ./gradlew :timbre_cast:testReleaseUnitTest -PreactNativeArchitectures=arm64-v8a",
-    "lint:android": "cd ../../apps/example/android && ./gradlew :timbre_cast:lintRelease -PreactNativeArchitectures=arm64-v8a",
+    "test:android": "cd ../../apps/example/android && ./gradlew :afkcodes_timbre-cast:testReleaseUnitTest -PreactNativeArchitectures=arm64-v8a",
+    "lint:android": "cd ../../apps/example/android && ./gradlew :afkcodes_timbre-cast:lintRelease -PreactNativeArchitectures=arm64-v8a",
     "build": "npm run typecheck && bob build && npm run build:plugin",
     "build:plugin": "tsc -p plugin",
     "codegen": "nitrogen --logLevel=\"debug\" && npm run build",
