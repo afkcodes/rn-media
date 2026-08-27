@@ -1,0 +1,210 @@
+/**
+ * The theme. Tokens live in tokens.css; this file only maps them onto
+ * Docusaurus's `--ifm-*` variables and adds the handful of component styles the
+ * design needs (API signature block, constraint callout, home layout).
+ *
+ * Design rules, enforced here: near-neutral base, one accent for links/active/
+ * focus only, a real type scale, ~72ch measure, calm code in both modes, a
+ * minimal sticky bar, no emoji bullets, no hero gimmicks.
+ */
+@import './tokens.css';
+
+:root {
+  --ifm-color-primary: var(--rn-accent);
+  --ifm-color-primary-dark: var(--rn-accent-strong);
+  --ifm-color-primary-darker: var(--rn-accent-strong);
+  --ifm-color-primary-darkest: var(--rn-accent-strong);
+  --ifm-color-primary-light: var(--rn-accent);
+  --ifm-color-primary-lighter: var(--rn-accent);
+  --ifm-color-primary-lightest: var(--rn-accent);
+
+  --ifm-background-color: var(--rn-bg);
+  --ifm-background-surface-color: var(--rn-surface);
+  --ifm-font-color-base: var(--rn-text);
+  --ifm-color-content-secondary: var(--rn-text-muted);
+  --ifm-heading-color: var(--rn-text);
+
+  --ifm-font-family-base: var(--rn-font-sans);
+  --ifm-font-family-monospace: var(--rn-font-mono);
+  --ifm-font-size-base: var(--rn-text-base);
+  --ifm-line-height-base: 1.65;
+  --ifm-heading-font-weight: 650;
+  --ifm-h1-font-size: var(--rn-text-3xl);
+  --ifm-h2-font-size: var(--rn-text-2xl);
+  --ifm-h3-font-size: var(--rn-text-xl);
+
+  --ifm-link-color: var(--rn-accent);
+  --ifm-link-hover-color: var(--rn-accent-strong);
+  --ifm-link-decoration: none;
+  --ifm-link-hover-decoration: underline;
+
+  --ifm-code-font-size: 0.875em;
+  --ifm-code-background: var(--rn-code-inline-bg);
+  --ifm-code-border-radius: var(--rn-radius-sm);
+  --ifm-pre-background: var(--rn-code-bg);
+
+  --ifm-toc-border-color: var(--rn-border);
+  --ifm-color-emphasis-100: var(--rn-surface-2);
+  --ifm-color-emphasis-200: var(--rn-border);
+  --ifm-color-emphasis-300: var(--rn-border-strong);
+  --ifm-table-border-color: var(--rn-border);
+  --ifm-table-stripe-background: var(--rn-surface);
+  --ifm-hr-border-color: var(--rn-border);
+
+  --ifm-navbar-background-color: color-mix(in srgb, var(--rn-bg) 85%, transparent);
+  --ifm-navbar-shadow: none;
+  --ifm-navbar-height: 3.75rem;
+  --ifm-menu-color: var(--rn-text-muted);
+  --ifm-menu-color-active: var(--rn-accent);
+  --ifm-breadcrumb-color-active: var(--rn-accent);
+
+  --docusaurus-highlighted-code-line-bg: var(--rn-surface-2);
+}
+
+[data-theme='dark'] {
+  --ifm-background-color: var(--rn-bg);
+  --ifm-background-surface-color: var(--rn-surface);
+  --ifm-font-color-base: var(--rn-text);
+  --ifm-heading-color: var(--rn-text);
+  --ifm-color-content-secondary: var(--rn-text-muted);
+  --docusaurus-highlighted-code-line-bg: var(--rn-surface-2);
+}
+
+/* ---- Base rhythm ------------------------------------------------------- */
+
+html,
+body {
+  background: var(--rn-bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+/* Content measure: keep prose to a comfortable line length. Tables and code
+   opt out below so wide content still uses the column. */
+.theme-doc-markdown.markdown {
+  max-width: var(--rn-content-measure);
+}
+.theme-doc-markdown.markdown .table-wrapper,
+.theme-doc-markdown.markdown pre,
+.theme-doc-markdown.markdown .rn-signature {
+  max-width: none;
+}
+
+/* ---- Minimal sticky bar ----------------------------------------------- */
+
+.navbar {
+  border-bottom: 1px solid var(--rn-border);
+  backdrop-filter: saturate(180%) blur(10px);
+}
+.navbar__title {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.navbar__link {
+  font-size: var(--rn-text-sm);
+  color: var(--rn-text-muted);
+}
+.navbar__link:hover,
+.navbar__link--active {
+  color: var(--rn-text);
+}
+.navbar__link--active::after {
+  content: '';
+  display: block;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--rn-accent);
+  margin-top: 4px;
+}
+
+/* ---- Code blocks: calm, bordered, low-contrast ------------------------ */
+
+.theme-code-block,
+pre[class*='language-'] {
+  border: 1px solid var(--rn-code-border);
+  border-radius: var(--rn-radius);
+  box-shadow: none !important;
+  font-size: 0.9em;
+}
+code {
+  border: 1px solid var(--rn-code-border);
+  border-radius: var(--rn-radius-sm);
+  padding: 0.1em 0.35em;
+}
+.theme-code-block code {
+  border: 0;
+  padding: 0;
+}
+
+/* ---- Tables ------------------------------------------------------------ */
+
+.markdown table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--rn-text-sm);
+}
+.markdown table thead tr {
+  border-bottom: 2px solid var(--rn-border-strong);
+}
+.markdown table th {
+  font-weight: 600;
+  text-align: left;
+  color: var(--rn-text-muted);
+}
+
+/* ---- Focus: the accent, everywhere, once ------------------------------ */
+
+a:focus-visible,
+button:focus-visible,
+.navbar__link:focus-visible,
+.menu__link:focus-visible {
+  outline: 2px solid var(--rn-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ---- Sidebar --------------------------------------------------------- */
+
+.menu {
+  font-size: var(--rn-text-sm);
+}
+.menu__link--active {
+  font-weight: 600;
+  background: var(--rn-accent-soft);
+}
+
+/* ---- API signature block (shared by every generated page) ------------- */
+
+.rn-signature {
+  font-family: var(--rn-font-mono);
+  font-size: var(--rn-text-sm);
+  background: var(--rn-code-bg);
+  border: 1px solid var(--rn-code-border);
+  border-radius: var(--rn-radius);
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+}
+
+/* ---- Constraint callout: one muted line, distinct from a warning ------ */
+
+.rn-constraint {
+  border-left: 3px solid var(--rn-constraint-border);
+  background: var(--rn-constraint-bg);
+  color: var(--rn-constraint-text);
+  padding: 0.6rem 0.95rem;
+  border-radius: 0 var(--rn-radius-sm) var(--rn-radius-sm) 0;
+  font-size: var(--rn-text-sm);
+  margin: 1rem 0;
+}
+.rn-constraint strong {
+  color: var(--rn-text);
+}

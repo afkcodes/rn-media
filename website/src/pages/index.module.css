@@ -1,0 +1,151 @@
+.main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 4rem 1.5rem 5rem;
+}
+
+/* ---- Hero: two columns on wide, stacked on narrow ---------------------- */
+
+.hero {
+  display: grid;
+  /* minmax(0, …) lets the code column shrink and scroll instead of blowing the
+     grid out past the container (an `fr` track's implicit min is min-content). */
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 3rem;
+  align-items: start;
+}
+
+.title {
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin: 0 0 0.5rem;
+}
+
+.tagline {
+  font-size: 1.35rem;
+  line-height: 1.35;
+  color: var(--rn-text);
+  font-weight: 500;
+  margin: 0 0 1rem;
+}
+
+.sub {
+  font-size: 1.02rem;
+  line-height: 1.6;
+  color: var(--rn-text-muted);
+  margin: 0 0 1.5rem;
+  max-width: 46ch;
+}
+
+.installBox {
+  margin-bottom: 1.5rem;
+}
+
+.cta {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.primaryBtn,
+.secondaryBtn {
+  display: inline-flex;
+  align-items: center;
+  height: 2.6rem;
+  padding: 0 1.15rem;
+  border-radius: var(--rn-radius);
+  font-size: var(--rn-text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.primaryBtn {
+  background: var(--rn-accent);
+  color: var(--rn-accent-contrast);
+}
+.primaryBtn:hover {
+  background: var(--rn-accent-strong);
+  color: var(--rn-accent-contrast);
+  text-decoration: none;
+}
+.secondaryBtn {
+  background: transparent;
+  color: var(--rn-text);
+  border: 1px solid var(--rn-border-strong);
+}
+.secondaryBtn:hover {
+  border-color: var(--rn-text-muted);
+  text-decoration: none;
+}
+
+.heroExample {
+  min-width: 0;
+}
+.heroExample :global(pre) {
+  margin: 0;
+}
+
+/* ---- Matrix ------------------------------------------------------------ */
+
+.matrixSection {
+  margin-top: 4.5rem;
+  padding-top: 3rem;
+  border-top: 1px solid var(--rn-border);
+}
+
+.matrixHeading {
+  font-size: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--rn-text-sm);
+}
+.matrix th,
+.matrix td {
+  text-align: left;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--rn-border);
+  vertical-align: top;
+}
+.matrix thead th {
+  color: var(--rn-text-muted);
+  font-weight: 600;
+  border-bottom: 2px solid var(--rn-border-strong);
+}
+.matrix tbody th {
+  font-weight: 500;
+  color: var(--rn-text);
+}
+.oursHead {
+  color: var(--rn-accent) !important;
+}
+.cellYes {
+  color: var(--rn-text);
+}
+.cellNo {
+  color: var(--rn-text-faint);
+}
+.cellMuted {
+  color: var(--rn-text-muted);
+}
+
+.matrixNote {
+  margin-top: 1rem;
+  font-size: var(--rn-text-sm);
+  color: var(--rn-text-muted);
+}
+
+/* ---- Responsive -------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .title {
+    font-size: 2.4rem;
+  }
+}

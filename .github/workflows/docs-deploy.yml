@@ -1,0 +1,86 @@
+name: Docs
+
+# Builds the documentation site on every push to main and runs both quality
+# gates. Deployment to GitHub Pages is a SEPARATE, manual job (workflow_dispatch)
+# and is not wired to run automatically — the architect enables the public
+# deploy, and the domain is a pending decision (name gate).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'packages/*/src/**'
+      - '.github/workflows/docs-deploy.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'packages/*/src/**'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy to GitHub Pages after building'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build + gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The site maps @rn-media/* to the packages' source and typechecks samples
+      # against it, so the whole workspace must be installed.
+      - name: Install workspace
+        run: npm ci
+
+      - name: Install site deps
+        working-directory: website
+        run: npm install --no-save
+
+      - name: Build (generates the API reference, fails on broken links)
+        working-directory: website
+        run: npm run build
+
+      - name: Gate — API coverage
+        working-directory: website
+        run: npm run check:api
+
+      - name: Gate — MDX samples typecheck
+        working-directory: website
+        run: npm run check:mdx
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/build
+
+  deploy:
+    name: Deploy to GitHub Pages (manual)
+    # Gated: only on an explicit manual run that opts in. Never on push.
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
