@@ -127,8 +127,7 @@ function App(): React.JSX.Element {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.wordmark}>Timbre</Text>
-          <Text style={styles.kicker}>now playing</Text>
+          <Text style={styles.kicker}>Now Playing</Text>
         </View>
 
         <NowPlaying
@@ -153,7 +152,6 @@ function App(): React.JSX.Element {
           onToggle={transport.toggle}
           onNext={transport.next}
           onSeekBy={transport.seekBy}
-          onStop={() => void pb.stopSession()}
         />
 
         {/* While the player re-attempts a failed entry NO `error` event fires —

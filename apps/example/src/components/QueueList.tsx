@@ -77,7 +77,7 @@ export const QueueList = React.memo(function QueueList({
 }): React.JSX.Element {
   return (
     <Section
-      title="Queue"
+      title="Up Next"
       accessory={
         <Text style={styles.counter}>
           {index + 1} / {queue.length}
