@@ -752,3 +752,108 @@ describe('useEqualizer — moving a band', () => {
     }
   })
 })
+
+/**
+ * The hook composes with the app's own chain instead of replacing it.
+ *
+ * Before this, `useEqualizer` called `Player.setAudioFilters` wholesale, which
+ * meant mounting an EQ screen erased whatever the app had set — a defect the
+ * README documented as a *pitfall* ("the EQ screen's changes get wiped", remedy:
+ * "put the rest of your chain in its `extraFilters` option"). It is the API's
+ * defect, not the user's; the hook now owns only its own labelled entries.
+ */
+describe('useEqualizer — composition with the app’s own chain', () => {
+  it('leaves a chain set before it in place', () => {
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    const { result } = mount()
+
+    act(() => {
+      result.current.applyPreset('rock')
+    })
+
+    expect(af()).toContain('@rnmedia_eq_31:equalizer=')
+    expect(af().endsWith('crossfeed')).toBe(true)
+  })
+
+  it('leaves a chain set WHILE it is mounted in place, across a drag', async () => {
+    const { result } = mount()
+    act(() => {
+      result.current.applyPreset('rock')
+    })
+    // The app changes its own half behind the EQ screen. This used to be the
+    // change that "got wiped" by the next slider move.
+    act(() => {
+      player.setAudioFilters([AudioFilters.crossfeed({ strength: 0.3 })])
+    })
+    expect(af()).toContain('crossfeed')
+
+    await act(async () => {
+      result.current.setBandGain(0, 6)
+    })
+
+    expect(af()).toContain('crossfeed')
+  })
+
+  it('an EQ switched off does not clear the app’s filters', () => {
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    const { result } = mount()
+    act(() => {
+      result.current.applyPreset('rock')
+    })
+    act(() => {
+      result.current.setEnabled(false)
+    })
+    // `setEnabled(false)` writes an empty EQ half. Before the fix that was an
+    // empty *user* half, i.e. `af=''`, and the crossfeed was gone.
+    expect(af()).toBe('crossfeed')
+  })
+
+  it('composes with the managed loudness entry from either direction', () => {
+    const { result } = mount()
+    player.setLoudnessNormalization(true)
+    act(() => {
+      result.current.applyPreset('rock')
+    })
+    expect(af().endsWith('@rnmedia_loudnorm:loudnorm=I=-16')).toBe(true)
+    expect(af().startsWith('@rnmedia_eq_preamp:')).toBe(true)
+  })
+
+  it('still honours the deprecated `extraFilters`, in the same position', () => {
+    const withOption = mount({
+      extraFilters: [AudioFilters.crossfeed()],
+    })
+    act(() => {
+      withOption.result.current.applyPreset('rock')
+    })
+    const viaOption = af()
+    withOption.unmount()
+
+    // The direct call is the replacement, and it compiles to the same chain —
+    // which is what makes the deprecation a rename rather than a migration.
+    player.setEqualizerFilters(null)
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    const direct = mount()
+    act(() => {
+      direct.result.current.applyPreset('rock')
+    })
+    expect(af()).toBe(viaOption)
+    direct.unmount()
+  })
+
+  it('mounting over an existing chain costs one write and changes nothing', () => {
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    const before = client.propertyWrites.filter(
+      (name) => name === MpvProperty.audioFilters
+    ).length
+    mount()
+    // One write, and only one: the hook claims the equaliser half on mount
+    // (that is what makes it *the* owner), and a flat curve compiles to no
+    // entries — so the string mpv ends up with is byte-identical to the one it
+    // already had. Before the fix, this same write was `af=''`.
+    expect(
+      client.propertyWrites.filter((name) => name === MpvProperty.audioFilters)
+        .length
+    ).toBe(before + 1)
+    expect(af()).toBe('crossfeed')
+  })
+})

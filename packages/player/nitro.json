@@ -19,6 +19,12 @@
         "implementationClassName": "HybridMpvClient"
       }
     },
+    "RnMediaContentSource": {
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridRnMediaContentSource"
+      }
+    },
     "RnMediaScreenState": {
       "android": {
         "language": "kotlin",

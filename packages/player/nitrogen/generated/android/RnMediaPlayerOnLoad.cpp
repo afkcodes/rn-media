@@ -15,6 +15,7 @@
 #include <fbjni/fbjni.h>
 #include <NitroModules/HybridObjectRegistry.hpp>
 
+#include "JHybridRnMediaContentSourceSpec.hpp"
 #include "JHybridRnMediaScreenStateSpec.hpp"
 #include "JFunc_void_bool.hpp"
 #include "HybridMpvClient.hpp"
@@ -28,6 +29,14 @@ int initialize(JavaVM* vm) {
   });
 }
 
+struct JHybridRnMediaContentSourceSpecImpl: public jni::JavaClass<JHybridRnMediaContentSourceSpecImpl, JHybridRnMediaContentSourceSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/rnmediaplayer/HybridRnMediaContentSource;";
+  static std::shared_ptr<JHybridRnMediaContentSourceSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridRnMediaContentSourceSpecImpl::javaobject()>();
+    jni::local_ref<JHybridRnMediaContentSourceSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridRnMediaContentSourceSpec();
+  }
+};
 struct JHybridRnMediaScreenStateSpecImpl: public jni::JavaClass<JHybridRnMediaScreenStateSpecImpl, JHybridRnMediaScreenStateSpec::JavaPart> {
   static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/rnmediaplayer/HybridRnMediaScreenState;";
   static std::shared_ptr<JHybridRnMediaScreenStateSpec> create() {
@@ -42,6 +51,7 @@ void registerAllNatives() {
   using namespace margelo::nitro::rnmediaplayer;
 
   // Register native JNI methods
+  margelo::nitro::rnmediaplayer::JHybridRnMediaContentSourceSpec::CxxPart::registerNatives();
   margelo::nitro::rnmediaplayer::JHybridRnMediaScreenStateSpec::CxxPart::registerNatives();
   margelo::nitro::rnmediaplayer::JFunc_void_bool_cxx::registerNatives();
 
@@ -53,6 +63,12 @@ void registerAllNatives() {
                     "The HybridObject \"HybridMpvClient\" is not default-constructible! "
                     "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
       return std::make_shared<HybridMpvClient>();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "RnMediaContentSource",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridRnMediaContentSourceSpecImpl::create();
     }
   );
   HybridObjectRegistry::registerHybridObjectConstructor(

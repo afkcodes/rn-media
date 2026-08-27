@@ -18,6 +18,17 @@ export { getScreenStateSource, setScreenStateSource } from './screen-state'
 export type { ScreenStateSource } from './screen-state'
 export type { RnMediaScreenState } from './specs/screen-state.nitro'
 
+export {
+  CONTENT_URI_FD_LIMIT,
+  CONTENT_URI_SCHEME,
+  ContentUriResolver,
+  getContentUriOpener,
+  isContentUri,
+  setContentUriOpener,
+} from './content-uri'
+export type { ContentUriOpener } from './content-uri'
+export type { RnMediaContentSource } from './specs/content-source.nitro'
+
 export type {
   ChapterEntry,
   MpvClient,
@@ -149,7 +160,11 @@ export {
   DEFAULT_RESOLVER_TTL_MS,
   SourceResolverController,
 } from './source-resolver'
-export type { SourceResolver, SourceResolverOptions } from './source-resolver'
+export type {
+  BuiltInSourceRewrite,
+  SourceResolver,
+  SourceResolverOptions,
+} from './source-resolver'
 
 export {
   BUFFERED_POSITION_STEP,
@@ -168,6 +183,7 @@ export type {
   PlayerState,
   PlayerStatus,
   PositionAnchor,
+  PositionAnchorMs,
   ReducerContext,
   TrackChangeReads,
 } from './state'
@@ -202,6 +218,7 @@ export {
   DEFAULT_USER_AGENT,
   LIVE_EOF_BUDGET_RESET_SECONDS,
   LOUDNESS_NORMALIZATION_LABEL,
+  MANAGED_FILTER_LABEL_PREFIX,
   Player,
 } from './player'
 export type {

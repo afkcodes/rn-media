@@ -87,6 +87,24 @@ receipt** (NTP-skew clamped) and media3's position supplier projects by pure
 subtraction — the lock-screen scrubber advances with zero bridge traffic in
 either direction.
 
+**The state carries the anchor twice, in two units, and that is the fix for a
+real bug.** `PlayerState.positionAnchor` is seconds (`{position, timestamp,
+rate}`) because seconds is mpv's unit; `PlayerState.positionAnchorMs` is
+milliseconds in `{value, at, rate}` — structurally the `PositionAnchor`
+`@rn-media/media-session` broadcasts, matched by shape and never imported, so
+neither package depends on the other (§3). The conversion used to be the app's,
+and it is a factor of a thousand and a `rate: 0` waiting to be typed wrong: the
+README carried "the lock-screen scrubber is off by 1000×" as a *pitfall*, i.e.
+as the user's problem, which it was not. The reducer derives it next to the
+anchor it mirrors, recomputing only when the value, the timestamp or
+*whether the position is advancing* actually changes — the field keeps its
+object identity across every other event, so nothing subscribed to the scrubber
+wakes for an unrelated snapshot. The `rate` difference is the load-bearing part:
+`positionAnchor.rate` is mpv's `speed` and stays `1` while paused (the local
+projection gates on status separately), while a remote surface projects `value +
+elapsed × rate` and nothing else — so the millisecond anchor reports `0`
+whenever `isAdvancing` is false.
+
 Two consequences that are API decisions rather than implementation details.
 **Discontinuities are events** (`seekStarted`/`seekCompleted`, carrying
 `reason: 'seek' | 'auto-advance'`), derived from mpv's `MPV_EVENT_SEEK` and the
@@ -614,6 +632,28 @@ same `level` semantics are a live trap for hand-built chains
 (`limiter({ limit: 0.891 })` limits to −1 dBFS and then scales back to 0), so
 `LimiterOptions.autoLevel` says so in as many words.
 
+**The chain has three halves, not two, and `useEqualizer` owns one of them**
+(2026-08-27). The EQ hook used to call `setAudioFilters` *wholesale*, which made
+mounting an EQ screen erase whatever the app had set — shipped with an
+`extraFilters` option to fold the app's chain into the hook's, and a README
+pitfall row telling users to use it. That is the library's defect wearing a
+documentation hat: two independent owners were sharing one property. They now
+have one half each. `Player.setEqualizerFilters(entries | null)` owns the
+labelled `@rnmedia_eq_…` entries, `setAudioFilters` owns the app's, and
+`setLoudnessNormalization` owns its one entry; the player composes
+**equaliser → user → loudness** on every write, from bookkeeping committed only
+after mpv accepted the property. The order is the same one the old code
+produced, and each position is load-bearing: the headroom pre-amp must
+attenuate before the boosts it is sized for, the EQ limiter must sit at the end
+of what it bounds, and the normalizer must hear everything above it.
+`extraFilters` still folds into the managed half — byte-identical output — and
+is `@deprecated` for one release rather than removed. The whole `rnmedia_`
+label prefix is now reserved: `setAudioFilters` refuses a user entry carrying
+one, because two owners of one mpv label silently overwrite each other, and
+reserving the prefix rather than today's three labels means the next managed
+entry needs no second decision. `setAudioFilterParam` updates *both* mirrors, so
+an in-place gain change survives the next compose from either side.
+
 **Loudness normalization is a *managed entry* of this same chain, not a second
 mechanism** (2026-08-13). `Player.setLoudnessNormalization(enabled, options?)`
 owns exactly one labelled entry — `@rnmedia_loudnorm:loudnorm=…` — appended
@@ -636,8 +676,20 @@ loudness. The default target is −16 LUFS (AES TD1008.1.21-9, Table 1:
 track-normalized music −16 LUFS), overriding ffmpeg's broadcast-derived −24,
 which reads whisper-quiet on phones; TP stays at ffmpeg's −2 dBTP. ReplayGain
 and loudnorm level the same thing by different means and their gains stack if
-both are on; both APIs' TSDoc says choose one (tagged files → ReplayGain at
-zero DSP cost, untagged → loudnorm).
+both are on. Until 2026-08-27 both APIs' TSDoc said "choose one" and the README
+listed the symptom ("everything is 3 dB too loud") as a pitfall — advice, in
+place of a rule the API could hold. **They are now mutually exclusive by
+construction**: `setLoudnessNormalization(true)` writes `replaygain=no`, and
+`setReplayGain({mode ≠ 'no'})` removes the managed entry. `mode: 'no'` is not
+"enabling" and leaves the normalizer alone, so `{mode: 'no', fallback: 0}` still
+means only "stop honouring tags". The state of both is tracked in TypeScript —
+seeded from `PlayerOptions.replayGain`, since that is written into mpv's init
+options rather than through the setter — so the rule costs **no** extra bridge
+traffic when the loser was already off, and exactly one property write when it
+was not; `getReplayGainMode()` and `getLoudnessNormalization()` are how a
+settings screen with two switches sees which one won. (Tagged files →
+ReplayGain at zero DSP cost, untagged → loudnorm; that part of the advice
+stands, it is just no longer load-bearing.)
 
 ### 19. Background hardening: persistence is injected, the sleep timer is native, the FGS grace period is a knob
 Three answers to the same question — *what happens to a paused, demoted,
@@ -2455,6 +2507,69 @@ consecutive track jumps on the device now report zero (was one per jump).
 
 **Still pending:** the idle-state sign-in screen photograph, and CarPlay, which
 is CI-compiled only until Apple hardware exists (the cast precedent, #48).
+
+### 32. `content://` is a Binder call, so it becomes a file descriptor
+
+Android's storage picker, `MediaStore` and every SAF provider hand back a
+`content://` URI. It is not a path and not a URL: it names a row in another
+app's `ContentProvider`, reachable only by asking `ContentResolver` to open it
+*for this process*, under the grant the picker issued. **No amount of work
+inside libmpv or FFmpeg could ever add a handler for the scheme** — the
+resolution is an Android IPC, not a URI parse — which is why the README carried
+this as a parity gap against iOS (whose document picker returns a `file://` URL
+that plays) for as long as it did. The gap closes the one way it can: Kotlin
+opens the URI and what crosses back is a **file descriptor**, which mpv reads
+through its own `fd://` protocol (`DOCS/man/mpv.rst`, "Protocols";
+`stream/stream_file.c:298-313`, which validates it with `fcntl(fd, F_GETFD)`
+and then treats it as an ordinary file). One `ContentResolver.openFileDescriptor
+(uri, "r").detachFd()` per URI, no copy, no temporary file.
+
+**It is a *stage of the source-resolver seam*, not a second mechanism.** The
+rewrite runs where an app's own resolver runs, so both paths share one cache,
+one determinism guarantee and one error channel: built-in on the URI going in
+(so a queued `content://` is already an `fd://` when the app's resolver sees it,
+and a resolver returns what it did not mint unchanged) and again on the URL
+coming out (so a resolver that *produces* a `content://` — a library id mapped
+to a `MediaStore` row — also works). Both passes are idempotent and share one
+descriptor table, so the cost is two prefix comparisons.
+
+**It arms lazily, and that is the performance decision.** Arming the seam arms
+mpv's load hooks, which means every load boundary from then on is answered from
+JavaScript instead of natively. So nothing is armed at creation: `load()`,
+`loadPlaylist()` and `playlist.add()` arm it the first time a `content://` URI
+is actually handed to them. A player that only plays `https://` and `file://`
+— which is most of them — never pays a JavaScript hop at a track boundary.
+
+**`fd://`, not `fdclose://`, and the descriptors are ours.** `fdclose://` closes
+the descriptor when the stream ends (`stream_file.c:313`), which reads like the
+tidy choice and is wrong here: the URL a resolver returns must stay
+byte-identical for the entry's life (mpv compares the prefetch and play-time
+URLs to decide whether the prefetched stream can be reused,
+`player/loadfile.c:1223`), so the *same* `fd://n` is opened again on a replay, a
+`loop`, a `jumpTo` back, or the play-time pass after a prefetch mpv dropped. mpv
+rewinds the descriptor on every open (`stream_file.c:373-374`), so reopening is
+correct — provided nobody closed it. Ownership therefore stays in TypeScript:
+one descriptor per URI, bounded at 64 (mpv holds at most two streams open, so
+the bound is slack, not a working set), all closed by `Player.destroy()` **after**
+`client.destroy()` has shut mpv's streams down.
+
+**Two honest edges, both stated in the README rather than papered over.**
+Seekability is the provider's, not ours: mpv decides it by `lseek`-ing the
+descriptor (`stream_file.c:373-379`), so a file-backed row is seekable with a
+real duration while a pipe-backed one (`openPipeHelper`) is not — and the
+existing live-stream machinery reports that honestly, `seekable: false` →
+`isLive: true` → no duration, with no new state and no new code path. And mpv
+reads with `read()` (`stream_file.c:126`), which advances one shared file
+offset, so the *same* `content://` URI at two **adjacent** queue positions would
+have the playing entry and the prefetched one interleaving reads. Every other
+duplication — elsewhere in the queue, a replay, a loop — is sequential and fine.
+
+**A platform without the binding is not an error.** The `RnMediaContentSource`
+HybridObject is declared for Android only, so `createHybridObject` throws on iOS
+and on an Android binary built before this shipped; both answer "no rewrite",
+the URI reaches mpv unchanged, and it fails exactly as it did before. That is
+capability detection rather than `Platform.OS`, which also keeps `react-native`
+out of the playback path (§5).
 
 ## Platform truths we build around (learned, verified)
 

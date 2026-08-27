@@ -199,3 +199,110 @@ describe('setLoudnessNormalization', () => {
     )
   })
 })
+
+/**
+ * ReplayGain and loudness normalization level the same thing by different means
+ * and their gains *stack*. The README's own "Common pitfalls" carried the
+ * symptom — "everything is 3 dB too loud (or quiet)" — with "pick one" as the
+ * remedy, which made the defect the user's problem. It is the API's: these two
+ * switches are mutually exclusive, and switching one on switches the other off.
+ */
+describe('ReplayGain ⇄ loudness normalization are mutually exclusive', () => {
+  /** The last `replaygain` value written to mpv. */
+  function replayGain(): string | undefined {
+    const value = client.written.get(MpvProperty.replayGain)
+    return typeof value === 'string' ? value : undefined
+  }
+
+  /** How many times `replaygain` was written. */
+  function replayGainWrites(): number {
+    return client.propertyWrites.filter(
+      (name) => name === MpvProperty.replayGain
+    ).length
+  }
+
+  it('turning normalization on switches ReplayGain off, and says so', async () => {
+    const player = await createPlayer()
+    player.setReplayGain({ mode: 'album' })
+    expect(player.getReplayGainMode()).toBe('album')
+
+    player.setLoudnessNormalization(true)
+
+    expect(replayGain()).toBe('no')
+    expect(player.getReplayGainMode()).toBe('no')
+    expect(player.getLoudnessNormalization()).toBeDefined()
+    expect(af()).toBe(MANAGED_DEFAULT)
+  })
+
+  it('enabling ReplayGain removes the managed loudnorm entry', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([...USER_CHAIN])
+    player.setLoudnessNormalization(true)
+    expect(af()).toBe(`${USER_CHAIN_AF},${MANAGED_DEFAULT}`)
+
+    player.setReplayGain({ mode: 'track' })
+
+    expect(player.getLoudnessNormalization()).toBeUndefined()
+    expect(player.getReplayGainMode()).toBe('track')
+    // The user half is untouched — the exclusion removes one managed entry,
+    // not the chain.
+    expect(af()).toBe(USER_CHAIN_AF)
+  })
+
+  it('`mode: no` is not "enabling", so it leaves the normalizer alone', async () => {
+    const player = await createPlayer()
+    player.setLoudnessNormalization(true)
+    player.setReplayGain({ mode: 'no', fallback: 0 })
+    expect(player.getLoudnessNormalization()).toBeDefined()
+    expect(af()).toBe(MANAGED_DEFAULT)
+  })
+
+  it('costs no extra bridge traffic when there is nothing to switch off', async () => {
+    const player = await createPlayer()
+    const before = replayGainWrites()
+    // ReplayGain was never enabled, so the toggle must not write `replaygain`
+    // "just in case" — the whole point of tracking both states in TypeScript.
+    player.setLoudnessNormalization(true)
+    expect(replayGainWrites()).toBe(before)
+
+    const afWrites = client.propertyWrites.filter(
+      (name) => name === MpvProperty.audioFilters
+    ).length
+    // …and symmetrically: normalization is off now? No — it is on, so this one
+    // legitimately rewrites `af` exactly once.
+    player.setReplayGain({ mode: 'album' })
+    expect(
+      client.propertyWrites.filter((name) => name === MpvProperty.audioFilters)
+        .length
+    ).toBe(afWrites + 1)
+
+    // With both off, a further ReplayGain change touches `af` not at all.
+    const settled = client.propertyWrites.filter(
+      (name) => name === MpvProperty.audioFilters
+    ).length
+    player.setReplayGain({ mode: 'track' })
+    expect(
+      client.propertyWrites.filter((name) => name === MpvProperty.audioFilters)
+        .length
+    ).toBe(settled)
+  })
+
+  it('seeds the tracked mode from the create option', async () => {
+    const player = await Player.create({
+      createClient: () => client,
+      replayGain: { mode: 'album', fallback: -6 },
+    })
+    expect(player.getReplayGainMode()).toBe('album')
+    // …and the exclusion sees it, even though nothing ever called
+    // `setReplayGain`: the option was written into mpv's init options.
+    player.setLoudnessNormalization(true)
+    expect(client.written.get(MpvProperty.replayGain)).toBe('no')
+    expect(player.getReplayGainMode()).toBe('no')
+  })
+
+  it('throws the disposed error after destroy', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    expect(() => player.getReplayGainMode()).toThrowError(PlayerErrorException)
+  })
+})

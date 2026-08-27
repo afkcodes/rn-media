@@ -344,19 +344,30 @@ presets, savedPresets, error, hydrated }` plus `setEnabled`, `setBandGain`,
   commands degrades to commit-only — the curve then lands when the gesture
   settles rather than following the finger, which is honest; going back to
   rewriting the chain per frame is what wrecks playback, and it never does that.
-- **It owns `setAudioFilters` while mounted.** That method replaces the whole
-  user chain, so the rest of *your* chain goes in `extraFilters` and is appended
-  after the EQ bands:
+- **It owns its own entries, and only those.** The hook writes
+  `Player.setEqualizerFilters` — the pre-amp, the ten bands and the limiter,
+  every one labelled `@rnmedia_eq_…` — and the player composes the chain as
+  **equaliser → your `setAudioFilters` chain → the managed loudness entry**. So
+  `player.setAudioFilters([...])` keeps working while an EQ screen is mounted,
+  and keeps working across a slider drag:
 
   ```ts
+  player.setAudioFilters([AudioFilters.crossfeed({ strength: 0.3 })])
   useEqualizer(player, {
-    extraFilters: [AudioFilters.crossfeed({ strength: 0.3 })],
     chain: { limiter: false }, // EqualizerPresetChainOptions
   })
   ```
 
-  `setLoudnessNormalization` needs no such care either way — it is a separately
-  managed, labelled entry that composes with whatever the user half holds.
+  The order is not arbitrary: the pre-amp has to attenuate *before* the boosts
+  it is sized for, and the loudness entry has to hear everything above it.
+
+  `useEqualizer`'s `extraFilters` option did the same job by folding your chain
+  into the hook's half, back when the hook replaced the whole `af` property. It
+  still behaves identically and is **deprecated** — call `setAudioFilters`.
+
+  The `rnmedia_` label prefix is reserved for these managed entries;
+  `setAudioFilters` rejects a chain carrying one, because two owners of one mpv
+  label silently overwrite each other.
 - **Unmounting does not clear the chain.** `af` survives track changes by
   design, and an EQ screen closing is not a reason to stop equalising. Call
   `setEnabled(false)` to take it off.
@@ -575,6 +586,20 @@ is `'no'`: mpv's manual calls `replaygain-fallback` "always applied if the
 replaygain logic is somehow inactive", so `setReplayGain({ mode: 'no' })` does
 **not** silence a non-zero fallback written earlier — pass
 `{ mode: 'no', fallback: 0 }` to return to unity gain.
+
+> **This and `setLoudnessNormalization` are mutually exclusive, and the API
+> enforces it.** They level the same thing by different means — ReplayGain is a
+> volume-domain gain read from tags (no DSP, no latency, dynamics intact),
+> `loudnorm` is a live filter — and run together their gains *stack*, so a
+> track ReplayGain already leveled gets re-leveled and re-compressed. Any
+> `mode` other than `'no'` therefore turns loudness normalization off, and
+> `setLoudnessNormalization(true)` sets `replaygain` to `'no'`. Ask
+> `player.getReplayGainMode()` and `player.getLoudnessNormalization()` for which
+> one is live — a settings screen with two switches needs to know.
+>
+> Switching the loser off costs nothing when it was already off: both states are
+> tracked in TypeScript, so the rule adds no bridge traffic in the ordinary case
+> and exactly one property write in the case that needed it.
 
 ### Gapless transitions
 
@@ -1014,7 +1039,7 @@ and SHA-256s, and ARCHITECTURE §11).
 |---|---|---|---|
 | `getScreenStateSource().interactive` and its subscription | `PowerManager.isInteractive()` + `ACTION_SCREEN_ON`/`OFF` | constant `true`, subscription never fires | **ceiling** |
 | Background playback setup | nothing to add | `UIBackgroundModes: audio` in your `Info.plist` | **setup differs** |
-| `content://` sources | not playable | n/a (iOS has no equivalent scheme) | **gap** |
+| `content://` sources | `ContentResolver` → mpv `fd://`, transparently | n/a (iOS has no equivalent scheme) | **parity** |
 
 - **The display-state signal has no iOS half, and answering `true` is the
   honest implementation.** It exists because on Android `AppState` and "is the
@@ -1036,11 +1061,29 @@ and SHA-256s, and ARCHITECTURE §11).
   permission network playback needs, `android.permission.INTERNET`, is yours to
   declare; the React Native app template already does, so this only bites a
   manifest someone has trimmed.
-- **`content://` URIs are not playable.** Android's storage picker hands back a
-  `content://` URI, and neither libmpv nor FFmpeg has a handler for that scheme,
-  so `load()` fails with a typed `load-failed` — an honest failure, not a silent
-  one, but a real gap against iOS, where a document picker hands back a file URL
-  that plays. Copy the file, or resolve it to a path, until this is closed.
+- **`content://` URIs play, and there is nothing to configure.** Android's
+  storage picker, `MediaStore` and every SAF provider hand back a `content://`
+  URI, which is a row in another app's `ContentProvider` — not a path, and not
+  something libmpv or FFmpeg could ever add a handler for, because resolving it
+  is a Binder call into another process. `load()`, `loadPlaylist()` and
+  `playlist.add()` open it through `ContentResolver` and hand mpv its own
+  `fd://` protocol instead, once per URI, for the life of the player. The
+  descriptors are closed by `player.destroy()`.
+
+  Three things worth knowing. **Seeking follows the provider**: mpv decides
+  seekability by `lseek`-ing the descriptor (`stream/stream_file.c:373-379`), so
+  a file-backed URI — every `MediaStore` row — is seekable and reports a
+  duration, while a *pipe*-backed one (some cloud providers stream through
+  `openPipeHelper`) is not, and surfaces exactly like a live stream:
+  `state.seekable === false`, `state.isLive === true`, no duration. That is the
+  same honest answer this library already gives for an unseekable HTTP stream,
+  not a special case. **The grant is yours to keep**: a picker's read permission
+  dies with the process, so a stored URI needs
+  `ContentResolver.takePersistableUriPermission()` or the next load fails with a
+  typed `load-failed`. And **do not put the same `content://` URI at two
+  adjacent queue positions** — one descriptor serves one URI, and mpv would have
+  the playing entry and the prefetched one reading the same file offset.
+
   Everything else — `https://`, `file://` and absolute paths — behaves the same
   on both platforms.
 - **Verification is not symmetric either.** The Android engine and player are
@@ -1068,7 +1111,7 @@ everyday surface.
 | Option types | `RetryOptions`, `NetworkReconnectOptions`, `SourceResolverOptions`, `VisualizerOptions`, `VolumeOptions`, `GaplessAudioMode`, `ReplayGainMode`, `HttpHeaders` |
 | Equaliser | `EqualizerPreset`, `EqualizerPresetId`, `EqualizerBand`, `EqualizerGainRange`, `EqualizerSettings`, `EqualizerStorage` (the injected persistence interface), `UseEqualizerOptions`, `EQUALIZER_PREAMP_LABEL`, `EQUALIZER_LIMITER_LABEL`, `LOUDNESS_NORMALIZATION_LABEL` |
 | Filters | `CompressorOptions`, `LimiterOptions`, `LoudnormOptions`, `DynamicNormalizerOptions`, `CrossfeedOptions`, `ShelfOptions`, `PassOptions`, `BiquadWidthType`, `assertValidAudioFilters` |
-| State and events | `PlayerStatus`, `PositionAnchor`, `Progress`, `Milestone`, `PlaylistApi`, `PlaylistPosition`, `PlayerEvent`, `PlayerEventMap`, `PlayerEventName`, the per-event types (`TrackChangedEvent`, `TrackEndedEvent`, `SeekEvent`, `QueueChangedEvent`, `ChapterChangedEvent`, `PrefetchStartedEvent`, `RetryingEvent`, `LogEvent`, …), `PositionDiscontinuityReason`, `QueueChangeReason` |
+| State and events | `PlayerStatus`, `PositionAnchor`, `PositionAnchorMs`, `Progress`, `Milestone`, `PlaylistApi`, `PlaylistPosition`, `PlayerEvent`, `PlayerEventMap`, `PlayerEventName`, the per-event types (`TrackChangedEvent`, `TrackEndedEvent`, `SeekEvent`, `QueueChangedEvent`, `ChapterChangedEvent`, `PrefetchStartedEvent`, `RetryingEvent`, `LogEvent`, …), `PositionDiscontinuityReason`, `QueueChangeReason` |
 | Hooks' result types | `UsePlayerResult`, `UseVisualizerResult`, `PlayerStateSelector` |
 | Visualizer | `VisualizerController`, `VisualizerCapabilities`, `VisualizerCapture`, `VisualizerListener`, `VISUALIZER_DEFAULTS` |
 | Escape hatch | `MpvEvent`, `MpvEventKind`, `MpvProperty`, `MpvPropertyValue`, `MpvFormat`, `MpvLogLevel`, `MpvEndFileReason`, `OBSERVED_PROPERTIES`, `MpvClientFactory` |

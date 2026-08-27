@@ -69,9 +69,13 @@ export function toMediaStatus(state: PlayerState): PlaybackState['status'] {
 /**
  * Turn a `PlayerState` snapshot into a broadcast.
  *
- * `positionAnchor` is seconds + `Date.now()`; the media session wants
- * milliseconds. `rate` is forced to `0` unless audio is genuinely advancing, so
- * the native projection freezes instead of drifting while buffering or paused.
+ * The position anchor is taken straight off the snapshot as
+ * `positionAnchorMs`: the player derives it in the media session's own
+ * milliseconds `{value, at, rate}`, with `rate` already forced to `0` unless
+ * audio is genuinely advancing, so the native projection freezes instead of
+ * drifting while buffering or paused. (`state.positionAnchor` is the same fact
+ * in seconds, for projecting locally — converting it here by hand is how a
+ * lock-screen scrubber ends up off by 1000×.)
  *
  * `shuffleEnabled` is a parameter rather than a `PlayerState` read because it
  * is **app** state: mpv has no shuffle *mode*, only a reorder command, so the
@@ -83,15 +87,10 @@ export function toPlaybackState(
   shuffleEnabled: boolean
 ): PlaybackState {
   const status = toMediaStatus(state)
-  const advancing = status === 'playing' && !state.seeking
 
   return {
     status,
-    position: {
-      value: Math.round(state.positionAnchor.position * 1000),
-      at: state.positionAnchor.timestamp,
-      rate: advancing ? state.positionAnchor.rate : 0,
-    },
+    position: state.positionAnchorMs,
     bufferedPosition:
       state.bufferedPosition === undefined
         ? undefined

@@ -88,16 +88,25 @@ export interface UseEqualizerOptions {
    * anything from `AudioFilters`. They are appended after the EQ bands, so the
    * signal is equalised first.
    *
-   * @remarks
-   * **This exists because `Player.setAudioFilters` replaces the whole user
-   * chain.** While this hook is mounted it owns that call, so a filter set
-   * behind its back is wiped by the next slider drag. Declaring it here instead
-   * is the honest route: the hook rebuilds one chain from one source.
+   * @deprecated Call `player.setAudioFilters([...])` directly. This hook now
+   * owns only its own labelled entries and composes with the user chain
+   * instead of replacing it, so there is nothing left for this option to work
+   * around. It still behaves exactly as it did — the entries land in the same
+   * place in the chain — and it will be removed one release from now.
    *
-   * `setLoudnessNormalization` is unaffected either way — that is a separately
-   * managed, labelled entry that composes with whatever the user half holds
-   * (see `Player.setAudioFilters`), and neither this hook nor your app has to
-   * think about it.
+   * @remarks
+   * **This existed because `Player.setAudioFilters` used to be replaced
+   * wholesale by this hook.** It no longer is: the hook writes
+   * `Player.setEqualizerFilters`, which rewrites the `@rnmedia_eq_…` entries
+   * and leaves every other filter — yours, and the managed loudness entry —
+   * exactly where it is. A chain set behind the hook's back now survives a
+   * slider drag, which is what this option was invented to fake.
+   *
+   * The one behavioural difference between the two routes is *position*.
+   * Entries passed here sit inside the managed half, immediately after the EQ
+   * limiter; entries passed to `setAudioFilters` sit after the managed half,
+   * which is the same place in the compiled chain. They are interchangeable
+   * today, and the direct call is the one that keeps working.
    *
    * May change between renders; the chain is rewritten only when it actually
    * compiles to something different.
@@ -369,12 +378,12 @@ const COMMIT_DELAY_MS = 250
  *   chain rebuild, no blocked JS thread (the command is async), no click. The
  *   curve is compiled `editable` precisely so this path is available: ten
  *   labelled bands whose *shape* never depends on their values.
- * - **The graph changed** (EQ toggled, `extraFilters` or `chain` options
- *   changed, or the curve left/returned to flat): one `setAudioFilters`, which
- *   rebuilds the entries that differ. That is the expensive path, and it is now
+ * - **The graph changed** (EQ toggled, `chain` options changed, or the curve
+ *   left/returned to flat): one `Player.setEqualizerFilters`, which rebuilds
+ *   the entries that differ. That is the expensive path, and it is now
  *   reached once per gesture at most.
  * - **{@link COMMIT_DELAY_MS} after the last in-place change**: one
- *   `setAudioFilters` that makes mpv's `af` property agree with the running
+ *   `setEqualizerFilters` that makes mpv's `af` property agree with the running
  *   chain again, so the curve survives the next track, device switch or
  *   normalization toggle. Until it lands, `player.getAudioFilters()` still
  *   shows the pre-drag string — that read-back is mpv's property, and the whole
@@ -396,10 +405,13 @@ const COMMIT_DELAY_MS = 250
  * equalising. Call `setEnabled(false)` — or `player.clearAudioFilters()` — to
  * take it off.
  *
- * **Ownership.** While mounted, this hook owns `Player.setAudioFilters`. Put
- * the rest of your chain in {@link UseEqualizerOptions.extraFilters} rather
- * than calling that method behind it. Loudness normalization is a separately
- * managed entry and needs no such care.
+ * **Ownership is scoped to the entries it wrote.** This hook owns
+ * `Player.setEqualizerFilters` — the labelled `@rnmedia_eq_…` half of the
+ * chain — and nothing else. `player.setAudioFilters([...])` keeps working
+ * while an EQ screen is mounted, and keeps working *after* a slider drag: the
+ * two halves are composed (equaliser → your chain → loudness normalization),
+ * not overwritten. {@link UseEqualizerOptions.extraFilters} was the workaround
+ * for the old wholesale behaviour and is deprecated.
  */
 export function useEqualizer(
   player: Player | undefined,
@@ -594,7 +606,10 @@ export function useEqualizer(
         commitTimerRef.current = undefined
       }
       try {
-        target.setAudioFilters(next)
+        // The managed half only. Anything the app set through
+        // `setAudioFilters`, and the managed loudness entry, are composed
+        // around this by the Player and are not ours to rewrite.
+        target.setEqualizerFilters(next)
         appliedRef.current = { player: target, chain: next, compiled }
         committedRef.current = compiled
         // A command issued before this write may still be in mpv's queue, and

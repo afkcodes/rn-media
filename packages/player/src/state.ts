@@ -55,6 +55,49 @@ export interface PositionAnchor {
   readonly rate: number
 }
 
+/**
+ * The same anchor in the units every *remote surface* speaks: milliseconds.
+ *
+ * @remarks
+ * **Why a second shape exists at all.** {@link PositionAnchor} is seconds
+ * (`{ position, timestamp, rate }`) because that is mpv's unit; media3,
+ * `MPNowPlayingInfoCenter` and therefore `@rn-media/media-session`'s
+ * `PlaybackState.position` are milliseconds (`{ value, at, rate }`). Converting
+ * at the call site is a one-line arithmetic chore that was silently getting the
+ * factor of 1000 wrong in real integrations — a lock-screen scrubber that
+ * finishes a three-minute song in a fifth of a second. This field is that
+ * conversion, done once, in the reducer, in the exact shape the session layer
+ * accepts.
+ *
+ * **Structural, not imported.** `@rn-media/player` does not depend on
+ * `@rn-media/media-session` (nor the other way round — see CLAUDE.md §2): the
+ * two types match by *shape*, which is all a structural type system needs, and
+ * the player stays usable with any session layer.
+ *
+ * **`rate` already accounts for "not moving".** {@link PositionAnchor.rate} is
+ * mpv's `speed` and stays at `1` while paused, buffering, seeking or stopped,
+ * because the projection is gated separately. A remote surface has no such
+ * gate — it projects `value + elapsed × rate` and nothing else — so this
+ * field's `rate` is `0` whenever the position is not advancing. Broadcast it
+ * verbatim; do not re-derive it.
+ *
+ * **It is recomputed only when it changes**, which is on a discontinuity — a
+ * seek, a pause/unpause, a rate change, a track change, a playback restart.
+ * Between them the field keeps its object identity, so a snapshot that changed
+ * for some unrelated reason does not make every surface redraw its scrubber.
+ */
+export interface PositionAnchorMs {
+  /** Known-good playback position, in **milliseconds**, at {@link at}. */
+  readonly value: number
+  /** `Date.now()`-style millisecond timestamp at which {@link value} held. */
+  readonly at: number
+  /**
+   * Rate the position advances at from {@link at} onwards. `0` freezes the
+   * projection — paused, buffering, seeking, ended, idle or errored.
+   */
+  readonly rate: number
+}
+
 /** Where we are in mpv's playlist. */
 export interface PlaylistPosition {
   /** 0-based index of the current entry; `-1` when there is no current entry. */
@@ -106,6 +149,14 @@ export interface PlayerState {
   readonly duration?: number
   /** The anchor {@link projectPosition} extrapolates from. */
   readonly positionAnchor: PositionAnchor
+  /**
+   * The same anchor in milliseconds, in the shape a media session broadcasts.
+   *
+   * Derived from {@link positionAnchor} in the reducer and recomputed only when
+   * it (or whether the position is advancing) actually changes — see
+   * {@link PositionAnchorMs}.
+   */
+  readonly positionAnchorMs: PositionAnchorMs
   /**
    * Absolute timestamp (seconds, directly comparable to position) up to which
    * the demuxer has buffered — mpv's `demuxer-cache-time`.
@@ -401,6 +452,10 @@ export function createInitialState(now: number): PlayerState {
     status: 'idle',
     playing: false,
     positionAnchor: { position: 0, timestamp: now, rate: 1 },
+    // `rate: 0` because an idle player's position is not advancing — the same
+    // rule `withAnchorMs` applies to every later snapshot. See
+    // {@link PositionAnchorMs}.
+    positionAnchorMs: { value: 0, at: now, rate: 0 },
     rate: 1,
     pitch: 1,
     volume: 1,
@@ -537,6 +592,39 @@ function rebase(
       rate,
     },
   }
+}
+
+/**
+ * Attach (or keep) the millisecond mirror of `next`'s position anchor.
+ *
+ * @param next - The snapshot the reducer just produced.
+ * @returns `next` itself when the derived anchor is unchanged, so the field
+ * keeps its object identity; a fresh snapshot carrying a new one otherwise.
+ *
+ * @remarks
+ * **This is the whole of `positionAnchorMs`'s cost, and it is three number
+ * comparisons.** The derived value is compared field-by-field against the one
+ * `next` already carries (spread in from the previous snapshot); an equal
+ * result allocates nothing at all. That is what makes the field free between
+ * discontinuities — the reducer runs per *event*, never per frame, and an event
+ * that leaves the anchor alone leaves this alone too.
+ *
+ * The `rate` rule is the reason this cannot be a plain unit conversion:
+ * {@link PositionAnchor.rate} is mpv's `speed` and stays `1` while paused, and
+ * a remote surface that projects it would run the scrubber over a paused track.
+ * {@link isAdvancing} is the gate {@link projectPosition} applies locally, so
+ * applying it here is what makes the exported anchor mean the same thing.
+ */
+function withAnchorMs(next: PlayerState): PlayerState {
+  const anchor = next.positionAnchor
+  const value = Math.round(anchor.position * 1000)
+  const at = anchor.timestamp
+  const rate = isAdvancing(next) ? anchor.rate : 0
+  const carried = next.positionAnchorMs
+  if (carried.value === value && carried.at === at && carried.rate === rate) {
+    return next
+  }
+  return { ...next, positionAnchorMs: { value, at, rate } }
 }
 
 function deriveStatus(state: PlayerState): PlayerStatus {
@@ -927,8 +1015,10 @@ export function reducePlayerState(
   // skip-capability pair, and dropping a buffering percentage that outlived its
   // stall. Each returns the same object identity when it changes nothing, so
   // the reducer's no-op contract survives the chain.
-  return withBufferingPercent(
-    withSkipCapability(withLiveness(reduceEvent(state, event, context)))
+  return withAnchorMs(
+    withBufferingPercent(
+      withSkipCapability(withLiveness(reduceEvent(state, event, context)))
+    )
   )
 }
 
@@ -954,6 +1044,10 @@ function reduceEvent(
           timestamp: context.now,
           rate: state.rate,
         },
+        // `loading` never advances, so the broadcast rate is 0 — the same
+        // answer `withAnchorMs` would compute, written here only because this
+        // case builds its snapshot from scratch rather than by spreading.
+        positionAnchorMs: { value: 0, at: context.now, rate: 0 },
         rate: state.rate,
         // Global, not file-scoped: mpv's `--reset-on-next-file` resets nothing
         // by default, so `speed`, `pitch` and `volume` genuinely survive a
@@ -1098,7 +1192,12 @@ export function clearPlayerError(state: PlayerState): PlayerState {
     status: state.status === 'error' ? 'idle' : state.status,
   }
   delete (next as { error?: PlayerError }).error
-  return next
+  // Through the same funnel as the reducer's own output: this is the one other
+  // producer of a `PlayerState`, and `positionAnchorMs` must never be able to
+  // disagree with `positionAnchor` depending on which door a snapshot came out
+  // of. (Both statuses here are non-advancing, so in practice it is a no-op
+  // that costs three comparisons — which is exactly why it is safe to keep.)
+  return withAnchorMs(next)
 }
 
 /**
@@ -1122,10 +1221,13 @@ export function withResyncedAnchor(
   const clamped = clampPosition(position, state.duration)
   const anchor = state.positionAnchor
   if (anchor.position === clamped && anchor.timestamp === now) return state
-  return {
+  // `withAnchorMs` for the same reason `clearPlayerError` uses it: this is a
+  // producer of snapshots that does not pass through `reducePlayerState`, and
+  // the two anchors are one fact in two units.
+  return withAnchorMs({
     ...state,
     positionAnchor: { position: clamped, timestamp: now, rate: state.rate },
-  }
+  })
 }
 
 /**

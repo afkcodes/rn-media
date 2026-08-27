@@ -208,11 +208,9 @@ function broadcast(): void {
           : s.playing ? 'playing' : 'paused',
     // An ANCHOR, in milliseconds. Every surface projects value + elapsed × rate
     // locally, so the lock-screen scrubber moves with zero bridge traffic.
-    position: {
-      value: Math.round(player.getPosition() * 1000),
-      at: Date.now(),
-      rate: s.playing ? s.rate : 0,
-    },
+    // The player derives it for you, in exactly this shape, and only when it
+    // changes — no unit conversion to get wrong, no `rate: 0` to remember.
+    position: s.positionAnchorMs,
     controls: ['repeatMode', 'skipToPrevious', 'pause', 'skipToNext', 'shuffle'],
     capabilities: [
       'play', 'pause', 'stop', 'seek', 'skipToNext', 'skipToPrevious',
@@ -1064,16 +1062,16 @@ Every row here is a real bug someone hit, in this repo or in review.
 | Gapless works locally but not with signed URLs | The resolver mints a fresh URL per call. mpv opens each entry twice and compares the two URLs **byte-for-byte** — mint once per track and size `resolverTtlMs` to cover it |
 | The wrong artwork on the wrong song after "play next" | App-side metadata keyed on the queue **index**. An insert renumbers everything after it; key on `PlaylistEntry.entryId` (stable for the life of the core) or on the URI |
 | The session comes back blank after a process kill | `MediaItem.id` was uniquified per insertion (`${id}-${i}`, a timestamp). `restorePersisted` matches by id, and those ids do not exist at cold start. Duplicates in a queue are legal and expected |
-| The lock-screen scrubber is off by 1000× | `media-session`'s anchor is **milliseconds** (`{ value, at, rate }`); `PlayerState.positionAnchor` is **seconds** (`{ position, timestamp, rate }`) |
+| The lock-screen scrubber is off by 1000× | Two anchors, two units. Broadcast **`state.positionAnchorMs`** — the player derives it in `media-session`'s own `{ value, at, rate }` milliseconds, with `rate: 0` already applied when the position is not advancing. `positionAnchor` stays seconds, for local projection |
 | `stop()` emptied the queue — or didn't | `player.stop()` **keeps** the queue (mpv's own `stop` clears it; we inverted that). Pass `{ clearPlaylist: true }` for the destructive version |
 | The position never advances after a resume | A saved anchor restores with `rate: 0` and status `paused`, by design. Resume from a user gesture and broadcast a fresh anchor |
 | `onSessionError` says `playbackResumptionNotWired` | `MediaService.init` is not reachable at JS **module scope**. Metro's inline requires defer a binding import to first *use*, and a revived runtime renders nothing — use a bare `import './src/playback'` in `index.js`. Raised ~3 s after the revived runtime comes up, and again as `playbackResumptionFailed` at the 10 s deadline; both are held for your next `init` |
 | A track played straight through restores minutes behind | Autosave checkpoints every 30 s of playback, but **Android freezes JS timers once the Activity is gone** — so it covers the foreground only. Add `service.save()` on `AppState` leaving `active` (the exact instant autosave stops) and in `onTaskRemoved` |
-| Everything is 3 dB too loud (or quiet) | ReplayGain **and** `setLoudnessNormalization` are both on. Pick one — the gains stack |
-| The EQ screen's changes get wiped | While `useEqualizer` is mounted it owns `setAudioFilters`. Put the rest of your chain in its `extraFilters` option |
+| A loudness toggle turned itself off | ReplayGain and `setLoudnessNormalization` are **mutually exclusive** and the API enforces it: enabling either disables the other, because their gains would stack. `getReplayGainMode()` and `getLoudnessNormalization()` report which one is live |
+| An EQ band moved and a filter vanished | Only if the filter carried an `@rnmedia_…` label. That prefix belongs to the library's managed entries; `useEqualizer` replaces its own and nothing else, so your `setAudioFilters` chain survives a drag. Label yours anything else |
 | The cast build fails on `_OBJC_CLASS_$_UIGlassEffect` | `google-cast-sdk` 4.8.6 is built against the iOS 26.2 SDK. **Xcode 26+** is required to link it; the runtime floor stays iOS 16 |
 | A cast route greyed out for a track mpv plays fine | Receivers decode far less than mpv. Ask `canCastMedia()` — ALAC, hi-res FLAC, WMA, DSD and AC-3 are out |
-| `content://` from the Android storage picker will not load | Neither libmpv nor FFmpeg has a handler for that scheme. Copy the file or resolve it to a path |
+| A `content://` URI played once and not the next day | The read grant expired. `load()` opens it through `ContentResolver` and hands mpv an `fd://`, but a picker's grant dies with the process — call `takePersistableUriPermission()` if you are storing the URI |
 
 ## Limitations
 
@@ -1093,13 +1091,23 @@ Every row here is a real bug someone hit, in this repo or in review.
   decision: mpv's gapless is an output-buffer guarantee, and the crossfade built
   on top of it was not good enough to ship. A competitor ships crossfade; we do
   not, and would rather say so than pretend the row does not exist.
-- **Embedded cover art decodes, but cannot be extracted yet.** The eight
-  cover-art decoders are compiled into both binaries and mpv reports an attached
-  picture through `track-list/N/albumart` — but there is **no API to get the
-  bytes**, because the audio-only core runs `audio-display=no` (mpv then never
-  selects the attached-picture track) and the only image-returning client-API
-  command, `screenshot-raw`, needs a video output this core deliberately never
-  creates. Until it ships, pass artwork from your own library as
+- **Embedded cover art decodes, but cannot be extracted yet** — and the reason
+  is narrower than this entry used to claim. The cover-art decoders are compiled
+  into both binaries, mpv reports an attached picture through
+  `track-list/N/albumart`, and the core runs `audio-display=no`, so the
+  attached-picture track is never selected. `screenshot-raw` really does need a
+  configured video output — not because the manual says so (it says nothing
+  about one) but because `screenshot_get()` opens with
+  `if (!mpctx->video_out || !mpctx->video_out->config_ok) return NULL;`
+  (mpv 0.41.0 `player/screenshot.c`). What is *not* a ceiling is the video
+  output itself: `vo_null` is compiled into the shipped binary, alongside
+  libswscale and the image decoders. The blocker that remains is ours — this
+  library's client binding exposes `command(args): Promise<void>` and
+  `screenshot-raw` returns its pixels in the command's *result node*, so nothing
+  can carry the bytes to JavaScript yet. Reading the `attached_pic` stream
+  directly is not the cheaper route: `libmpv.so` exports 55 symbols, all
+  `mpv_*`, so the statically linked FFmpeg inside it is unreachable without an
+  engine release. Until this ships, pass artwork from your own library as
   `MediaItem.artworkUri`.
 - **Casting has real ceilings.** Android device-verified, iOS CI-verified only;
   receivers decode far less than mpv (no ALAC, hi-res FLAC, WMA, DSD or AC-3), no
