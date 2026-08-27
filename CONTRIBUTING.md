@@ -127,6 +127,27 @@ the fork's delta is deliberately additive configure flags only, LGPL flavour,
 never `--enable-gpl`. Read [`PLAN.md`](PLAN.md) §6 and
 [`ARCHITECTURE.md`](ARCHITECTURE.md) §11 before touching either.
 
+## Docs: a README states what is true now
+
+Three files, three jobs, and they do not overlap:
+
+| File | Answers | Never contains |
+|---|---|---|
+| `README.md` (root and per package) | What it is, how to install and use it, what it needs, what it cannot do | dates, history, how something was verified, who found what, device names, rationale longer than one sentence |
+| `ARCHITECTURE.md` | Why it is built this way, and the evidence | — |
+| `PLAN.md` | What is next and why | — |
+
+When you write a paragraph for a README, give it one of three fates before it
+lands: a **constraint the caller must know** becomes one sentence in the
+table's notes column; a **design rationale** becomes a link to the
+ARCHITECTURE section that already holds it in full; **history** is deleted.
+"We used to", "was corrected", "verified on the POCO" are ARCHITECTURE
+sentences. Limitations are one line each.
+
+Budgets, so the shape holds: root README ≈ 250 lines with one inline recipe
+(the rest live in `docs/recipes/`); a package README ≈ 300–400. Every code
+block still passes `npm run check:readme`.
+
 ## Commits and PRs
 
 Conventional commits, scoped by package:
