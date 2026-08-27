@@ -1,4 +1,4 @@
-# Spec: `@rn-media/audio-session`
+# Spec: `@timbre/audio-session`
 
 Architect-owned contract. The audio_session (Flutter) analog: the **single arbiter** of
 OS audio session config, focus, and interruption events. Small, boring, essential.
@@ -8,16 +8,16 @@ developer.apple.com docs and current Nitro docs — never from memory.
 ## Shape
 
 - Nitro module, langs **kotlin + swift** (no C++ — this is pure platform API).
-- Package `packages/audio-session`, npm `@rn-media/audio-session`.
+- Package `packages/audio-session`, npm `@timbre/audio-session`.
 - **Singleton** JS API (the OS session/focus is singular — CLAUDE.md principle 5 exception).
-- Zero dependency on `@rn-media/player` and vice versa. Integration is an explicit
+- Zero dependency on `@timbre/player` and vice versa. Integration is an explicit
   helper (below), not ambient coupling — this fixes audio_session's "configure after
   all plugins load" ordering fragility (PLAN.md §4).
 
 ## TS API
 
 ```ts
-import { AudioSession } from '@rn-media/audio-session';
+import { AudioSession } from '@timbre/audio-session';
 
 await AudioSession.configure(AudioSessionPresets.music);   // or .speech, or full config
 const granted = await AudioSession.activate();              // request focus / set active
@@ -55,7 +55,7 @@ AudioSession.addListener('routeChange', (e) => { /* devices added/removed */ });
 ## Player integration helper (lives in THIS package)
 
 ```ts
-import { wireAudioSession } from '@rn-media/audio-session';
+import { wireAudioSession } from '@timbre/audio-session';
 const unwire = wireAudioSession(player, {   // player: structural interface, NOT our Player type
   preset: AudioSessionPresets.music,
   duckVolume: 0.3,          // duck by volume attenuation

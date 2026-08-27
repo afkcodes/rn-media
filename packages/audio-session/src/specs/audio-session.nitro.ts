@@ -26,7 +26,7 @@ export type IosAudioSessionCategory =
  * enumerator — the C++ enumerator would be `DEFAULT` and the generated Swift
  * bridge would emit `case .default:`, which collides with Swift's `default`
  * keyword. Same reasoning as `MpvEndFileReason.endOfFile` in
- * `@rn-media/player`.
+ * `@timbre/player`.
  *
  * `dualRoute` and `shortFormVideo` exist in recent SDKs but are deliberately
  * omitted: they would need `if #available` guards below our iOS 15.1

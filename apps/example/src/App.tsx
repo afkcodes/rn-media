@@ -3,11 +3,11 @@
  *
  * Wires all three packages together the way a real app should:
  *
- * - `@rn-media/player`      — one mpv core playing a 7-entry mpv playlist.
- * - `@rn-media/audio-session` — focus is requested before playback, and
+ * - `@timbre/player`      — one mpv core playing a 7-entry mpv playlist.
+ * - `@timbre/audio-session` — focus is requested before playback, and
  *                              interruptions / headphone unplugs are handled
  *                              by `wireAudioSession`.
- * - `@rn-media/media-session` — a `MediaHandler` subclass behind every remote
+ * - `@timbre/media-session` — a `MediaHandler` subclass behind every remote
  *                              surface (notification, lock screen, Bluetooth),
  *                              fed by three broadcast channels.
  *
@@ -55,7 +55,7 @@ import {
   usePlayerState,
   useProgress,
   type ChapterEntry,
-} from '@rn-media/player'
+} from '@timbre/player'
 import { COLORS, SPACE, TYPE } from './theme'
 import { usePlayback } from './playback'
 import { durationMs, nowPlaying } from './playback/broadcast'

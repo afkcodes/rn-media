@@ -1,4 +1,4 @@
-# Spec: `@rn-media/player` core (C++ binding + TS API)
+# Spec: `@timbre/player` core (C++ binding + TS API)
 
 Architect-owned interface contract for Tasks 2 & 5. Implementation agents: follow this
 spec; where Nitro syntax specifics are needed, verify against current nitro.margelo.com
@@ -194,8 +194,8 @@ is `PowerManager.isInteractive()`; `addScreenStateListener` registers an
 so a process with nothing observing holds no receiver. The iOS side is a
 constant `true` in C++ — locking an iPhone backgrounds the app and no iOS app is
 foreground-active with the display off, so `AppState` is already the display
-truth there, and a constant does not justify introducing Swift into the pod. It lives in `@rn-media/player`, not
-in `@rn-media/audio-session`, because its only consumer is this package's
+truth there, and a constant does not justify introducing Swift into the pod. It lives in `@timbre/player`, not
+in `@timbre/audio-session`, because its only consumer is this package's
 visualizer and a player-only install must not have to add a second native module
 to stop burning battery; the display is also not an audio-session concern.
 Consumed through the `ScreenStateSource` interface (`src/screen-state.ts`), which

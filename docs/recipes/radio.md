@@ -4,12 +4,12 @@ Live streams have no duration, no scrubber and no end. A server that hangs up is
 not the same event as a song finishing. All three are first-class.
 
 ```ts
-import { Player, type Metadata } from '@rn-media/player'
-import { BaseMediaHandler, MediaService, type MediaItem } from '@rn-media/media-session'
+import { Player, type Metadata } from '@timbre/player'
+import { BaseMediaHandler, MediaService, type MediaItem } from '@timbre/media-session'
 
 const player = await Player.create({
   // Real Shoutcast hosts reject the literal `libmpv`, which is why the default
-  // UA is `rn-media (libmpv)`. Say who you are anyway.
+  // UA is `timbre (libmpv)`. Say who you are anyway.
   userAgent: 'MyRadio/1.0 (+https://example.com)',
   cacheSecs: 30,                                 // mpv's own default is ~1000 hours
   networkReconnect: { maxDelaySeconds: 20 },     // native, inside libavformat

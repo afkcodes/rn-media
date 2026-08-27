@@ -43,7 +43,7 @@ import {
   type AudioFilter,
   type Equalizer,
   type Player,
-} from '@rn-media/player'
+} from '@timbre/player'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { ColumnRect } from './fader-geometry'
 import { bandAtX, gainAtY } from './fader-geometry'

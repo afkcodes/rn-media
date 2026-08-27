@@ -9,7 +9,7 @@
  * This is the thing that makes the last clause true. It extracts every ```ts /
  * ```tsx fenced block out of every shipped README and recipe, writes each one to
  * `.readme-samples/` as a standalone module, and runs `tsc --noEmit` over them
- * with `@rn-media/*` mapped at the workspace packages' `src` — the real export
+ * with `@timbre/*` mapped at the workspace packages' `src` — the real export
  * surface, not a stale `lib/` build. A sample that drifts from the code is then
  * a build error with a README line number on it.
  *
@@ -87,7 +87,7 @@ declare module '@react-native-async-storage/async-storage' {
  * Shared by every recipe project, because they document one imagined app.
  */
 const RECIPE_BACKEND = `
-declare const service: import('@rn-media/media-session').MediaServiceApi
+declare const service: import('@timbre/media-session').MediaServiceApi
 declare const station: { id: string; name: string; url: string; logoUri: string }
 declare const episode: { id: string; url: string }
 declare const progress: {
@@ -103,7 +103,7 @@ declare const catalogue: {
   tracks(albumId: string): Promise<CatalogueTrack[]>
   track(id: string): Promise<CatalogueTrack>
   recent(limit: number): Promise<CatalogueTrack[]>
-  search(query: string, focus?: import('@rn-media/media-session').SearchFocus): Promise<CatalogueTrack[]>
+  search(query: string, focus?: import('@timbre/media-session').SearchFocus): Promise<CatalogueTrack[]>
 }
 interface CatalogueTrack {
   id: string
@@ -148,16 +148,16 @@ const AMBIENTS = {
   // every later block in this README continues from it, and saying so once
   // beats repeating six lines of setup in every snippet.
   player: `
-declare const player: import('@rn-media/player').Player
+declare const player: import('@timbre/player').Player
 declare const sources: readonly string[]
 declare const uri: string
-declare const curve: import('@rn-media/player').EqualizerPreset
+declare const curve: import('@timbre/player').EqualizerPreset
 declare const myTracks: readonly { uri: string; title: string }[]
 declare const api: { signPlaybackUrl(id: string): Promise<{ url: string }> }
 declare function paint(bands: Float32Array): void
 declare function refreshQueueUi(): void
 declare function updateNowPlaying(
-  metadata: import('@rn-media/player').Metadata
+  metadata: import('@timbre/player').Metadata
 ): void
 declare function setStation(name: string | undefined): void
 declare function showBanner(text: string): void
@@ -177,9 +177,9 @@ ${ASYNC_STORAGE}`,
   // Same idea: this README is written about a `service` and a `player` the
   // opening block created.
   'media-session': `
-declare const service: import('@rn-media/media-session').PersistedMediaService
-declare const storage: import('@rn-media/media-session').MediaSessionStorage
-declare const config: import('@rn-media/media-session').MediaServiceConfig
+declare const service: import('@timbre/media-session').PersistedMediaService
+declare const storage: import('@timbre/media-session').MediaSessionStorage
+declare const config: import('@timbre/media-session').MediaServiceConfig
 declare const player: {
   play(): Promise<void>
   pause(): Promise<void>
@@ -192,7 +192,7 @@ declare const backend: {
   setVolume(volume: number): Promise<void>
   setMuted(muted: boolean): Promise<void>
 }
-declare const items: readonly import('@rn-media/media-session').MediaItem[]
+declare const items: readonly import('@timbre/media-session').MediaItem[]
 declare const tracks: readonly { id: string; title: string }[]
 declare const catalogue: {
   albums(): Promise<{ id: string; title: string; artist: string }[]>
@@ -200,19 +200,19 @@ declare const catalogue: {
   search(query: string): Promise<{ id: string; title: string; artist: string }[]>
 }
 declare const auth: { isSignedIn(): Promise<boolean> }
-declare const MyHandler: new () => import('@rn-media/media-session').MediaHandler
+declare const MyHandler: new () => import('@timbre/media-session').MediaHandler
 declare function loadChildren(
   parentId: string
-): Promise<import('@rn-media/media-session').BrowseItem[]>
+): Promise<import('@timbre/media-session').BrowseItem[]>
 declare function track(event: string): void
 declare function banner(message: string): void
 declare function badge(text: string | number): void
 ${ASYNC_STORAGE}`,
   'audio-session': `
-declare const player: import('@rn-media/player').Player
+declare const player: import('@timbre/player').Player
 `,
   cast: `
-declare const player: import('@rn-media/player').Player
+declare const player: import('@timbre/player').Player
 declare const queue: readonly {
   id: string
   mimeType: string
@@ -232,11 +232,11 @@ declare const mimeType: string
 declare const headers: Record<string, string>
 declare function resolve(track: { id: string }): string
 declare function broadcastReceiverState(
-  snapshot: import('@rn-media/cast').CastReceiverSnapshot
+  snapshot: import('@timbre/cast').CastReceiverSnapshot
 ): void
 declare function log(direction: 'toCast' | 'toLocal'): void
 declare function showSkipNotice(
-  skipped: readonly import('@rn-media/cast').SkippedCastItem[]
+  skipped: readonly import('@timbre/cast').SkippedCastItem[]
 ): void
 declare function refreshSignedUrls(): Promise<void>
 `,
@@ -293,12 +293,12 @@ const READMES = [
   { slug: 'recipe-cast', file: 'docs/recipes/cast.md' },
 ];
 
-/** `@rn-media/*` resolves to the workspace source, never to a built `lib/`. */
+/** `@timbre/*` resolves to the workspace source, never to a built `lib/`. */
 const PATHS = {
-  '@rn-media/player': ['../../packages/player/src'],
-  '@rn-media/audio-session': ['../../packages/audio-session/src'],
-  '@rn-media/media-session': ['../../packages/media-session/src'],
-  '@rn-media/cast': ['../../packages/cast/src'],
+  '@timbre/player': ['../../packages/player/src'],
+  '@timbre/audio-session': ['../../packages/audio-session/src'],
+  '@timbre/media-session': ['../../packages/media-session/src'],
+  '@timbre/cast': ['../../packages/cast/src'],
 };
 
 /**

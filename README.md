@@ -1,4 +1,4 @@
-# rn-media
+# timbre
 
 [![Android CI](https://img.shields.io/github/actions/workflow/status/afkcodes/rn-media/android-build.yml?branch=main&label=Android%20CI&logo=android&logoColor=white)](https://github.com/afkcodes/rn-media/actions/workflows/android-build.yml)
 [![iOS CI](https://img.shields.io/github/actions/workflow/status/afkcodes/rn-media/ios-build.yml?branch=main&label=iOS%20CI&logo=apple&logoColor=white)](https://github.com/afkcodes/rn-media/actions/workflows/ios-build.yml)
@@ -29,7 +29,7 @@ Chromecast sender. The C++ core binds libmpv's client API through
 ## Install
 
 ```sh
-npm install @rn-media/player @rn-media/audio-session @rn-media/media-session react-native-nitro-modules
+npm install @timbre/player @timbre/audio-session @timbre/media-session react-native-nitro-modules
 cd ios && pod install   # downloads + verifies the pinned libmpv xcframeworks
 ```
 
@@ -43,12 +43,12 @@ survives process death.
 
 ```ts
 // src/playback.ts
-import { Player } from '@rn-media/player'
-import { AudioSession, AudioSessionPresets, wireAudioSession } from '@rn-media/audio-session'
+import { Player } from '@timbre/player'
+import { AudioSession, AudioSessionPresets, wireAudioSession } from '@timbre/audio-session'
 import {
   BaseMediaHandler, MediaService, withPersistence,
   type MediaItem, type PersistedMediaService,
-} from '@rn-media/media-session'
+} from '@timbre/media-session'
 import { storage, type Track } from './library'
 
 let player: Player
@@ -130,10 +130,10 @@ describe your app and ignore the rest.
 
 | You want | Install |
 |---|---|
-| Audio playback, a gapless queue, EQ, chapters, a visualizer | [`@rn-media/player`](packages/player/README.md) |
-| …that keeps playing in the background, on the lock screen and in the notification | **+** [`@rn-media/media-session`](packages/media-session/README.md) |
-| …that ducks for navigation prompts, pauses for calls and stops when the headphones come out | **+** [`@rn-media/audio-session`](packages/audio-session/README.md) |
-| …that can hand off to a Chromecast | **+** [`@rn-media/cast`](packages/cast/README.md) |
+| Audio playback, a gapless queue, EQ, chapters, a visualizer | [`@timbre/player`](packages/player/README.md) |
+| …that keeps playing in the background, on the lock screen and in the notification | **+** [`@timbre/media-session`](packages/media-session/README.md) |
+| …that ducks for navigation prompts, pauses for calls and stops when the headphones come out | **+** [`@timbre/audio-session`](packages/audio-session/README.md) |
+| …that can hand off to a Chromecast | **+** [`@timbre/cast`](packages/cast/README.md) |
 | …that the car can browse — Android Auto tabs, CarPlay templates, voice "play X" | already in `media-session`: implement `getChildren` + `playFromMediaId` |
 | A lock screen for a player that is **not** ours — RNTP, `expo-audio`, a TTS engine | `media-session` **alone** |
 | Focus / interruption handling for someone else's player | `audio-session` **alone** |
@@ -143,13 +143,13 @@ nothing forces you to adopt the engine to use the session layer, or the reverse.
 
 ## Why this exists
 
-| | [track-player](https://rntp.dev) | [expo-audio](https://docs.expo.dev/versions/latest/sdk/audio/) | [rn-video](https://github.com/TheWidlarzGroup/react-native-video) | [queue-player](https://ghenry22.github.io/react-native-queue-player/) | **rn-media** |
+| | [track-player](https://rntp.dev) | [expo-audio](https://docs.expo.dev/versions/latest/sdk/audio/) | [rn-video](https://github.com/TheWidlarzGroup/react-native-video) | [queue-player](https://ghenry22.github.io/react-native-queue-player/) | **timbre** |
 |---|---|---|---|---|---|
 | Engine | ExoPlayer / AVPlayer | ExoPlayer / AVPlayer | ExoPlayer / AVPlayer | not documented | **libmpv 0.41.0 + FFmpeg 8.1.2 — our own build** |
 | One identical engine on both platforms | ❌ two engines | ❌ | ❌ | — | ✅ 103 mpv options a side, **101 identical** (the two that differ are the platform's audio device) |
 | Formats | platform codecs | platform codecs | platform codecs | not documented | everything FFmpeg decodes — MP3, AAC/M4A, FLAC, OGG/Opus, HLS, ICY/Icecast, TrueHD, legacy-charset tags |
 | Multiple players | ❌ singleton | ✅ | ✅ | ❌ singleton | ✅ one mpv core each |
-| Session layer works with *any* player | ❌ | ❌ | ❌ | ❌ | ✅ (`@rn-media/media-session` is player-agnostic) |
+| Session layer works with *any* player | ❌ | ❌ | ❌ | ❌ | ✅ (`@timbre/media-session` is player-agnostic) |
 | Gapless queue | ⚠️ | ✅ | ❌ | ✅ | ✅ 25 ms handover, measured on-device |
 | Signed / expiring URLs stay gapless | ❌ | ❌ | ❌ | ❌ | ✅ resolver runs at **prefetch** time — our own mpv patch |
 | EQ / DSP | ❌ | ❌ | ❌ | ✅ 10-band | ✅ 16 ffmpeg filters, 22 tuned EQ presets |
@@ -169,10 +169,10 @@ Every export is tabulated in its package README.
 
 | Package | Surface |
 |---|---|
-| [`@rn-media/player`](packages/player/README.md#api) | Lifecycle and loading · playback · queue · state, metadata and chapters · hooks · events · audio processing · escape hatch |
-| [`@rn-media/media-session`](packages/media-session/README.md#api) | The service and its three channels · handlers and composition · persistence · the car's browse tree · sleep timer |
-| [`@rn-media/audio-session`](packages/audio-session/README.md#api) | Configure, activate, deactivate · interruption, noisy and route-change listeners · `wireAudioSession` |
-| [`@rn-media/cast`](packages/cast/README.md#api) | Discovery and sessions · receiver transport and queue · `wireCastHandoff` · `<CastButton/>` and hooks |
+| [`@timbre/player`](packages/player/README.md#api) | Lifecycle and loading · playback · queue · state, metadata and chapters · hooks · events · audio processing · escape hatch |
+| [`@timbre/media-session`](packages/media-session/README.md#api) | The service and its three channels · handlers and composition · persistence · the car's browse tree · sleep timer |
+| [`@timbre/audio-session`](packages/audio-session/README.md#api) | Configure, activate, deactivate · interruption, noisy and route-change listeners · `wireAudioSession` |
+| [`@timbre/cast`](packages/cast/README.md#api) | Discovery and sessions · receiver transport and queue · `wireCastHandoff` · `<CastButton/>` and hooks |
 
 ## Requirements
 
@@ -181,8 +181,8 @@ Every export is tabulated in its package README.
 | React Native | **>= 0.82** (New Architecture); developed against 0.87.0 |
 | Peer dependency | [`react-native-nitro-modules`](https://nitro.margelo.com) |
 | Android | minSdk **24**, compileSdk **36**. Nothing to configure: the `media-session` manifest merges the foreground-service permissions, the `mediaPlayback` service, the Android Auto declaration and the artwork provider. `POST_NOTIFICATIONS` is not required for media notifications |
-| iOS | **15.1+**; `@rn-media/cast` raises the floor to **16.0** and needs **Xcode 26+** to build. One `Info.plist` key: `UIBackgroundModes` → `audio`. CarPlay adds a scene manifest and the `com.apple.developer.carplay-audio` entitlement |
-| Expo | Prebuild workflow, no manual native edits: `"plugins": ["@rn-media/media-session"]` covers the whole library. Expo Go cannot load it; use a development build. [Plugin reference](packages/media-session/README.md#expo-config-plugin) |
+| iOS | **15.1+**; `@timbre/cast` raises the floor to **16.0** and needs **Xcode 26+** to build. One `Info.plist` key: `UIBackgroundModes` → `audio`. CarPlay adds a scene manifest and the `com.apple.developer.carplay-audio` entitlement |
+| Expo | Prebuild workflow, no manual native edits: `"plugins": ["@timbre/media-session"]` covers the whole library. Expo Go cannot load it; use a development build. [Plugin reference](packages/media-session/README.md#expo-config-plugin) |
 | Android binary | 3.63 MB downloaded for `arm64-v8a`; 7,338,952 bytes of stripped `libmpv.so`. The other three ABIs are in the same band |
 | iOS binary | `Mpv.framework`'s device slice is 1,756,424 bytes; ≈7.1 MB across all ten frameworks |
 | Google Play services | Casting only — without it `Cast.initialize()` resolves a typed `'unavailable'`, never a crash |
@@ -193,7 +193,7 @@ Every export is tabulated in its package README.
 - **No DRM.** libmpv has no Widevine or FairPlay, so this cannot power a
   licensed-catalog streaming app.
 - **iOS cast and CarPlay are unverified on a device.** iOS playback and the
-  media notification are device-tested; `@rn-media/cast` and CarPlay have not
+  media notification are device-tested; `@timbre/cast` and CarPlay have not
   been run on Apple hardware — CI compiles and inspects them, but no session
   has been observed.
 - **Force-quitting on iOS kills playback**, and nothing may restart the app for
@@ -222,7 +222,7 @@ Every export is tabulated in its package README.
 The gate that unlocks shipping, in order: the naming decision → the first npm
 publish (iOS playback and notifications are device-verified; iOS cast and
 CarPlay remain to be tested). Next up, owner-approved:
-`@rn-media/downloads` (offline playback as a source resolver), LRC lyrics, then
+`@timbre/downloads` (offline playback as a source resolver), LRC lyrics, then
 video as an additive plugin package. Full analysis: [`PLAN.md`](PLAN.md).
 
 ## Licensing

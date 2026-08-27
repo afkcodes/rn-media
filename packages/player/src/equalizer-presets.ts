@@ -459,7 +459,7 @@ export interface EqualizerPresetChainOptions {
  *
  * @example
  * ```ts
- * import { EQUALIZER_PRESETS, equalizerPresetChain } from '@rn-media/player'
+ * import { EQUALIZER_PRESETS, equalizerPresetChain } from '@timbre/player'
  *
  * player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.rock))
  * player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.flat)) // clears

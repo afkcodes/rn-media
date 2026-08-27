@@ -31,13 +31,13 @@ import {
   type PlayerError,
   type PlayerState,
   type ReplayGainMode,
-} from '@rn-media/player'
-import { AudioSession } from '@rn-media/audio-session'
+} from '@timbre/player'
+import { AudioSession } from '@timbre/audio-session'
 import type {
   MediaRepeatMode,
   SessionError,
   SleepTimerState,
-} from '@rn-media/media-session'
+} from '@timbre/media-session'
 import type { Track } from '../data/tracks'
 import { repeatToLoop } from './broadcast'
 import { CastIntegration } from './cast'

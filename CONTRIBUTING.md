@@ -1,4 +1,4 @@
-# Contributing to rn-media
+# Contributing to timbre
 
 Three independent packages over libmpv, plus one example app that doubles as
 the on-device test bed. Everything below is a command that runs today; if one
@@ -100,7 +100,7 @@ first: `npm run codegen --prefix packages/<pkg>`.
   It reads the five shipped READMEs (root + the four packages) and the recipes
   in `docs/recipes/`, writes each block to a gitignored `.readme-samples/` as a
   standalone module with
-  `@rn-media/*` mapped at the packages' `src`, and reports failures at
+  `@timbre/*` mapped at the packages' `src`, and reports failures at
   `README.md:LINE` — the README's line, not the generated file's. Fix the
   sample; never the check. A block that is deliberately partial (an options
   object quoted on its own) opts out with ` ```ts fragment `, and the summary

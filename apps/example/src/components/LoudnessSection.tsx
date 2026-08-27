@@ -22,7 +22,7 @@ import {
   toPlayerError,
   type LoudnessNormalizationOptions,
   type Player,
-} from '@rn-media/player'
+} from '@timbre/player'
 import { COLORS, TYPE } from '../theme'
 import { Chip, ChipRow, Detail, Section } from './ui'
 

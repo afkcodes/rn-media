@@ -1,5 +1,5 @@
 {
-  "name": "@rn-media/cast",
+  "name": "@timbre/cast",
   "version": "0.1.0",
   "description": "First-party Google Cast sender binding, audio-scoped: discovery, sessions, RemoteMediaClient + receiver queue, typed errors \u2014 powered by Nitro Modules",
   "main": "./lib/commonjs/index.js",

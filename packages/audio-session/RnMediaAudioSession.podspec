@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.license      = package["license"]
   s.authors      = package["author"]
 
-  # iOS only, matching `@rn-media/player` and the example app. AVAudioSession
+  # iOS only, matching `@timbre/player` and the example app. AVAudioSession
   # does exist on visionOS/tvOS/watchOS; add those platforms when there is a
   # target that actually builds them, not before.
   s.platforms    = { :ios => min_ios_version_supported }

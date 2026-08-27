@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import withRnMediaCastRunOnce, { withRnMediaCast } from '../src/index'
 
-const PLUGIN_NAME = '@rn-media/cast'
+const PLUGIN_NAME = '@timbre/cast'
 
 const OPTIONS_PROVIDER_KEY =
   'com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME'

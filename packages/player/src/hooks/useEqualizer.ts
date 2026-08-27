@@ -500,7 +500,7 @@ export function useEqualizer(
       // synchronously, so hydration finishes inside this effect and the very
       // first `af` write is already the restored curve. Awaiting would defer it
       // a microtask for no reason and cost a render. The same shape
-      // `@rn-media/media-session`'s `withPersistence` uses, for the same reason.
+      // `@timbre/media-session`'s `withPersistence` uses, for the same reason.
       const read = storage.getItem(storageKey ?? DEFAULT_EQUALIZER_STORAGE_KEY)
       if (read instanceof Promise) read.then(adopt, fail)
       else adopt(read)
@@ -976,7 +976,7 @@ function reportStorageError(
     return
   }
   console.warn(
-    '[@rn-media/player] useEqualizer: the storage adapter failed. Pass `onStorageError` to handle it.',
+    '[@timbre/player] useEqualizer: the storage adapter failed. Pass `onStorageError` to handle it.',
     cause
   )
 }

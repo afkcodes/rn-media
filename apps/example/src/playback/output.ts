@@ -12,7 +12,7 @@ import type {
   Player,
   ReplayGainMode,
   ReplayGainOptions,
-} from '@rn-media/player'
+} from '@timbre/player'
 
 /**
  * The exact `setReplayGain` payload each UI mode writes.

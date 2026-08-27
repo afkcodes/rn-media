@@ -1,6 +1,6 @@
 //
 //  Bridge.h
-//  @rn-media/player
+//  @timbre/player
 //
 //  Created by Ashish Kumar on 9/8/2026
 //

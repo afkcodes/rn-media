@@ -6,7 +6,7 @@ in minutes. The source resolver is the seam, and it fires at prefetch time too,
 so a queue of signed URLs is still gapless.
 
 ```ts
-import { Player, type SourceResolver } from '@rn-media/player'
+import { Player, type SourceResolver } from '@timbre/player'
 
 /**
  * `myapp://track/<id>` → whatever the server says is playable right now.

@@ -51,7 +51,7 @@ describe('Player.create', () => {
     expect(client.initialized).toBe(true)
     expect(client.initOptions).toEqual({
       'log-level': 'warn',
-      'user-agent': 'rn-media (libmpv)',
+      'user-agent': 'timbre (libmpv)',
       // mpv's own default readahead is 1000 h, capped only by the 150 MiB
       // `demuxer-max-bytes`; bounding it is what stops a paused radio stream
       // from downloading for hours. See DEFAULT_CACHE_SECS.
@@ -584,7 +584,7 @@ describe('Player — transport commands', () => {
     expect(client.written.get(MpvProperty.volume)).toBe(100)
   })
 
-  // `wireAudioSession` (@rn-media/audio-session) requires this method on the
+  // `wireAudioSession` (@timbre/audio-session) requires this method on the
   // structural player it ducks; the audio-session spec names our Player as a
   // supported target, so it is part of the cross-package contract.
   it('getVolume reads mpv back and converts 0..100 to 0..1', async () => {

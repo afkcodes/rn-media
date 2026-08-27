@@ -22,7 +22,7 @@ const h = vi.hoisted(() => ({
   activate: vi.fn(async () => true),
 }))
 
-vi.mock('@rn-media/audio-session', () => ({
+vi.mock('@timbre/audio-session', () => ({
   // Only the singleton is reached at runtime by `transport.ts`; everything
   // else it names is imported as a type.
   AudioSession: { activate: h.activate },

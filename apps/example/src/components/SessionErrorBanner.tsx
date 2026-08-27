@@ -23,7 +23,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import type { SessionError, SessionErrorCode } from '@rn-media/media-session'
+import type { SessionError, SessionErrorCode } from '@timbre/media-session'
 import { COLORS, SPACE, TYPE } from '../theme'
 import { Detail, Strip } from './ui'
 

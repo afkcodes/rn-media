@@ -3,7 +3,7 @@
  *
  * Notification buttons, the lock screen, a Bluetooth remote, a car head unit
  * and Google Assistant all arrive here. That is the whole contract of
- * `@rn-media/media-session` — one interface, however many surfaces — and it is
+ * `@timbre/media-session` — one interface, however many surfaces — and it is
  * why this file has no idea which of them called it.
  */
 import {
@@ -12,7 +12,7 @@ import {
   type MediaRepeatMode,
   type SearchFocus,
   type SessionError,
-} from '@rn-media/media-session'
+} from '@timbre/media-session'
 import {
   assertSignedIn,
   childrenOf,

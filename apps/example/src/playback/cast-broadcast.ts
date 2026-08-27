@@ -13,8 +13,8 @@
  * Kept pure for the same reason `broadcast.ts` is: it is the part a real app
  * copies, and the part a Node test can pin without a device.
  */
-import type { CastReceiverSnapshot } from '@rn-media/cast'
-import type { MediaItem, PlaybackState } from '@rn-media/media-session'
+import type { CastReceiverSnapshot } from '@timbre/cast'
+import type { MediaItem, PlaybackState } from '@timbre/media-session'
 import {
   DEMO_BROKEN_TARGET,
   DEMO_BROKEN_URI,

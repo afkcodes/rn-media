@@ -13,8 +13,8 @@
  * place JS timers are legal — and runs only while the receiver is advancing.
  */
 import React from 'react'
-import { projectReceiverPosition } from '@rn-media/cast'
-import type { Progress } from '@rn-media/player'
+import { projectReceiverPosition } from '@timbre/cast'
+import type { Progress } from '@timbre/player'
 import type { Playback } from '../playback'
 
 /** Re-render period while the receiver clock advances — matches `useProgress`. */

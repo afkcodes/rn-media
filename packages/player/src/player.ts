@@ -461,7 +461,7 @@ export interface PlayerOptions {
    * streaming hosts blocklist the literal string `libmpv` (observed on-device:
    * a Shoutcast DNAS v2 server returning `401 Unauthorized` for exactly
    * `User-Agent: libmpv` while accepting any other value, including
-   * `rn-media/0.1 (libmpv)`). A raw `mpvOptions['user-agent']` still wins over
+   * `timbre/0.1 (libmpv)`). A raw `mpvOptions['user-agent']` still wins over
    * this option.
    */
   readonly userAgent?: string
@@ -1425,7 +1425,7 @@ const DEFAULT_LOG_LEVEL: PlayerLogLevel = 'warn'
  * bans. Overridable per player via `userAgent`, or raw via
  * `mpvOptions['user-agent']`.
  */
-export const DEFAULT_USER_AGENT = 'rn-media (libmpv)'
+export const DEFAULT_USER_AGENT = 'timbre (libmpv)'
 
 /**
  * Default `--cache-secs`, i.e. how far ahead the demuxer is allowed to read on
@@ -2512,7 +2512,7 @@ export class Player {
    * method.
    *
    * A convenience, but not only that: it is what makes a `Player` satisfy
-   * `@rn-media/audio-session`'s `AudioSessionPlayerLike.isPlaying`, which
+   * `@timbre/audio-session`'s `AudioSessionPlayerLike.isPlaying`, which
    * `wireAudioSession` consults to tell its own interruption pause apart from
    * one the user asked for — a user pause must never be auto-resumed when the
    * interruption ends.
@@ -3409,7 +3409,7 @@ export class Player {
    *
    * @example
    * ```ts
-   * import { AudioFilters } from '@rn-media/player'
+   * import { AudioFilters } from '@timbre/player'
    *
    * player.setAudioFilters([
    *   AudioFilters.volume({ gainDb: -6 }),      // headroom for the boost below

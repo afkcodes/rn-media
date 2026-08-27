@@ -1,16 +1,16 @@
-# `@rn-media/audio-session`
+# `@timbre/audio-session`
 
 The single arbiter of the OS audio session for React Native: category and focus
 configuration, interruptions, headphone unplugs and route changes, unified across
 `AVAudioSession` (iOS) and `AudioFocusRequest` (Android). Nitro Module, Kotlin +
-Swift, no C++ of its own, and zero dependency on `@rn-media/player` in either
+Swift, no C++ of its own, and zero dependency on `@timbre/player` in either
 direction — integration is an explicit helper, never ambient coupling
 ([ARCHITECTURE §26](../../ARCHITECTURE.md#26-avaudiosession-has-exactly-one-owner-and-it-is-not-the-engine)).
 
 ## Installation
 
 ```sh
-npm install @rn-media/audio-session react-native-nitro-modules
+npm install @timbre/audio-session react-native-nitro-modules
 ```
 
 The Android manifest needs nothing.
@@ -18,7 +18,7 @@ The Android manifest needs nothing.
 ## Usage
 
 ```ts
-import { AudioSession, AudioSessionPresets } from '@rn-media/audio-session'
+import { AudioSession, AudioSessionPresets } from '@timbre/audio-session'
 
 await AudioSession.configure(AudioSessionPresets.music) // or .speech
 const granted = await AudioSession.activate()
@@ -40,7 +40,7 @@ await AudioSession.deactivate()
 Or hand the whole policy to `wireAudioSession`:
 
 ```ts
-import { AudioSessionPresets, wireAudioSession } from '@rn-media/audio-session'
+import { AudioSessionPresets, wireAudioSession } from '@timbre/audio-session'
 
 const unwire = wireAudioSession(player, {
   preset: AudioSessionPresets.music,

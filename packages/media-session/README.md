@@ -1,21 +1,21 @@
-# `@rn-media/media-session`
+# `@timbre/media-session`
 
 Player-agnostic media session for React Native: one JavaScript handler behind
 every remote surface — notification, lock screen, Bluetooth, headset, watch,
 Android Auto, CarPlay, Control Center — and three broadcast channels that all of
 them, and your own UI, render from. Nitro Module, Kotlin + Swift, with **no
-dependency on `@rn-media/player`**: the handler interface is the whole contract,
+dependency on `@timbre/player`**: the handler interface is the whole contract,
 so it works with any player that can make sound.
 
 ## Install
 
-`npm install @rn-media/media-session react-native-nitro-modules`
+`npm install @timbre/media-session react-native-nitro-modules`
 
 | Platform | Setup |
 |---|---|
 | Android | Nothing. The library manifest merges `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, the `foregroundServiceType="mediaPlayback"` service, the Android Auto declaration and the artwork provider. `POST_NOTIFICATIONS` is **not** required — media notifications are exempt |
 | iOS | `UIBackgroundModes: audio` in your `Info.plist`. A library cannot merge Info.plist keys; the [Expo plugin](#expo-config-plugin) writes it |
-| Expo | `"plugins": ["@rn-media/media-session"]`, then `npx expo prebuild --clean` |
+| Expo | `"plugins": ["@timbre/media-session"]`, then `npx expo prebuild --clean` |
 
 ## The model
 
@@ -23,7 +23,7 @@ so it works with any player that can make sound.
 broadcast channels are the only state source.
 
 ```ts
-import { BaseMediaHandler, MediaService } from '@rn-media/media-session'
+import { BaseMediaHandler, MediaService } from '@timbre/media-session'
 
 class MyHandler extends BaseMediaHandler {
   async play() { await player.play() }
@@ -175,7 +175,7 @@ renderer, any multi-room protocol — say so with
 device instead of the phone's music stream, foregrounded, backgrounded or with
 the screen off, and presses arrive as `onSetDeviceVolume` / `onSetDeviceMuted`.
 Nothing here knows what a receiver is, and this package has no dependency on
-`@rn-media/cast`.
+`@timbre/cast`.
 
 | Option / precondition | Detail |
 |---|---|
@@ -196,7 +196,7 @@ re-broadcasts
 ([ARCHITECTURE §19](../../ARCHITECTURE.md#19-background-hardening-persistence-is-injected-the-sleep-timer-is-native-the-fgs-grace-period-is-a-knob)).
 
 ```ts
-import { MediaService, applyPersisted, restorePersisted, withPersistence } from '@rn-media/media-session'
+import { MediaService, applyPersisted, restorePersisted, withPersistence } from '@timbre/media-session'
 
 const service = withPersistence(await MediaService.init(() => new MyHandler(), config), storage)
 const restored = await restorePersisted(storage)
@@ -232,7 +232,7 @@ handler
 |---|---|
 | `android.playbackResumption: true`, and `withPersistence(...)` | The flag is off by default, because this path starts a foreground service in a process the user did not open; `withPersistence` writes the snapshot the service reads, and nothing else does |
 | `MediaService.init(...)` reachable at JS **module scope**, from a bare side-effect import in your entry file (`import './src/playback'`) | A revived runtime starts no surface, so nothing mounts and no effect runs; and Metro's release-mode inline requires defer a *binding* import to its first use, which for anything used inside a component is the first render. A bare side-effect import has no bindings to defer |
-| `androidx.media3.session.MediaButtonReceiver` declared in your `AndroidManifest.xml`, with an `android.intent.action.MEDIA_BUTTON` intent filter | media3 reads the declaration as your app's promise that it can resume, so an AAR cannot merge it. Under Expo prebuild the plugin writes it: `["@rn-media/media-session", { "playbackResumption": true }]` |
+| `androidx.media3.session.MediaButtonReceiver` declared in your `AndroidManifest.xml`, with an `android.intent.action.MEDIA_BUTTON` intent filter | media3 reads the declaration as your app's promise that it can resume, so an AAR cannot merge it. Under Expo prebuild the plugin writes it: `["@timbre/media-session", { "playbackResumption": true }]` |
 | `android.onRevivalRequested` | The same recovery for a process that is still **alive**: `stopService()` keeps the persisted session so the card stays, and module scope cannot run twice. Give it your idempotent "bring the session up" path. Test the whole thing with `am kill` — `am force-stop` removes the System UI card, which `am kill` does not |
 
 A missing wiring is **reported, not merely logged**: `playbackResumptionNotWired`
@@ -357,8 +357,8 @@ CarPlay); a real head unit also needs Apple to grant the entitlement.
 
 ## Expo config plugin
 
-`{ "expo": { "plugins": ["@rn-media/media-session"] } }` is the config plugin for
-the whole library; `@rn-media/player` and `@rn-media/audio-session` need none
+`{ "expo": { "plugins": ["@timbre/media-session"] } }` is the config plugin for
+the whole library; `@timbre/player` and `@timbre/audio-session` need none
 ([ARCHITECTURE §16](../../ARCHITECTURE.md#16-expo-support-is-one-config-plugin-owned-by-media-session)).
 With no options it merges `audio` into iOS `UIBackgroundModes` and changes
 nothing on Android, where this package's manifest already merges what is needed.
@@ -370,7 +370,7 @@ two [CarPlay](#carplay) declarations, and drop the drawable into
 
 ### Options
 
-Passed as `["@rn-media/media-session", { … }]`.
+Passed as `["@timbre/media-session", { … }]`.
 
 | Option | Default | Detail |
 |---|---|---|

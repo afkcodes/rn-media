@@ -1,4 +1,4 @@
-# rn-media — Analysis & Plan
+# timbre — Analysis & Plan
 
 A React Native audio + video playback library built on **libmpv**, with an
 **audio_service-style service layer** that hooks into *any* player — not just its own.
@@ -273,7 +273,7 @@ Architectural consequences, enforced from day one:
 - **Core never links video code**: the C++ core uses only `mpv/client.h` (never
   `render.h`), core binaries are the audio-flavor builds (~3 MB/ABI, no libass),
   and mpv cores are created with `vid=no`/`--vo=null` defaults.
-- **`@rn-media/video` plugin contract**: the Player HybridObject exposes a narrow
+- **`@timbre/video` plugin contract**: the Player HybridObject exposes a narrow
   native attachment surface (`attachVideoOutput(...)` / `detachVideoOutput()` +
   the raw handle for plugin-side render setup). The video plugin brings its own
   `VideoView` HybridView, its own video-flavor binaries, and swaps the binary
@@ -289,16 +289,16 @@ iOS cast and CarPlay are not yet tested; Expo config plugin from Phase 3
 deferred).
 Phase 4 (video plugin) not started; Phase 5 backlogged. Shipped and proven:
 
-- `@rn-media/player` — multi-instance libmpv Player; typed state/reducer;
+- `@timbre/player` — multi-instance libmpv Player; typed state/reducer;
   position projection; gapless playlists; typed errors; live-stream detection
   (`isLive`, honest duration); HLS playlist-demuxer guard; default HTTP
-  user-agent (`rn-media (libmpv)` — mpv's bare `libmpv` UA is 401-blocklisted
+  user-agent (`timbre (libmpv)` — mpv's bare `libmpv` UA is 401-blocklisted
   by real Shoutcast hosts, found on-device); log-level name mapping; raw mpv
   escape hatches; `usePlayer`/`usePlayerState`/`useProgress`. 224 TS + 26 C++
   tests.
-- `@rn-media/audio-session` — focus/AVAudioSession arbiter, interruption/
+- `@timbre/audio-session` — focus/AVAudioSession arbiter, interruption/
   noisy/route events, music/speech presets, `wireAudioSession`. 41 tests.
-- `@rn-media/media-session` — media3 1.11 MediaLibraryService +
+- `@timbre/media-session` — media3 1.11 MediaLibraryService +
   SimpleBasePlayer facade; monotonic position anchors (zero bridge traffic);
   native-first commands; FGS lifecycle incl. Android 12/13/14 edge cases;
   channel-priority merge (setMediaItem over current queue entry);
@@ -343,7 +343,7 @@ render-API path, fullscreen, background detach/reattach, track selection, subtit
 **Phase 5 — Power features**
 Typed DSP/EQ API (subset of mpv_audio_kit's 87 filters), FFT/PCM visualizer streams,
 mpv hooks/source resolvers, Android Auto + CarPlay browse, casting (a URL handoff
-around mpv, not an mpv output — `@rn-media/cast`; see docs/design/cast.md),
+around mpv, not an mpv output — `@timbre/cast`; see docs/design/cast.md),
 persistence decorator.
 
 ## 8.1 ROADMAP AS OF 2026-08-12 (the living queue; see the session task board for detail)
@@ -396,7 +396,7 @@ loudness-aware fade points recorded as the only worthwhile revisit).
    receiver with the screen off while casting. Still open on hardware: iOS
    lock-screen controls during a cast session
    need the silent-audio-session experiment on Apple hardware.
-3. **`@rn-media/downloads`** — offline playback package. Design key: it ships
+3. **`@timbre/downloads`** — offline playback package. Design key: it ships
    as a source resolver (local file when downloaded, CDN otherwise) — zero
    player changes. Scope: WorkManager/URLSession backends, storage/eviction,
    progress events, playlist-level downloads, integrity, encryption decision.
@@ -435,18 +435,18 @@ loudness-aware fade points recorded as the only worthwhile revisit).
    is first-party on both platforms** (Chromecast-on-both; the paid
    competitor's Android-only-Chromecast / iOS-only-AirPlay split is exactly
    the compromise our gate rejects). AirPlay stays honestly out of scope: no
-   sender SDK exists for third-party engines. Shipped as `@rn-media/cast` —
+   sender SDK exists for third-party engines. Shipped as `@timbre/cast` —
    see item 6.
 6. **Casting — design APPROVED 2026-08-13; the item-5 deferral is rewritten
    above in the same change (the decision-change rule).** `docs/design/cast.md`
-   is the owner-approved design: first-party `@rn-media/cast` binding over the
+   is the owner-approved design: first-party `@timbre/cast` binding over the
    official sender SDKs on both platforms, receiver-side queue, no local-file
    HTTP server in v1, AirPlay honestly out of scope. Phasing per cast.md §6:
-   Phase 1 sign-off DONE; Phase 2 — the `@rn-media/cast` package (Nitro
+   Phase 1 sign-off DONE; Phase 2 — the `@timbre/cast` package (Nitro
    Kotlin/Swift binding + expo plugin, pins 22.3.1/4.8.6 registry-verified
    2026-08-13) — BUILT; Phase 3 — the handoff state machine — BUILT: a pure,
    exhaustively-tested reducer (`reduceCastHandoff`, cast.md §3 verbatim) plus
-   `wireCastHandoff`, living in **@rn-media/cast, not media-session** (which
+   `wireCastHandoff`, living in **@timbre/cast, not media-session** (which
    stays cast-free; the handoff takes structural player/queue interfaces, the
    `AudioSessionPlayerLike` discipline), with the example app's controller/
    SessionBridge integration broadcasting the RECEIVER's state through the
@@ -569,7 +569,7 @@ device-verified 2026-08-10.
 **Fundamental limits (document, don't fight):** no DRM (Widevine/FairPlay) — mpv
 cannot; target audience is non-DRM audio (indie/self-hosted/Plex/Jellyfin/
 Subsonic/podcasts/radio/audiobooks). Chromecast = Cast SDK URL handoff — ours
-first-party via `@rn-media/cast` on both platforms (docs/design/cast.md); an
+first-party via `@timbre/cast` on both platforms (docs/design/cast.md); an
 mpv *output* to a receiver can never exist. AirPlay audio works via iOS system
 routing only; no third-party sender SDK exists, so it stays honestly out of
 scope as a feature claim.
@@ -589,7 +589,7 @@ scope as a feature claim.
 
 ## 10. Open questions
 
-1. **Naming** — working title `rn-media`; npm scope? (`@mpvkit/*` clashes with iOS MPVKit; maybe `@rn-media/*`, `react-native-mpv-*`, or a brandable name.)
+1. **Naming** — working title `rn-media`; npm scope? (`@mpvkit/*` clashes with iOS MPVKit; maybe `@timbre/*`, `react-native-mpv-*`, or a brandable name.)
 2. **v1 scope** — recommendation above is audio-first (phases 1–3) with video in 4; confirm.
 3. **Expo support level** — config plugin only (recommended), or also an Expo Modules wrapper?
 4. **Queue ownership** — JS-owned queue with handler callbacks (audio_service model, maximum flexibility, needs JS alive) vs optional native queue fallback for post-kill resilience. **Settled:** JS-owned, and the post-kill case no longer argues against it — ARCHITECTURE §20's native snapshot mirror gives the service a readable queue with no JS alive, without moving queue *ownership* out of JavaScript.

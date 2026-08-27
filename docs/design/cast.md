@@ -60,7 +60,7 @@ insufficient:
 
 ## 2. Decision: first-party sender binding, audio-scoped
 
-**Recommendation: build `@rn-media/cast` first-party** — a Kotlin/Swift Nitro
+**Recommendation: build `@timbre/cast` first-party** — a Kotlin/Swift Nitro
 HybridObject pair (the audio-session package pattern; there is no C API, so
 this is not a pure-C++ binding) over the official sender SDKs, scoped to what
 an audio library needs. Do **not** wrap RNGC v4 (old bridge). Track RNGC v5
@@ -196,7 +196,7 @@ capability answer, never a crash.
    wait-for-RNGC-v5; receiver-queue vs phone-driven advancement (recommended:
    receiver-queue); local-file HTTP server in/out of v1 (recommended: out,
    documented).
-2. **`@rn-media/cast` package**: Nitro Kotlin/Swift binding — context init
+2. **`@timbre/cast` package**: Nitro Kotlin/Swift binding — context init
    (main-thread trampolined, Task-based Android init, typed availability),
    discovery, session manager, RemoteMediaClient + queue ops, events; expo
    plugin (clone of media-session's run-once pattern: receiver app ID →

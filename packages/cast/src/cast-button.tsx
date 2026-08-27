@@ -123,7 +123,7 @@ function warnOnceIfNeverInitialized(): void {
   // device, and it is the state before `initialize()` resolves. But a
   // <CastButton/> that never appears is confusing enough to earn one line.
   console.warn(
-    '[@rn-media/cast] <CastButton/> renders nothing while the cast state is ' +
+    '[@timbre/cast] <CastButton/> renders nothing while the cast state is ' +
       "'unavailable'. That is expected on a device without Google Play " +
       'services, and until `Cast.initialize()` resolves — call it once, early.'
   )

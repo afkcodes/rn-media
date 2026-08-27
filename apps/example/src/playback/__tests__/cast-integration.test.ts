@@ -20,14 +20,14 @@
  *   hardware volume keys on the speaker with the screen locked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Player, PlayerState } from '@rn-media/player'
+import type { Player, PlayerState } from '@timbre/player'
 import type {
   CastHandoff,
   CastHandoffLocalPlayer,
   CastHandoffPhase,
   WireCastHandoffOptions,
-} from '@rn-media/cast'
-import type { CastDeviceVolume } from '@rn-media/cast'
+} from '@timbre/cast'
+import type { CastDeviceVolume } from '@timbre/cast'
 import type { Track } from '../../data/tracks'
 
 /* ---------------------------------------------------------------------- */
@@ -74,7 +74,7 @@ const h = vi.hoisted(() => {
   return { calls, emit, fakeCast, handle, captured }
 })
 
-vi.mock('@rn-media/cast', async () => {
+vi.mock('@timbre/cast', async () => {
   // Not `importOriginal`: the package entry pulls the Nitro facade, whose
   // module graph needs React Native. The pure halves this module actually
   // uses are re-exported from their sources; the two impure ones (the `Cast`

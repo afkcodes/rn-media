@@ -25,7 +25,7 @@
  * correct and the labels do not, which shows up later as the wrong artwork on
  * the wrong song.
  */
-import type { Player, PlaylistEntry } from '@rn-media/player'
+import type { Player, PlaylistEntry } from '@timbre/player'
 import { TRACKS, type Track } from '../data/tracks'
 
 /** One queue row: what mpv holds, joined to what this app knows about it. */

@@ -8,12 +8,12 @@
  * notification, the lock screen and this app's own seek bar, so they cannot
  * disagree.
  */
-import type { LoopMode, PlayerState } from '@rn-media/player'
+import type { LoopMode, PlayerState } from '@timbre/player'
 import type {
   MediaItem,
   MediaRepeatMode,
   PlaybackState,
-} from '@rn-media/media-session'
+} from '@timbre/media-session'
 import type { Track } from '../data/tracks'
 
 /**

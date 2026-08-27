@@ -1,5 +1,5 @@
 {
-  "name": "@rn-media/media-session",
+  "name": "@timbre/media-session",
   "version": "0.1.0",
   "description": "Player-agnostic media session: one JS handler for every remote surface, media3 MediaLibraryService on Android, MPRemoteCommandCenter/MPNowPlayingInfoCenter on iOS",
   "main": "./lib/commonjs/index.js",

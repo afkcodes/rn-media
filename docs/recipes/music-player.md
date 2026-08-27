@@ -11,8 +11,8 @@ possible.
 ```ts
 // src/playback.ts
 import { AppState } from 'react-native'
-import { Player } from '@rn-media/player'
-import { AudioSession, AudioSessionPresets, wireAudioSession } from '@rn-media/audio-session'
+import { Player } from '@timbre/player'
+import { AudioSession, AudioSessionPresets, wireAudioSession } from '@timbre/audio-session'
 import {
   BaseMediaHandler,
   MediaService,
@@ -23,7 +23,7 @@ import {
   type MediaRepeatMode,
   type PersistedMediaService,
   type SessionError,
-} from '@rn-media/media-session'
+} from '@timbre/media-session'
 import { storage, type Track } from './library'
 
 let player: Player
@@ -159,7 +159,7 @@ One hook carries the curve, the presets, the persistence and the single `af`
 write.
 
 ```tsx
-import { useEqualizer, type Player } from '@rn-media/player'
+import { useEqualizer, type Player } from '@timbre/player'
 import { Pressable, Text, View } from 'react-native'
 import { Slider } from './ui'
 import { storage } from './library'
@@ -196,7 +196,7 @@ export function EqualizerScreen({ player }: { player: Player | undefined }) {
 | `rate: 0` is how "paused" is expressed | `state.positionAnchorMs` applies it for you |
 | `player.stop()` keeps the queue | mpv's own `stop` clears it; this library inverts the default. Pass `{ clearPlaylist: true }` for the destructive version |
 | `MediaItem.id` is derived from the track | `restorePersisted` matches by id, so an id uniquified per insertion does not exist after a cold start. Duplicates in a queue are legal |
-| `playbackResumption` needs a manifest half | media3's `MediaButtonReceiver`, or `["@rn-media/media-session", { "playbackResumption": true }]` under Expo prebuild |
+| `playbackResumption` needs a manifest half | media3's `MediaButtonReceiver`, or `["@timbre/media-session", { "playbackResumption": true }]` under Expo prebuild |
 
 Full depth:
 [persistence](../../packages/media-session/README.md#surviving-process-death-withpersistence) ·

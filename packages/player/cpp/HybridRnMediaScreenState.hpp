@@ -29,7 +29,7 @@
 /// `AppState` alone is already the truth. Answering `false` would be a lie, and
 /// pretending to observe would be a lie with a timer attached.
 ///
-/// It is C++ rather than Swift deliberately — `@rn-media/player` ships no Swift
+/// It is C++ rather than Swift deliberately — `@timbre/player` ships no Swift
 /// today, and a constant does not justify introducing a Swift compilation unit
 /// (and its bridging header) into the pod.
 ///

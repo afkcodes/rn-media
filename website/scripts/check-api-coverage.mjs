@@ -29,7 +29,7 @@ const REPO_ROOT = dirname(WEBSITE_ROOT)
 /** The package under coverage. One entry today; the other three are pass 2. */
 const PACKAGES = [
   {
-    name: '@rn-media/player',
+    name: '@timbre/player',
     indexFile: join(REPO_ROOT, 'packages/player/src/index.ts'),
     srcDir: join(REPO_ROOT, 'packages/player/src'),
     apiDir: join(WEBSITE_ROOT, 'docs/api/player'),

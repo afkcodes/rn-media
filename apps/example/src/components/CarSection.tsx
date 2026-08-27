@@ -20,7 +20,7 @@
  */
 import React from 'react'
 import { StyleSheet, Text } from 'react-native'
-import { useCarConnection } from '@rn-media/media-session'
+import { useCarConnection } from '@timbre/media-session'
 import { COLORS, TYPE } from '../theme'
 import { Chip, ChipRow, Detail, Section } from './ui'
 
