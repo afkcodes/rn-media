@@ -376,6 +376,25 @@ loudness-aware fade points recorded as the only worthwhile revisit).
    not require `playbackResumption`, Siri `INPlayMediaIntent`, `getMediaItem`
    on iOS, an XCTest target for the pure Swift, RN 0.88 scene entrypoint
    replacing the phone-window shim.
+2b. **Pitfall closure (architect ruling, 2026-08-27).** The README's "Common
+   pitfalls" were audited: eleven are the library's defects, not the user's.
+   In flight, one lane per package: `content://` loads via mpv's `fd://`;
+   `useEqualizer` composes its labelled entries instead of owning the chain;
+   ReplayGain and loudness normalization are mutually exclusive by API; one
+   anchor shape at the player↔session seam (`positionAnchorMs`); persistence
+   autosave while playing (local projection, zero bridge traffic); the
+   playback-resumption "silence" becomes a sessionError with the fix text.
+   Sized and queued, not started: **embedded cover art** (experiment first —
+   the "needs a video output" claim is unverified; `screenshot-raw` with
+   `vo=null`, else an `attached_pic` read through the linked libavformat),
+   **cast `file://`** (a local HTTP server on the phone, the standard
+   approach), **browse-only session** (cold car browse without
+   `playbackResumption`). Decided against: crossfade stays dropped (the
+   bar is "sounds right on device", not "exists"); no Xcode-version gating
+   for cast. Closed 2026-08-27 by the owner's physical press: volume keys drive the
+   receiver with the screen off while casting. Still open on hardware: iOS
+   lock-screen controls during a cast session
+   need the silent-audio-session experiment on Apple hardware.
 3. **`@rn-media/downloads`** — offline playback package. Design key: it ships
    as a source resolver (local file when downloaded, CDN otherwise) — zero
    player changes. Scope: WorkManager/URLSession backends, storage/eviction,
