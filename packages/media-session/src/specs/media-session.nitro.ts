@@ -272,6 +272,44 @@ export type SessionErrorCode =
    */
   | 'playbackResumptionUnavailable'
   /**
+   * **Android only**: a playback resumption booted the app's JavaScript
+   * runtime, the runtime came up — and `MediaService.init(...)` never followed.
+   * The user's press on the System UI card (or a Bluetooth reconnect, or a
+   * headset button) is going nowhere, and the reason is a *wiring* mistake in
+   * the app rather than anything that failed.
+   *
+   * Raised from `RnMediaMediaSessionService.probe` at the earliest moment the
+   * condition is knowable — a fixed grace period after the `ReactContext`
+   * exists, which is *after* the bundle has been evaluated, so a module-scope
+   * `init` has already had its chance. That is seconds before
+   * {@link playbackResumptionFailed}, which is the same incident's *outcome*
+   * once the 10 s deadline expires. Both are reported: this one names the
+   * cause, that one names the consequence.
+   *
+   * The message carries the fix, and there are two of them because there are
+   * two ways to be unwired:
+   * - nothing asked the app to re-initialize (a genuinely cold boot), so only
+   *   JS module scope could have — and Metro's release-mode inline requires
+   *   defer a *binding* import to its first use, which a headless runtime
+   *   never reaches. The fix is a bare side-effect import in the entry file;
+   *   the message says so in those words.
+   * - `android.onRevivalRequested` did fire on a live runtime and no `init`
+   *   followed, so that callback is not wired to the app's init path.
+   *
+   * ## Delivery is always deferred, by construction
+   * A handler existing *is* an initialized session, which is the thing whose
+   * absence this code reports — so there is never anybody listening at the
+   * instant it is raised. It goes to logcat immediately and is held for the
+   * next `initialize`, alongside the resumption failure it explains. A
+   * diagnosis raised while a revival was still running is **dropped** if that
+   * revival then completed: an `initialize` that arrives in time disproves it,
+   * so a merely slow app is never accused (`SessionErrorReporter`).
+   *
+   * No iOS twin, for the same reason {@link playbackResumptionFailed} has none:
+   * iOS cannot restart a terminated app for playback at all.
+   */
+  | 'playbackResumptionNotWired'
+  /**
    * The artwork an app named could not be turned into an image, so the surfaces
    * show the track with no cover. Cosmetic, and reported per URI rather than
    * per attempt.

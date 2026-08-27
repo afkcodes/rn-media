@@ -51,6 +51,9 @@ namespace margelo::nitro::rnmediamediasession {
         case SessionErrorCode::PLAYBACKRESUMPTIONUNAVAILABLE:
           static const auto fieldPLAYBACKRESUMPTIONUNAVAILABLE = clazz->getStaticField<JSessionErrorCode>("PLAYBACKRESUMPTIONUNAVAILABLE");
           return clazz->getStaticFieldValue(fieldPLAYBACKRESUMPTIONUNAVAILABLE);
+        case SessionErrorCode::PLAYBACKRESUMPTIONNOTWIRED:
+          static const auto fieldPLAYBACKRESUMPTIONNOTWIRED = clazz->getStaticField<JSessionErrorCode>("PLAYBACKRESUMPTIONNOTWIRED");
+          return clazz->getStaticFieldValue(fieldPLAYBACKRESUMPTIONNOTWIRED);
         case SessionErrorCode::ARTWORKFAILED:
           static const auto fieldARTWORKFAILED = clazz->getStaticField<JSessionErrorCode>("ARTWORKFAILED");
           return clazz->getStaticFieldValue(fieldARTWORKFAILED);

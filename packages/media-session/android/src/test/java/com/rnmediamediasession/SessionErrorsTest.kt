@@ -150,6 +150,108 @@ class SessionErrorsTest {
     assertTrue(sink.delivered.isEmpty())
   }
 
+  /* ------------------------- The early diagnosis -------------------------- */
+
+  @Test
+  fun `a diagnosis is logged at once and delivered only if the revival is abandoned`() {
+    val sink = Sink(alive = false)
+    val reporter = sink.reporter()
+
+    reporter.reportResumptionDiagnosis("init has not been called 3000 ms later.")
+    // Logged immediately — that is the seven seconds this whole probe buys.
+    assertEquals(1, sink.logs.size)
+    // …and never delivered on the spot: a listener existing would mean the
+    // session it reports missing is not missing.
+    assertTrue(sink.delivered.isEmpty())
+
+    reporter.confirmResumptionDiagnosis()
+    reporter.reportResumptionFailure("Playback resumption abandoned: no init followed.")
+
+    sink.alive = true
+    reporter.onSessionInitialized()
+
+    assertEquals(2, sink.delivered.size)
+    // Cause first, consequence second.
+    assertEquals(SessionErrorCode.PLAYBACKRESUMPTIONNOTWIRED, sink.delivered[0].first)
+    assertEquals(SessionErrorCode.PLAYBACKRESUMPTIONFAILED, sink.delivered[1].first)
+    assertTrue(
+      sink.delivered[0].second.startsWith(
+        "The playback resumption that ran before this session never reached your app:"
+      )
+    )
+    assertTrue(sink.delivered[0].second.endsWith("init has not been called 3000 ms later."))
+  }
+
+  @Test
+  fun `an initialize that arrives in time disproves the diagnosis`() {
+    val sink = Sink(alive = false)
+    val reporter = sink.reporter()
+
+    // The app's own init path was merely slow: the probe fired, and then the
+    // very call it reported missing arrived.
+    reporter.reportResumptionDiagnosis("init has not been called 3000 ms later.")
+    sink.alive = true
+    reporter.onSessionInitialized()
+
+    assertTrue("A slow app must never be accused of an unwired one", sink.delivered.isEmpty())
+
+    // And it stays disproved: a later abandon has nothing to promote.
+    reporter.confirmResumptionDiagnosis()
+    reporter.onSessionInitialized()
+    assertTrue(sink.delivered.isEmpty())
+  }
+
+  @Test
+  fun `the failure does not clobber the diagnosis that explains it`() {
+    val sink = Sink(alive = false)
+    val reporter = sink.reporter()
+
+    reporter.reportResumptionDiagnosis("the cause")
+    reporter.confirmResumptionDiagnosis()
+    reporter.reportResumptionFailure("the outcome")
+
+    sink.alive = true
+    reporter.onSessionInitialized()
+
+    val codes = sink.delivered.map { it.first }
+    assertEquals(
+      listOf(
+        SessionErrorCode.PLAYBACKRESUMPTIONNOTWIRED,
+        SessionErrorCode.PLAYBACKRESUMPTIONFAILED,
+      ),
+      codes,
+    )
+  }
+
+  @Test
+  fun `a repeated hold of the same code keeps one entry, the newest`() {
+    val sink = Sink(alive = false)
+    val reporter = sink.reporter()
+
+    reporter.reportResumptionFailure("first")
+    reporter.reportResumptionFailure("second")
+
+    sink.alive = true
+    reporter.onSessionInitialized()
+
+    assertEquals(1, sink.delivered.size)
+    assertTrue(sink.delivered.single().second.endsWith("second"))
+  }
+
+  @Test
+  fun `a teardown drops a diagnosis too, held or on probation`() {
+    val sink = Sink(alive = false)
+    val reporter = sink.reporter()
+
+    reporter.reportResumptionDiagnosis("on probation")
+    reporter.reset()
+    reporter.confirmResumptionDiagnosis()
+
+    sink.alive = true
+    reporter.onSessionInitialized()
+    assertTrue(sink.delivered.isEmpty())
+  }
+
   @Test
   fun `a delivery that throws is logged, not propagated`() {
     val sink = Sink(throwOnDeliver = true)

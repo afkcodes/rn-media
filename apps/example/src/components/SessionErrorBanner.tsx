@@ -32,6 +32,7 @@ const HEADLINE: Record<SessionErrorCode, string> = {
   backgroundPlaybackUnavailable: 'Background playback is not protected',
   playbackResumptionFailed: 'A playback resumption did not finish',
   playbackResumptionUnavailable: 'Playback resumption cannot work',
+  playbackResumptionNotWired: 'A resumption never reached this app',
   artworkFailed: 'Artwork did not load',
   metadataMismatch: 'Metadata was dropped',
   iconNotFound: 'An icon did not resolve',

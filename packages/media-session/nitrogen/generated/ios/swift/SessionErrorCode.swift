@@ -23,6 +23,8 @@ public extension SessionErrorCode {
         self = .playbackresumptionfailed
       case "playbackResumptionUnavailable":
         self = .playbackresumptionunavailable
+      case "playbackResumptionNotWired":
+        self = .playbackresumptionnotwired
       case "artworkFailed":
         self = .artworkfailed
       case "metadataMismatch":
@@ -51,6 +53,8 @@ public extension SessionErrorCode {
         return "playbackResumptionFailed"
       case .playbackresumptionunavailable:
         return "playbackResumptionUnavailable"
+      case .playbackresumptionnotwired:
+        return "playbackResumptionNotWired"
       case .artworkfailed:
         return "artworkFailed"
       case .metadatamismatch:

@@ -26,7 +26,9 @@ export type { MediaServiceController } from './media-service'
 export {
   applyPersisted,
   clearPersisted,
+  DEFAULT_AUTOSAVE_INTERVAL_MS,
   DEFAULT_PERSISTENCE_KEY,
+  MIN_AUTOSAVE_INTERVAL_MS,
   PERSISTENCE_SCHEMA_VERSION,
   restorePersisted,
   withPersistence,
@@ -35,6 +37,7 @@ export type {
   MediaSessionStorage,
   PersistedMediaService,
   PersistedSession,
+  PersistenceAutosaveOptions,
   PersistenceOptions,
   RestoreResult,
 } from './persistence'

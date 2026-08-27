@@ -776,6 +776,7 @@ describe('session error severity', () => {
     'backgroundPlaybackUnavailable',
     'playbackResumptionFailed',
     'playbackResumptionUnavailable',
+    'playbackResumptionNotWired',
     'artworkFailed',
     'metadataMismatch',
     'iconNotFound',
@@ -795,6 +796,9 @@ describe('session error severity', () => {
       // produced nothing.
       'backgroundPlaybackUnavailable',
       'playbackResumptionFailed',
+      // The cause of the line above, raised seconds earlier: the runtime came
+      // up and `init` never did. Same lost gesture, named at its source.
+      'playbackResumptionNotWired',
       // A car tapped a browse item and nothing at all happened: the same class
       // of loss, on a surface the developer cannot see.
       'playFromMediaIdUnhandled',
