@@ -1,0 +1,56 @@
+---
+id: intro
+title: Getting started
+sidebar_position: 1
+sidebar_label: Getting started
+---
+
+# Getting started
+
+<ProjectName /> is a React Native audio player built on
+[libmpv](https://mpv.io), paired with a **player-agnostic** media session that
+keeps the lock screen, notification, Bluetooth controls and background playback
+alive after the app's UI is gone.
+
+It ships as four packages with no cross-dependencies — pick the ones you need:
+
+| Package | What it does |
+| --- | --- |
+| <Pkg name="player" /> | The libmpv audio player: loading, queue, gapless, EQ, chapters, visualizer, hooks. |
+| <Pkg name="audio-session" /> | Audio focus, interruptions, the "becoming noisy" route change — the OS arbitration layer. |
+| <Pkg name="media-session" /> | The lock screen / notification / Android Auto / CarPlay session. Works with **any** player. |
+| <Pkg name="cast" /> | Chromecast sender: discovery, session handoff, receiver-side queue. |
+
+:::note Pre-release
+The packages are consumed from this workspace today — nothing is on npm yet, and
+the scope below is a placeholder until the name is chosen. APIs may still change.
+:::
+
+## Install
+
+<Install packages={['player', 'audio-session', 'media-session']} />
+
+On iOS, add the background audio mode and run `pod install`; Android needs no
+setup. The install is one Nitro peer dependency and the pinned libmpv binaries.
+
+## Where to next
+
+- **[The music-player guide](./guides/music-player.mdx)** — a complete, runnable
+  app: queue, gapless, lock screen, shuffle/repeat, and a session that survives
+  process death. Every sample on it typechecks against the real source.
+- **[Position anchors](./concepts/position-anchor.mdx)** — why position is never
+  streamed across the bridge, and how every surface projects it locally.
+- **[API reference](./api/player/index.md)** — the full, generated
+  <Pkg name="player" /> surface: every export, its signature, and its contract.
+
+## The two gates
+
+Everything on this site is held to two hard rules, both enforced in CI:
+
+1. **Every code sample typechecks** against the packages' source — a sample that
+   drifts from the API is a build failure, not a stale snippet.
+2. **Every public export is documented** — the API reference is generated from
+   each package's real `index.ts`, and a coverage check fails on anything
+   missing.
+
+See the <RepoLink>repository</RepoLink> for the full source and the roadmap.

@@ -1,0 +1,26 @@
+```ts
+import { Player } from '@rn-media/player'
+
+// One mpv core. No singleton —
+// create as many as you need.
+const player = await Player.create({
+  replayGain: { mode: 'album', fallback: -6 },
+})
+
+await player.load('https://ex.com/01.flac')
+player.play()
+
+// Position is an anchor, not a stream:
+// every surface projects it locally,
+// with zero bridge traffic.
+player.onStateChange((s) => {
+  const { value, rate } = s.positionAnchorMs
+  paint(value, rate, s.playing)
+})
+
+declare function paint(
+  ms: number,
+  rate: number,
+  playing: boolean
+): void
+```

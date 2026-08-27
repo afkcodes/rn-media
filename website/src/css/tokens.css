@@ -1,0 +1,81 @@
+/**
+ * Design tokens — the ONE file a rebrand touches.
+ *
+ * A near-neutral base with a single restrained accent used only for links,
+ * active nav and focus. No decorative colour anywhere else. `custom.css` maps
+ * these onto Docusaurus's `--ifm-*` variables; components read the `--rn-*`
+ * names directly. Change a value here and the whole site follows.
+ */
+
+:root {
+  /* Accent — a calm indigo. The only chromatic colour on the page. */
+  --rn-accent: #4f56d6;
+  --rn-accent-strong: #3a41c6;
+  --rn-accent-soft: #eef0fb;
+  --rn-accent-contrast: #ffffff;
+
+  /* Neutral ramp (light). Warm-neutral, not pure grey. */
+  --rn-bg: #ffffff;
+  --rn-surface: #fafafa;
+  --rn-surface-2: #f4f4f5;
+  --rn-text: #17181c;
+  --rn-text-muted: #5f636b;
+  --rn-text-faint: #8a8f98;
+  --rn-border: #e7e7ea;
+  --rn-border-strong: #d7d8dc;
+
+  /* Code surfaces — a calm, low-contrast slab in both modes. */
+  --rn-code-bg: #f7f7f8;
+  --rn-code-inline-bg: #f0f0f2;
+  --rn-code-border: #e7e7ea;
+
+  /* Callouts. */
+  --rn-constraint-bg: #f6f6f7;
+  --rn-constraint-border: #d7d8dc;
+  --rn-constraint-text: #5f636b;
+
+  /* Type. Inter when present, otherwise the platform sans. No web-font fetch. */
+  --rn-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --rn-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono',
+    Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* A real type scale (1.20 minor-third-ish, tuned for docs density). */
+  --rn-text-xs: 0.8125rem;
+  --rn-text-sm: 0.9rem;
+  --rn-text-base: 1.0625rem; /* ~17px readable body */
+  --rn-text-lg: 1.2rem;
+  --rn-text-xl: 1.5rem;
+  --rn-text-2xl: 1.95rem;
+  --rn-text-3xl: 2.6rem;
+
+  /* Rhythm. */
+  --rn-content-measure: 72ch;
+  --rn-radius: 8px;
+  --rn-radius-sm: 6px;
+}
+
+[data-theme='dark'] {
+  /* A true dark neutral — slightly cool charcoal, never inverted grey. */
+  --rn-accent: #9aa0f0;
+  --rn-accent-strong: #b6baf5;
+  --rn-accent-soft: #1b1d2b;
+  --rn-accent-contrast: #14151a;
+
+  --rn-bg: #0e0f12;
+  --rn-surface: #16171b;
+  --rn-surface-2: #1c1d22;
+  --rn-text: #e9e9ec;
+  --rn-text-muted: #a5a9b2;
+  --rn-text-faint: #71757e;
+  --rn-border: #26282e;
+  --rn-border-strong: #34363d;
+
+  --rn-code-bg: #131418;
+  --rn-code-inline-bg: #1c1d22;
+  --rn-code-border: #26282e;
+
+  --rn-constraint-bg: #16171b;
+  --rn-constraint-border: #2c2e35;
+  --rn-constraint-text: #a5a9b2;
+}
