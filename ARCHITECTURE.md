@@ -360,8 +360,8 @@ a build log.
 
 **The two forks are still not equally verified**: the Android build is confirmed
 playing HLS on a device and its PCM tap is confirmed feeding a visualizer on one;
-the iOS build is link-verified via CI plus shipped-artifact inspection only, and
-runtime playback on an iOS device remains unverified. README → Limitations
+iOS runtime playback and the media notification are device-verified by the
+owner; iOS cast and CarPlay remain unverified on hardware. README → Limitations
 carries the exact standing.
 
 ### 12. Defaults chosen by measurement (each overridable)
@@ -482,7 +482,7 @@ queue with variant/segment entries (measured 3→23). The player forces
   installs dependency substitution under the application plugin) remains the
   fallback for packages without the example app wired.
 - Final authority: a **physical Android device** (user rule: never an
-  emulator). iOS compiles on CI only; runtime iOS verification awaits a device.
+  emulator). iOS runtime playback + notification are owner-device-verified; iOS cast and CarPlay await hardware.
 
 ### 16. Expo support is one config plugin, owned by `media-session`
 An Expo prebuild app needs exactly one thing it cannot express for itself:
