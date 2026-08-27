@@ -1,5 +1,5 @@
 {
-  "name": "rn-media",
+  "name": "timbre",
   "private": true,
   "scripts": {
     "build": "npm --prefix packages/player run build && npm --prefix packages/audio-session run build && npm --prefix packages/media-session run build && npm --prefix packages/cast run build",

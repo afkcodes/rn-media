@@ -187,40 +187,31 @@ export const TRACKS: readonly Track[] = [
     uri: 'https://archive.org/download/testmp3testfile/mpthreetest.mp3',
   },
   {
-    id: 'aari-aari',
-    title: 'Aari Aari (Dhurandhar 2)',
-    artist: 'Dhurandhar: The Revenge',
-    // AAC in an MP4/M4A container, which is the shape every commercial music
-    // CDN serves — so it also covers the `mov` demuxer + `aac` decoder path
-    // that a plain `.mp3` does not.
-    album: 'Finite · AAC/MP4 · seek + EQ test',
-    uri: 'https://aac.saavncdn.com/905/f968ceef36dde517a2aee1b74e119166_160.mp4',
-    artworkUri:
-      'https://c.saavncdn.com/905/Dhurandhar-The-Revenge-Aari-Aari-From-Dhurandhar-The-Revenge-Hindi-2026-20260312141004-500x500.jpg',
-    // Extended tags — only the ones that are *true* of this source. It is a
-    // 2026 film single (the CDN's own asset naming says `Hindi-2026`), so the
-    // release year and "track 1 of a single" are facts; an album artist or a
-    // composer credit would be a guess, so neither is here. On Android these
-    // land as `MediaMetadata.releaseYear` / `.trackNumber`; iOS publishes the
-    // track number and has no year key at all (see the `MediaItem` TSDoc).
-    year: 2026,
-    trackNumber: 1,
+    id: 'sample-song',
+    title: 'Test Song',
+    artist: 'Royalty-free',
+    // A finite, seekable MP3 — the seek + EQ test bed. Royalty-free test
+    // media (Google's ExoPlayer test bucket). AAC decoding is separately
+    // covered by the FIP HLS stream above, which is live and so not seekable;
+    // this entry is what exercises seek-within-a-file. No artwork on the
+    // source, so the app paints its generated cover (see QueueList).
+    album: 'Royalty-free · seek + EQ test',
+    uri: 'https://commondatastorage.googleapis.com/exoplayer-test-media-0/play.mp3',
+    // No artworkUri: the app generates a cover from the id. No extended tags:
+    // the source carries none and this queue never invents metadata.
   },
   {
     // Entry 6: see the `demo://` paragraph in the block comment above. The id
     // is distinct from entry 5's on purpose — same audio, different queue
     // entry — so the two never collide in the media-session queue channel or
     // in the app's own duration cache.
-    id: 'aari-aari-resolved',
-    title: 'Aari Aari (via demo:// resolver)',
-    artist: 'Dhurandhar: The Revenge',
+    id: 'sample-song-resolved',
+    title: 'Test Song (via demo:// resolver)',
+    artist: 'Royalty-free',
     album: 'Resolver + insert-next demo',
-    uri: 'demo://track/aari-aari',
-    artworkUri:
-      'https://c.saavncdn.com/905/Dhurandhar-The-Revenge-Aari-Aari-From-Dhurandhar-The-Revenge-Hindi-2026-20260312141004-500x500.jpg',
-    // Same audio as entry 5, so the same honest tags apply.
-    year: 2026,
-    trackNumber: 1,
+    uri: 'demo://track/sample-song',
+    // Same audio as the entry above, resolved through the demo signer. No
+    // artworkUri — generated cover.
   },
   {
     // Entry 7: the error path, on demand. See the block comment above — this
@@ -272,8 +263,7 @@ export const TRACKS: readonly Track[] = [
  * they differ. See `SourceResolver`'s TSDoc.
  */
 export const DEMO_SOURCES: Readonly<Record<string, string>> = {
-  'aari-aari':
-    'https://aac.saavncdn.com/905/f968ceef36dde517a2aee1b74e119166_160.mp4',
+  'sample-song': 'https://commondatastorage.googleapis.com/exoplayer-test-media-0/play.mp3',
   'mp3-test': 'https://archive.org/download/testmp3testfile/mpthreetest.mp3',
 }
 

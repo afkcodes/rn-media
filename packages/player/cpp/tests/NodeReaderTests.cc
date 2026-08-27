@@ -229,7 +229,7 @@ std::vector<Captured> walkArray(const mpv_node& node, bool* accepted = nullptr) 
 
 TEST(NodeReader, extractsEveryScalarFormatIntoItsOwnField) {
   MapBuilder map;
-  map.string("title", "Aari Aari").integer("id", 7).number("duration", 213.5).flag("current", true);
+  map.string("title", "Test Track").integer("id", 7).number("duration", 213.5).flag("current", true);
   mpv_node node = map.node();
 
   bool accepted = false;
@@ -240,7 +240,7 @@ TEST(NodeReader, extractsEveryScalarFormatIntoItsOwnField) {
 
   CHECK_EQ(seen[0].key, std::string("title"));
   CHECK(seen[0].hasText);
-  CHECK_EQ(seen[0].text, std::string("Aari Aari"));
+  CHECK_EQ(seen[0].text, std::string("Test Track"));
   // A string is *only* a string: nothing coerces it into a number, so a
   // consumer reading `number` gets an honest "absent".
   CHECK(!seen[0].hasNumber);
