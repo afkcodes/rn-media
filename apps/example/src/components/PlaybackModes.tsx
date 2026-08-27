@@ -26,7 +26,7 @@ import React from 'react'
 import type { MediaRepeatMode } from '@timbre/media-session'
 import type { LoopMode } from '@timbre/player'
 import { loopToRepeat } from '../projections'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Section } from './ui'
 
 const REPEAT_MODES: readonly { id: MediaRepeatMode; label: string }[] = [
   { id: 'off', label: 'Repeat off' },
@@ -72,12 +72,6 @@ export const PlaybackModes = React.memo(function PlaybackModes({
           onPress={() => onShuffle(!shuffleEnabled)}
         />
       </ChipRow>
-      <Detail>
-        Also on the expanded notification — both surfaces call one handler and
-        redraw from one broadcast. Repeat is mpv's own loop; shuffle really
-        reorders the queue (undo is one level, mpv's limit), with the toggle
-        held by the app because mpv has no shuffle mode.
-      </Detail>
     </Section>
   )
 })

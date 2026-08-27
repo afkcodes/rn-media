@@ -44,7 +44,7 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native'
-import { COLORS, SPACE, TYPE } from '../theme'
+import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import { barOriginX, clamp01, fractionAtX } from './seek-geometry'
 
 /** `m:ss`, or `--:--` when there is no number to show. */
@@ -218,13 +218,15 @@ export function SeekBar({
         <Text style={[styles.label, scrub !== undefined && styles.labelActive]}>
           {seekable ? formatTime(shown) : formatTime(position)}
         </Text>
-        <Text style={styles.label}>
-          {live
-            ? 'live · not seekable'
-            : seekable
-              ? formatTime(total)
-              : 'duration unknown'}
-        </Text>
+        {live ? (
+          <View style={styles.livePill}>
+            <Text style={styles.livePillText}>LIVE</Text>
+          </View>
+        ) : (
+          <Text style={styles.label}>
+            {seekable ? formatTime(total) : 'duration unknown'}
+          </Text>
+        )}
       </View>
     </View>
   )
@@ -281,4 +283,18 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   labelActive: { fontWeight: '600', color: COLORS.accentBright },
+  // The live badge as a small filled pill — cleaner than the old
+  // "live · not seekable" caption, and it reads at a glance.
+  livePill: {
+    backgroundColor: COLORS.live,
+    borderRadius: RADIUS.pill,
+    paddingHorizontal: SPACE.sm,
+    paddingVertical: 1,
+  },
+  livePillText: {
+    fontSize: TYPE.micro,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: COLORS.onAccent,
+  },
 })

@@ -5,14 +5,13 @@
  *
  * - **tap a row** → `Playback.jumpTo` (`playlist.jumpTo`, behind the audio-focus
  *   gate, and never restarting the entry that is already open);
- * - **`⤴`** → `playlist.add(uri, { position: 'next' })`, one atomic mpv
- *   `insert-next`. Press it on the `demo://` row to insert a resolver-backed
- *   source — the combination most likely to be wrong;
- * - **`⤵`** → `playlist.add(uri)`, the plain append — the other insert
- *   position, so both cells of `loadfile`'s table are one tap away;
  * - **`✕`** → `playlist.remove(index)`. Removing the current entry stops it
- *   and starts the next — mpv's rule, stated in the footnote;
+ *   and starts the next — mpv's rule;
  * - **Clear** → `playlist.clear()` (which keeps the entry that is playing).
+ *
+ * The old per-row queue-insert arrows (`⤴`/`⤵`) are gone: this is a music-app
+ * queue now, one clean row plus a quiet remove, not a demo of every
+ * `loadfile` insert position.
  *
  * Shuffle lives with repeat in `PlaybackModes` now — it is a broadcast *mode*
  * shared with the notification, not a queue edit button, even though under the
@@ -31,7 +30,7 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { Track } from '../data/tracks'
 import type { QueueRow } from '../playback'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Section } from './ui'
 
 /**
  * React key for one row.
@@ -60,8 +59,6 @@ export const QueueList = React.memo(function QueueList({
   playing,
   ready,
   onJump,
-  onPlayNext,
-  onAddLast,
   onRemove,
   onClear,
 }: {
@@ -70,8 +67,6 @@ export const QueueList = React.memo(function QueueList({
   playing: boolean
   ready: boolean
   onJump: (index: number) => void
-  onPlayNext: (track: Track) => void
-  onAddLast: (track: Track) => void
   onRemove: (index: number) => void
   onClear: () => void
 }): React.JSX.Element {
@@ -95,8 +90,6 @@ export const QueueList = React.memo(function QueueList({
             ready={ready}
             first={position === 0}
             onJump={onJump}
-            onPlayNext={onPlayNext}
-            onAddLast={onAddLast}
             onRemove={onRemove}
           />
         ))}
@@ -105,11 +98,6 @@ export const QueueList = React.memo(function QueueList({
       <ChipRow>
         <Chip label="Clear" tone="danger" disabled={!ready} onPress={onClear} />
       </ChipRow>
-      <Detail>
-        ⤴ inserts after the current entry (one atomic mpv insert-next), ⤵
-        appends, ✕ removes — removing the playing row starts the next one.
-        Clear keeps whatever is playing.
-      </Detail>
     </Section>
   )
 })
@@ -122,8 +110,6 @@ const Row = React.memo(function Row({
   ready,
   first,
   onJump,
-  onPlayNext,
-  onAddLast,
   onRemove,
 }: {
   track: Track
@@ -133,8 +119,6 @@ const Row = React.memo(function Row({
   ready: boolean
   first: boolean
   onJump: (index: number) => void
-  onPlayNext: (track: Track) => void
-  onAddLast: (track: Track) => void
   onRemove: (index: number) => void
 }): React.JSX.Element {
   return (
@@ -172,20 +156,9 @@ const Row = React.memo(function Row({
         </View>
       </Pressable>
 
-      {/* Row actions: insert-next, append, remove. Separate hit targets from
-          the row itself, so queueing never accidentally jumps. */}
-      <RowAction
-        glyph="⤴"
-        accessibilityLabel={`Play ${track.title} next`}
-        disabled={!ready}
-        onPress={() => onPlayNext(track)}
-      />
-      <RowAction
-        glyph="⤵"
-        accessibilityLabel={`Add ${track.title} to the end`}
-        disabled={!ready}
-        onPress={() => onAddLast(track)}
-      />
+      {/* One quiet remove affordance, its own hit target so a fat thumb cannot
+          start the track it meant to remove. Removing the playing row starts
+          the next one — mpv's rule. */}
       <RowAction
         glyph="✕"
         accessibilityLabel={`Remove ${track.title}`}

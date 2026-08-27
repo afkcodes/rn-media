@@ -13,10 +13,13 @@
  * position that moves on the lock screen is projected natively from an anchor
  * pushed on discontinuities only; nothing ticks across the bridge.
  *
- * Everything a first app writes is on the first screen (now playing, transport,
- * a queue, EQ, cast, a sleep timer). Everything it does not — output routing,
- * ReplayGain, loudness, the `content://` probe, the car browse tree — is behind
- * the collapsed “Advanced” drawer at the bottom.
+ * The main screen is the **player only**: now playing, transport, and the
+ * up-next queue. Everything else — cast, the equaliser, the sleep timer, and
+ * the "More" bucket (visualizer, output routing, ReplayGain, loudness, the
+ * `content://` probe, the car browse tree, the cast self-test) — lives behind
+ * the four-button control row at the bottom, each opening a modal bottom sheet.
+ * The sheets drive the exact same handlers; the features only moved behind a
+ * control, and their explanatory prose moved into code comments and the docs.
  */
 import React from 'react'
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native'
@@ -51,11 +54,14 @@ import { SessionErrorBanner } from './components/SessionErrorBanner'
 import { QueueList } from './components/QueueList'
 import { PlaybackModes } from './components/PlaybackModes'
 import { CastSection } from './components/CastSection'
+import { CastSelfTest } from './components/CastSelfTest'
 import { useCastProgress } from './components/useCastProgress'
 import { EqualizerSection } from './components/EqualizerSection'
 import { VisualizerSection } from './components/VisualizerSection'
 import { SleepTimerSection } from './components/SleepTimerSection'
 import { PersistenceNote } from './components/PersistenceNote'
+import { BottomSheet } from './components/BottomSheet'
+import { FeatureBar, type FeatureSheet } from './components/FeatureBar'
 
 function App(): React.JSX.Element {
   // App-owned facts + the player instance. Player STATE has its own subscription
@@ -76,6 +82,13 @@ function App(): React.JSX.Element {
   // Cast lives in the advanced layer; the composition root is allowed to know
   // about it (the core `playback.ts` is not). `undefined`-safe when cast is off.
   const cast = transport.useCast()
+
+  // Which feature sheet is open, if any. The main scroll is the player; every
+  // feature opens from the control row into a modal bottom sheet, and its
+  // contents are mounted only while it is open (so the EQ's filter graph and
+  // the visualizer's sampler cost nothing until someone reaches for them).
+  const [sheet, setSheet] = React.useState<FeatureSheet | null>(null)
+  const closeSheet = React.useCallback(() => setSheet(null), [])
 
   // Selector-scoped, not the whole snapshot: a buffered-position tick must not
   // re-render the tree. Module-level functions so their identity is stable.
@@ -173,8 +186,6 @@ function App(): React.JSX.Element {
           playing={playing}
           ready={ready}
           onJump={transport.jumpTo}
-          onPlayNext={(item) => void pb.playNext(item)}
-          onAddLast={(item) => void pb.addLast(item)}
           onRemove={(i) => void pb.removeAt(i)}
           onClear={() => void pb.clearQueue()}
         />
@@ -190,37 +201,47 @@ function App(): React.JSX.Element {
           onShuffle={(enabled) => void pb.setShuffleEnabled(enabled)}
         />
 
-        {/* Cast is a URL handoff to a second player behind the same broadcast
-            channels: while casting, the transport above and the notification
-            both steer the RECEIVER. */}
-        <CastSection
-          cast={cast}
-          queue={queue}
-          ready={ready}
-          onSelfTest={() => runCastSelfTest()}
-        />
-
-        <EqualizerSection player={player} />
-
-        <VisualizerSection player={player} />
-
-        <SleepTimerSection
-          ready={ready}
-          getTimer={getSleepTimer}
-          onArm={setSleepTimer}
-          onArmTrackEnd={setSleepTimerToTrackEnd}
-          onCancel={cancelSleepTimer}
-        />
-
-        <AdvancedSection
-          player={player}
-          shell={shell}
-          buffered={progress.buffered}
-          ready={ready}
-        />
-
-        <PersistenceNote note={restoreNote} />
+        {/* The screen closes here: every feature that is not the player lives
+            behind this row and opens into a modal bottom sheet. */}
+        <FeatureBar ready={ready} onOpen={setSheet} />
       </ScrollView>
+
+      {sheet === 'cast' && (
+        <BottomSheet visible title="Cast" onClose={closeSheet}>
+          <CastSection cast={cast} ready={ready} />
+        </BottomSheet>
+      )}
+
+      {sheet === 'equalizer' && (
+        <BottomSheet visible title="Equaliser" onClose={closeSheet}>
+          <EqualizerSection player={player} />
+        </BottomSheet>
+      )}
+
+      {sheet === 'sleep' && (
+        <BottomSheet visible title="Sleep timer" onClose={closeSheet}>
+          <SleepTimerSection
+            ready={ready}
+            getTimer={getSleepTimer}
+            onArm={setSleepTimer}
+            onArmTrackEnd={setSleepTimerToTrackEnd}
+            onCancel={cancelSleepTimer}
+          />
+        </BottomSheet>
+      )}
+
+      {sheet === 'more' && (
+        <BottomSheet visible title="More" onClose={closeSheet}>
+          <VisualizerSection player={player} />
+          <AdvancedSection player={player} shell={shell} ready={ready} />
+          <CastSelfTest
+            ready={ready}
+            disabled={casting}
+            onSelfTest={() => runCastSelfTest()}
+          />
+          <PersistenceNote note={restoreNote} />
+        </BottomSheet>
+      )}
     </SafeAreaView>
   )
 }

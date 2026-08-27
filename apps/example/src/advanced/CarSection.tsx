@@ -19,9 +19,7 @@
  * already showing a list does not ask again on its own.
  */
 import React from 'react'
-import { StyleSheet, Text } from 'react-native'
 import { useCarConnection } from '@timbre/media-session'
-import { COLORS, TYPE } from '../theme'
 import { Chip, ChipRow, Detail, Section } from '../components/ui'
 
 const LABELS: Record<string, string> = {
@@ -43,11 +41,6 @@ export function CarSection({
   return (
     <Section title="Car (Android Auto / CarPlay)">
       <Detail>connection · {LABELS[car.kind] ?? car.kind}</Detail>
-      <Text style={styles.note}>
-        The browse tree lives in src/advanced/browse.ts — four tabs (Library,
-        Albums, Artists, Recent). A tap arrives as playFromMediaId; a voice
-        query as playFromSearch.
-      </Text>
       <ChipRow>
         <Chip
           label={signInRequired ? 'sign-in required: on' : 'simulate sign-in required'}
@@ -55,16 +48,6 @@ export function CarSection({
           onPress={() => onToggleSignIn(!signInRequired)}
         />
       </ChipRow>
-      {signInRequired ? (
-        <Text style={styles.note}>
-          Every browse request now throws BrowseError(&apos;authenticationExpired&apos;)
-          with a &quot;Sign in&quot; button that deep-links to rnmedia://signin.
-        </Text>
-      ) : null}
     </Section>
   )
 }
-
-const styles = StyleSheet.create({
-  note: { fontSize: TYPE.caption, color: COLORS.muted, marginTop: 6 },
-})

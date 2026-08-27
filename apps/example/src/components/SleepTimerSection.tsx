@@ -28,7 +28,7 @@ import React from 'react'
 import { StyleSheet, Text } from 'react-native'
 import type { SleepTimerState } from '@timbre/media-session'
 import { COLORS, TYPE } from '../theme'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Section } from './ui'
 
 /**
  * Durations offered by the demo UI.
@@ -67,14 +67,10 @@ export function SleepTimerSection({
   const timer = usePolled(getTimer)
 
   return (
-    <Section
-      title="Sleep timer"
-      accessory={
-        <Text style={[styles.state, timer !== undefined && styles.armed]}>
-          {badge(timer)}
-        </Text>
-      }
-    >
+    <Section>
+      <Text style={[styles.state, timer !== undefined && styles.armed]}>
+        {badge(timer)}
+      </Text>
       <ChipRow>
         {CHOICES.map((seconds) => (
           <Chip
@@ -92,12 +88,6 @@ export function SleepTimerSection({
         />
         <Chip label="Cancel" disabled={!ready} onPress={onCancel} />
       </ChipRow>
-      <Detail>
-        Arm 45s, then press Back to destroy the Activity — playback still pauses
-        on time, and `onSleepTimer` reaches JS after the fact. "End of track" on
-        a live radio entry arms with no deadline and fires on the next track
-        change, which is the honest reading of "stop after this one".
-      </Detail>
     </Section>
   )
 }

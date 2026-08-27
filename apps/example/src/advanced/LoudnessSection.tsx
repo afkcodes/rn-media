@@ -24,7 +24,7 @@ import {
   type Player,
 } from '@timbre/player'
 import { COLORS, TYPE } from '../theme'
-import { Chip, ChipRow, Detail, Section } from '../components/ui'
+import { Chip, ChipRow, Section } from '../components/ui'
 
 type LoudnessChoice = {
   readonly id: string
@@ -88,13 +88,6 @@ export function LoudnessSection({
           />
         ))}
       </ChipRow>
-      <Detail>
-        One-pass EBU R128 (`loudnorm`), dynamic by construction: it rides gain,
-        resamples via 192 kHz and buffers ~3 s, so expect a hiccup on toggle.
-        Composes with the EQ below — one managed chain entry, nothing
-        clobbered. Untagged files only: with ReplayGain on above, the two gains
-        stack. Choose one.
-      </Detail>
       {error === undefined ? null : <Text style={styles.error}>{error}</Text>}
     </Section>
   )

@@ -24,14 +24,6 @@ export const PersistenceNote = React.memo(function PersistenceNote({
   return (
     <Section title="Persistence & resumption">
       <Detail>{note}</Detail>
-      <Detail>
-        Force-stop the app while it is paused, then press play on the System UI
-        media card: the media service revives this JS runtime, replays the
-        command, and `onPlaybackResumption` shows up in logcat. That needs three
-        things together — `playbackResumption: true`, the `MediaButtonReceiver`
-        in the manifest, and `withPersistence` — and the library reports which
-        one is missing on the session-error channel, in the strip above.
-      </Detail>
     </Section>
   )
 })
