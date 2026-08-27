@@ -378,15 +378,16 @@ loudness-aware fade points recorded as the only worthwhile revisit).
    replacing the phone-window shim.
 2b. **Pitfall closure (architect ruling, 2026-08-27).** The README's "Common
    pitfalls" were audited: eleven are the library's defects, not the user's.
-   In flight, one lane per package: `content://` loads via mpv's `fd://`;
+   SHIPPED 2026-08-27 (256c0ce, 72a4d6c), one lane per package: `content://` loads via mpv's `fd://`;
    `useEqualizer` composes its labelled entries instead of owning the chain;
    ReplayGain and loudness normalization are mutually exclusive by API; one
    anchor shape at the player↔session seam (`positionAnchorMs`); persistence
    autosave while playing (local projection, zero bridge traffic); the
    playback-resumption "silence" becomes a sessionError with the fix text.
-   Sized and queued, not started: **embedded cover art** (experiment first —
-   the "needs a video output" claim is unverified; `screenshot-raw` with
-   `vo=null`, else an `attached_pic` read through the linked libavformat),
+   Sized and queued, not started: **embedded cover art** — experiment done
+   (ARCHITECTURE §32): `screenshot_get()` needs a configured VO, `vo_null` IS
+   in the binary, FFmpeg is not reachable from our C++ (hidden symbols); the
+   blocker is one result-returning binding method (`screenshot-raw`'s node),
    **cast `file://`** (a local HTTP server on the phone, the standard
    approach), **browse-only session** (cold car browse without
    `playbackResumption`). Decided against: crossfade stays dropped (the
