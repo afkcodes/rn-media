@@ -15,15 +15,15 @@
 import React from 'react'
 import { projectReceiverPosition } from '@timbre/cast'
 import type { Progress } from '@timbre/player'
-import type { Playback } from '../playback'
+import type { CastIntegration } from '../cast'
 
 /** Re-render period while the receiver clock advances — matches `useProgress`. */
 const TICK_MS = 250
 
-export function useCastProgress(playback: Playback): Progress | undefined {
+export function useCastProgress(cast: CastIntegration): Progress | undefined {
   const [, bump] = React.useReducer((n: number) => n + 1, 0)
-  const active = playback.cast.controlsPlayback
-  const receiver = playback.cast.receiver
+  const active = cast.controlsPlayback
+  const receiver = cast.receiver
 
   React.useEffect(() => {
     if (!active || receiver === undefined || receiver.rate === 0) return

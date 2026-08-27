@@ -7,8 +7,8 @@ import { AppRegistry } from 'react-native';
  * Playback resumption depends on this exact line — a bare, side-effect import
  * of the playback layer from the ENTRY file.
  *
- * `src/playback/index.ts` calls `MediaService.init` (via `playback.start()`)
- * at module scope, and a revived headless runtime only ever executes module
+ * `src/playback.ts` calls `MediaService.init` (via its `start()`) at module
+ * scope, and a revived headless runtime only ever executes module
  * scope — no component mounts, no effect runs. But "module scope" alone is
  * not enough in a release build: Metro's inline requires (`inlineRequires:
  * true`, the RN default) rewrites every *binding* import — `import { x } from

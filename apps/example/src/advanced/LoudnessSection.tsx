@@ -24,7 +24,7 @@ import {
   type Player,
 } from '@timbre/player'
 import { COLORS, TYPE } from '../theme'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Detail, Section } from '../components/ui'
 
 type LoudnessChoice = {
   readonly id: string

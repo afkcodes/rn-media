@@ -28,7 +28,7 @@ import type {
   WireCastHandoffOptions,
 } from '@timbre/cast'
 import type { CastDeviceVolume } from '@timbre/cast'
-import type { Track } from '../../data/tracks'
+import type { Track } from '../data/tracks'
 
 /* ---------------------------------------------------------------------- */
 /*                                 fakes                                  */
@@ -79,10 +79,10 @@ vi.mock('@timbre/cast', async () => {
   // module graph needs React Native. The pure halves this module actually
   // uses are re-exported from their sources; the two impure ones (the `Cast`
   // singleton and `wireCastHandoff`) are the fakes under test control.
-  const errors = await import('../../../../../packages/cast/src/errors')
-  const canCast = await import('../../../../../packages/cast/src/can-cast')
+  const errors = await import('../../../../packages/cast/src/errors')
+  const canCast = await import('../../../../packages/cast/src/can-cast')
   const machine = await import(
-    '../../../../../packages/cast/src/handoff-machine'
+    '../../../../packages/cast/src/handoff-machine'
   )
   return {
     ...errors,

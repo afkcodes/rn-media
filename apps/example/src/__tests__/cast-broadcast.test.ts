@@ -10,7 +10,7 @@ import {
   DEMO_BROKEN_URI,
   TRACKS,
   type Track,
-} from '../../data/tracks'
+} from '../data/tracks'
 import {
   castMimeOf,
   castUrlOf,

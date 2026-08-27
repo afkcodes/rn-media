@@ -25,7 +25,7 @@
 import React from 'react'
 import type { MediaRepeatMode } from '@timbre/media-session'
 import type { LoopMode } from '@timbre/player'
-import { loopToRepeat } from '../playback/broadcast'
+import { loopToRepeat } from '../projections'
 import { Chip, ChipRow, Detail, Section } from './ui'
 
 const REPEAT_MODES: readonly { id: MediaRepeatMode; label: string }[] = [

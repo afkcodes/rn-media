@@ -21,7 +21,7 @@ import {
   DEMO_SCHEME,
   DEMO_SOURCES,
   type Track,
-} from '../data/tracks'
+} from './data/tracks'
 
 /** Receiver player state collapsed onto the media-session vocabulary. */
 export function toCastStatus(

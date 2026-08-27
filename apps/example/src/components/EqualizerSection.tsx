@@ -26,7 +26,7 @@
  *
  * The curve and the saved presets persist through the same MMKV engine the
  * media session uses — an *app* choice, injected; the library ships no storage
- * dependency (see `playback/persistence.ts`).
+ * dependency (see `src/storage.ts`).
  */
 import React from 'react'
 import {
@@ -47,7 +47,7 @@ import {
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { ColumnRect } from './fader-geometry'
 import { bandAtX, gainAtY } from './fader-geometry'
-import { equalizerStorage } from '../playback/persistence'
+import { equalizerStorage } from '../storage'
 import { Chip, ChipRow, Detail, Section } from './ui'
 
 /** The non-EQ half of the chain, as selectable sets of `extraFilters`. */

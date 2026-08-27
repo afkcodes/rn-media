@@ -22,7 +22,7 @@ import React from 'react'
 import { StyleSheet, Text } from 'react-native'
 import { useCarConnection } from '@timbre/media-session'
 import { COLORS, TYPE } from '../theme'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Detail, Section } from '../components/ui'
 
 const LABELS: Record<string, string> = {
   none: 'no car connected',
@@ -44,7 +44,7 @@ export function CarSection({
     <Section title="Car (Android Auto / CarPlay)">
       <Detail>connection · {LABELS[car.kind] ?? car.kind}</Detail>
       <Text style={styles.note}>
-        The browse tree lives in src/playback/browse.ts — four tabs (Library,
+        The browse tree lives in src/advanced/browse.ts — four tabs (Library,
         Albums, Artists, Recent). A tap arrives as playFromMediaId; a voice
         query as playFromSearch.
       </Text>

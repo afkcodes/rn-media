@@ -13,7 +13,7 @@
  * foreground — the one place timers are legal in this codebase.
  */
 import { Cast } from '@timbre/cast'
-import type { Playback } from './controller'
+import { cast, getPlayer, jumpTo, pause, play, seekTo } from '../playback'
 
 const TAG = '[cast-test]'
 
@@ -48,15 +48,12 @@ async function waitFor(
  * endSession({transferBackToLocal:true}) → local resumes at the receiver's
  * position. Audible confirmation stays with the owner — a script cannot hear.
  */
-export async function runCastSelfTest(
-  playback: Playback
-): Promise<CastSelfTestResult> {
+export async function runCastSelfTest(): Promise<CastSelfTestResult> {
   const lines: string[] = []
   const log = (line: string): void => {
     lines.push(line)
     console.log(`${TAG} ${line}`)
   }
-  const cast = playback.cast
 
   try {
     log(`start — castState=${cast.state}, phase=${cast.phase}`)
@@ -69,14 +66,14 @@ export async function runCastSelfTest(
 
     // 1. Local playback on a long finite entry (index 4: AAC/MP4 via CDN —
     //    castable, seekable, and long enough that nothing ends mid-test).
-    await playback.jumpTo(4)
+    await jumpTo(4)
     await waitFor(
       'local playback',
-      () => playback.player?.state.playing === true,
+      () => getPlayer()?.state.playing === true,
       15_000
     )
     await sleep(3_000) // put a non-trivial position on the clock
-    const localBefore = playback.player?.getPosition() ?? 0
+    const localBefore = getPlayer()?.getPosition() ?? 0
     log(`local playing, position=${localBefore.toFixed(1)}s`)
 
     // 2. Discovery.
@@ -114,14 +111,14 @@ export async function runCastSelfTest(
     if (p2 <= p1) throw new Error('receiver position did not advance')
 
     // 5. Transport against the receiver.
-    playback.pause()
+    pause()
     await waitFor('receiver paused', () => cast.receiver?.playing === false, 10_000)
     log('pause acknowledged by receiver status')
-    await playback.play()
+    await play()
     await waitFor('receiver resumed', () => cast.receiver?.playing === true, 10_000)
     log('play acknowledged by receiver status')
     const seekTarget = Math.max(30, p2 + 15)
-    playback.seekTo(seekTarget)
+    seekTo(seekTarget)
     await waitFor(
       `receiver at ~${seekTarget.toFixed(0)}s`,
       () => {
@@ -137,14 +134,14 @@ export async function runCastSelfTest(
     //     (the projection sends live items with NO start position — a nonzero
     //     one wedged the Default Media Receiver in BUFFERING forever,
     //     device-proven), then return to the finite entry.
-    playback.jumpTo(0)
+    void jumpTo(0)
     await waitFor(
       'receiver playing the live entry',
       () => cast.receiverIndex === 0 && cast.receiver?.playing === true,
       25_000
     )
     log('live entry playing on the receiver (index 0)')
-    playback.jumpTo(4)
+    void jumpTo(4)
     await waitFor(
       'receiver back on the finite entry',
       () => cast.receiverIndex === 4 && cast.receiver?.playing === true,
@@ -158,12 +155,12 @@ export async function runCastSelfTest(
     await waitFor('phase local', () => cast.phase === 'local', 20_000)
     await waitFor(
       'local playback resumed',
-      () => playback.player?.state.playing === true,
+      () => getPlayer()?.state.playing === true,
       20_000
     )
     // The restore seeks once the entry is ready; give the projection a beat.
     await sleep(2_000)
-    const localAfter = playback.player?.getPosition() ?? 0
+    const localAfter = getPlayer()?.getPosition() ?? 0
     log(
       `transferred back: receiver was at ${receiverAt.toFixed(1)}s, ` +
         `local resumed at ${localAfter.toFixed(1)}s`
