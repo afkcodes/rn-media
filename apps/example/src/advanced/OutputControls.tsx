@@ -21,7 +21,7 @@
 import React from 'react'
 import { StyleSheet, Text } from 'react-native'
 import { COLORS, TYPE } from '../theme'
-import { Chip, ChipRow, Detail, Section } from '../components/ui'
+import { Chip, ChipRow, Section } from '../components/ui'
 
 const RATES: readonly number[] = [0.75, 1, 1.25, 1.5, 2]
 const VOLUMES: readonly number[] = [0.2, 0.5, 0.8, 1]
@@ -38,7 +38,6 @@ export const OutputControls = React.memo(function OutputControls({
   pitch,
   volume,
   muted,
-  buffered,
   ready,
   onRate,
   onPitchSemitones,
@@ -50,8 +49,6 @@ export const OutputControls = React.memo(function OutputControls({
   pitch: number
   volume: number
   muted: boolean
-  /** Absolute buffered timestamp, formatted by the caller. */
-  buffered: string
   ready: boolean
   onRate: (rate: number) => void
   onPitchSemitones: (semitones: number) => void
@@ -108,14 +105,6 @@ export const OutputControls = React.memo(function OutputControls({
           onPress={onToggleMute}
         />
       </ChipRow>
-
-      <Detail>
-        Pitch is independent of speed: both drive mpv's own `scaletempo2`, so
-        1.5× at +2 semitones is a faster, higher recording — no filter chain and
-        no engine flag involved.
-      </Detail>
-
-      <Detail>Buffered to {buffered} — mpv's `demuxer-cache-time`, second-granular so a filling cache cannot become a ticker.</Detail>
     </Section>
   )
 })

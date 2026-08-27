@@ -26,7 +26,7 @@
  */
 import React from 'react'
 import type { ReplayGainMode } from '@timbre/player'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Section } from './ui'
 
 const MODES: readonly { id: ReplayGainMode; label: string }[] = [
   { id: 'no', label: 'Off' },
@@ -56,13 +56,6 @@ export const ReplayGainToggle = React.memo(function ReplayGainToggle({
           />
         ))}
       </ChipRow>
-      <Detail>
-        Applied live — no reload. Track/Album give untagged files a −6 dB
-        fallback; Off zeroes that fallback too (mpv applies it even with
-        `replaygain=no`), so Off really is unity gain. Clipping prevention stays
-        on (mpv's `replaygain-clip` defaults to off, and the polarity in mpv
-        0.35's manual is stale — the library's TSDoc has the receipts).
-      </Detail>
     </Section>
   )
 })

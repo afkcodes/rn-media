@@ -38,7 +38,6 @@ import {
 } from 'react-native'
 import {
   AudioFilters,
-  EQUALIZER_BANDS,
   useEqualizer,
   type AudioFilter,
   type Equalizer,
@@ -48,7 +47,7 @@ import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { ColumnRect } from './fader-geometry'
 import { bandAtX, gainAtY } from './fader-geometry'
 import { equalizerStorage } from '../storage'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Section } from './ui'
 
 /** The non-EQ half of the chain, as selectable sets of `extraFilters`. */
 const CHAINS: readonly {
@@ -91,29 +90,6 @@ export function EqualizerSection({
     },
   })
 
-  // What mpv says the chain is — `player.getAudioFilters()`, its own property,
-  // not a mirror of what was tapped.
-  //
-  // Read on a settle rather than on every change, for two reasons. It is a
-  // synchronous native call and a drag produces one per frame; and while a
-  // finger is down the hook is deliberately *not* writing that property (it
-  // pushes the gains into the running filters instead), so reading it mid-drag
-  // would only show the pre-drag string. Waiting out the hook's own commit
-  // delay is what makes this line show what mpv finally settled on.
-  const [applied, setApplied] = React.useState('')
-  React.useEffect(() => {
-    if (player === undefined || !eq.hydrated) {
-      setApplied('')
-      return undefined
-    }
-    const timer = setTimeout(() => {
-      if (!player.destroyed) setApplied(player.getAudioFilters())
-    }, 350)
-    return () => {
-      clearTimeout(timer)
-    }
-  }, [player, eq])
-
   const ready = player !== undefined
   // Only a curve the user saved can be deleted; the built-ins ship with the
   // library and `deletePreset` refuses them.
@@ -121,15 +97,7 @@ export function EqualizerSection({
     eq.preset !== undefined && eq.savedPresets.includes(eq.preset)
 
   return (
-    <Section
-      title="Equaliser & DSP"
-      accessory={
-        <Text style={styles.meta}>
-          {EQUALIZER_BANDS.length}-band · {EQUALIZER_BANDS[0]} Hz –{' '}
-          {(EQUALIZER_BANDS[EQUALIZER_BANDS.length - 1] as number) / 1000} kHz
-        </Text>
-      }
-    >
+    <Section>
       {/* `eq.presets` is the built-ins in picker order followed by the user's
           saved curves; `eq.preset` is DERIVED from the gains, so dragging a
           band away from Rock deselects it and dragging back re-selects it. */}
@@ -186,19 +154,6 @@ export function EqualizerSection({
         ))}
       </ChipRow>
 
-      <Detail selectable>af = {applied === '' ? '(none)' : applied}</Detail>
-      <Detail>
-Touch a bar and drag up or down: the band you touched is the band that
-        moves, for the whole stroke. Dragging is live — the gains go into the
-        running filters, so the audio must not glitch, and the `af` line above
-        only catches up once you let go. The pre-amp that keeps the loudest band
-        at unity is computed from the summed response — octave bells overlap and
-        add — and the `alimiter` on the tail catches what a magnitude bound
-        cannot: the sample peaks a phase shift moves in time. It is on for any
-        curve that is not flat, and below full scale it changes no sample. Saved
-        curves and the live setting persist through the app's own storage
-        engine.
-      </Detail>
       {eq.error === undefined ? null : (
         <Text style={styles.error}>
           {eq.error.code}: {eq.error.message}
@@ -371,7 +326,6 @@ function formatBand(frequency: number): string {
 }
 
 const styles = StyleSheet.create({
-  meta: { fontSize: TYPE.micro, color: COLORS.muted },
   error: { fontSize: TYPE.caption, color: COLORS.error },
   // Card-less like everything else: no box around the bank, just the ten
   // tracks and their labels.
