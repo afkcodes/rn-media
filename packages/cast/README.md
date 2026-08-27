@@ -1,49 +1,28 @@
 # @rn-media/cast
 
-First-party Google Cast **sender** binding for React Native, audio-scoped —
-built directly on the official SDKs
+First-party Google Cast **sender** binding for React Native, audio-scoped, built
+directly on the official SDKs
 ([play-services-cast-framework](https://developers.google.com/cast/docs/android_sender)
 on Android, [google-cast-sdk](https://developers.google.com/cast/docs/ios_sender)
 on iOS) as a Nitro Kotlin/Swift module. Chromecast on **both** platforms — no
 platform-split feature.
 
-Casting is a **URL handoff**, not an output route: the sender hands the
-receiver a URL and the receiver fetches, decodes and plays it itself. Your
-local player goes silent for the session and resumes at the receiver's
-position when you transfer back. This package ships both layers: the binding
-(Phase 2 of `docs/design/cast.md`) and the automatic local↔remote **handoff
-state machine** (`wireCastHandoff`, Phase 3). The handoff deliberately lives
-here — not in `@rn-media/media-session`, which stays cast-free — and talks to
-your player and queue through structural interfaces, so it works with ANY
-player.
+Casting is a **URL handoff**, not an output route: the sender hands the receiver
+a URL and the receiver fetches, decodes and plays it. Your local player goes
+silent for the session and resumes at the receiver's position when you transfer
+back. This package ships both layers — the binding, and the automatic
+local↔remote handoff state machine `wireCastHandoff`, which lives here rather
+than in `@rn-media/media-session` and talks to your player and queue through
+structural interfaces, so it works with any player
+([ARCHITECTURE §25](../../ARCHITECTURE.md#25-casting-is-a-url-handoff-behind-the-existing-fan-out--and-the-handoff-lives-in-rn-mediacast-not-media-session)).
 
-> **⚠️ iOS 16 requirement.** The `google-cast-sdk` pod requires **iOS 16.0**
-> (React Native's default target is lower). Installing this package raises
-> your app's deployment floor — the Expo plugin bumps `ios.deploymentTarget`
-> for you (with a warning); bare projects set `platform :ios, '16.0'` in the
-> Podfile themselves. Devices on iOS 15 and older will not be able to install
-> your app. This is the pod's own floor, not ours.
+## Requirements
 
-> **⚠️ Xcode 26 or newer is required to build.** `google-cast-sdk` 4.8.6 ships
-> a *static* `GoogleCast.xcframework` built against the **iOS 26.2 SDK**
-> (`LC_BUILD_VERSION … sdk 26.2`), and one of its objects references
-> [`UIGlassEffect`](https://developer.apple.com/documentation/uikit/uiglasseffect)
-> — UIKit API introduced in iOS 26. React Native's own `-ObjC` linker flag
-> force-loads every object out of every static archive, so that reference
-> cannot be dead-stripped. Building with Xcode 16.x therefore fails at link
-> time with:
->
-> ```
-> Undefined symbols for architecture arm64:
->   "_OBJC_CLASS_$_UIGlassEffect", referenced from:
->        in GoogleCast[arm64](M3CMaterialGlassEffectView.o)
-> ```
->
-> Your app's *runtime* floor is unaffected — it stays at iOS 16 (the binary's
-> `minos`); only the toolchain that builds it must be Xcode 26+. Again the
-> SDK's requirement, not ours: pinning back to `google-cast-sdk` 4.8.4 (the
-> last release built with the 18.4 SDK) avoids it at the cost of lagging
-> upstream, which this project's currency rule does not allow.
+| | |
+|---|---|
+| iOS runtime floor | **16.0** — the `google-cast-sdk` pod's own floor. Installing this package raises your app's deployment target, and devices on iOS 15 and older will not be able to install it. The Expo plugin bumps `ios.deploymentTarget` for you; bare projects set `platform :ios, '16.0'` in the Podfile |
+| iOS toolchain | **Xcode 26 or newer**. `google-cast-sdk` 4.8.6 ships a *static* `GoogleCast.xcframework` built against the iOS 26.2 SDK, and one of its objects references `UIGlassEffect`. React Native's `-ObjC` linker flag force-loads every object out of every static archive, so that reference cannot be dead-stripped and Xcode 16.x fails at link time on `_OBJC_CLASS_$_UIGlassEffect`. Your app's runtime floor is unaffected |
+| Android | Google Play services. Without it `Cast.initialize()` resolves `'unavailable'` — a typed capability answer, never a crash. Full output-switcher behaviour needs Android 13+ |
 
 ## Install
 
@@ -52,6 +31,9 @@ npm install @rn-media/cast react-native-nitro-modules
 ```
 
 ### Expo (prebuild)
+
+The plugin applies everything below, including the app-ID-specific Bonjour
+string.
 
 ```jsonc
 // app.json
@@ -69,10 +51,7 @@ npm install @rn-media/cast react-native-nitro-modules
 }
 ```
 
-The plugin applies everything below automatically, including the
-app-ID-specific Bonjour string everyone gets wrong by hand.
-
-### Bare React Native — paste by hand
+### Bare React Native
 
 **Android — `AndroidManifest.xml`**, inside `<application>`:
 
@@ -91,8 +70,8 @@ app-ID-specific Bonjour string everyone gets wrong by hand.
   android:exported="true" />
 ```
 
-**iOS — `Info.plist`** (replace `CC1AD845` with your receiver app id if you
-have one):
+**iOS — `Info.plist`** (replace `CC1AD845` with your receiver app id if you have
+one), plus `platform :ios, '16.0'` in the Podfile:
 
 ```xml
 <key>NSBonjourServices</key>
@@ -105,24 +84,21 @@ have one):
 devices on your Wi-Fi network.</string>
 ```
 
-**iOS — `Podfile`**: `platform :ios, '16.0'`.
-
 ## Use
 
 ```ts
-import { Cast, canCastMedia } from '@rn-media/cast'
+import { Cast } from '@rn-media/cast'
 
-// Once, early (idempotent). Resolves 'unavailable' on GMS-less Android
-// devices instead of crashing — render no cast UI in that case.
+// Once, early (idempotent).
 const state = await Cast.initialize()
 
 // Discovery is battery-expensive: scope it to "picker open".
 await Cast.startDiscovery()
 const [device] = await Cast.getCastDevices()
 if (device !== undefined) await Cast.requestSession(device.id) // resolves when connected
-await Cast.stopDiscovery()               // AFTER connecting — see below
+await Cast.stopDiscovery()               // AFTER connecting
 
-// Hand the receiver a queue it advances by itself (phone may sleep).
+// Hand the receiver a queue it advances by itself (the phone may sleep).
 await Cast.queueLoad(
   tracks.map((t) => ({
     source: {
@@ -135,25 +111,45 @@ await Cast.queueLoad(
   { startIndex: 2, startPosition: 30 }
 )
 
-Cast.addListener('mediaStatus', (status) => {
-  // A discontinuity broadcast — project position locally from
-  // status.position; never poll.
-})
+Cast.addListener('mediaStatus', () => { /* a discontinuity — project, never poll */ })
 Cast.addListener('error', (error) => {
-  // error.code === 'cast-receiver-fetch': the RECEIVER could not fetch the
-  // URL. Its network is not the phone's network.
+  // 'cast-receiver-fetch': the RECEIVER could not fetch the URL. Its network is
+  // not the phone's network.
 })
 
 await Cast.endSession({ transferBackToLocal: true })
 ```
 
-**Ordering rule** (encoded natively as a safety net, but do it right anyway):
-connect **after** the picker closes and **before** `stopDiscovery()` —
-stopping discovery mid-handshake makes the route vanish under the session.
+Connect **after** the picker closes and **before** `stopDiscovery()`; stopping
+discovery mid-handshake makes the route vanish under the session. The rule is
+also enforced natively as a safety net.
+
+## API
+
+| | what it does | notes |
+|---|---|---|
+| `Cast.initialize(options?): Promise<CastConnectionState>` | Idempotent; call once, early | Resolves `'unavailable'` on a Play-services-less Android device, never a crash. Google recommends initializing in `didFinishLaunching`, so post-process-death session resumption on iOS may be missed until the first `initialize()` of a launch |
+| `Cast.getCastState(): CastConnectionState` | `'unavailable' \| 'idle' \| 'connecting' \| 'connected' \| 'transferring'` | Synchronous |
+| `Cast.startDiscovery()` / `stopDiscovery()` | Scope them to "picker open" — discovery is battery-expensive | Stop **after** connecting |
+| `Cast.getCastDevices(): Promise<readonly CastDeviceInfo[]>` | | |
+| `Cast.requestSession(deviceId?)` / `endSession(options?)` | | `endSession({ transferBackToLocal })`. With no id on iOS the call always resolves, because `presentCastDialog` returns `void`; watch the `castState` / `session` events for the outcome |
+| `Cast.load(source, options?)` / `queueLoad(items, options?)` | Hand the receiver a URL, or a queue it advances by itself | |
+| `Cast.queueInsert` / `queueRemove` / `queueReorder` / `queueJumpTo` / `queueSetRepeatMode` / `getQueueItemIds` / `fetchQueueSlice` | Receiver-side queue editing | |
+| `Cast.play()` / `pause()` / `stop()` / `seek(position, resumeState?)` / `getApproximatePosition()` | Receiver transport | |
+| `Cast.setDeviceVolume` / `setDeviceMuted` / `getDeviceVolume` / `setStreamVolume` / `setStreamMuted` | *Device* volume is what users mean; stream volume is app-level | Prefer `setDeviceVolume()` |
+| `Cast.addListener(event, fn): Unsubscribe` | `castState`, `session`, `devices`, `mediaStatus`, `error`, `queueChanged`, `deviceVolume` | `mediaStatus` is a discontinuity broadcast — project position, never poll |
+| `wireCastHandoff(local, options): CastHandoff` | The whole local↔remote state machine | Returns `{ phase, receiverItemIndex, castTo, stopCasting, syncQueue, skipToItem, skipToNext, skipToPrevious, dispose }` |
+| `useCastState()` / `useIsCasting()` | Live connection state as React state | Seeded synchronously from `getCastState()`, so the first paint is right; no polling. `useIsCasting` holds the boolean, so `idle → connecting` does not re-render |
+| `isCastingState(state): boolean` | The one definition of "casting", for non-React callers | `'connected'` or `'transferring'`. A `'transferring'` session is a receiver-to-receiver stream transfer: the phone is still not the output, so treating it as "not casting" would flicker the UI back to local controls mid-transfer |
+| `canCastMedia(item): CanCastVerdict` | `{ castable: false, reason: 'codec' \| 'local-file' \| 'headers' }` | Grey the route out per track instead of failing at load |
+| `<CastButton style? tintColor? />` | The platform's own button as a native view | Hides itself while cast is unavailable |
+| `CastError` | `code` is the thing to branch on | `statusCode` and the receiver's reason string are Android-only |
+
+`wireCastHandoff`'s `options` are `{ snapshot, cast?, onPhaseChange?, onTransfer?,
+onReceiverState?, onItemsSkipped?, onError?, now?, handoffTimeoutMs? }`; the local
+player is `{ play, pause, seekTo, skipToIndex, getPosition, isPlaying }`.
 
 ## The handoff — `wireCastHandoff`
-
-The state machine from `docs/design/cast.md` §3, ready-made:
 
 ```
 LOCAL → CONNECTING → HANDOFF_TO_CAST → CAST_ACTIVE → HANDOFF_TO_LOCAL → LOCAL
@@ -161,299 +157,94 @@ LOCAL → CONNECTING → HANDOFF_TO_CAST → CAST_ACTIVE → HANDOFF_TO_LOCAL �
 any → error → typed error + fall back to LOCAL at the last known position
 ```
 
-```ts
-import { Cast, wireCastHandoff } from '@rn-media/cast'
+A [worked example](../../docs/recipes/cast.md) wires it to a player and the
+media-session channels.
 
-const handoff = wireCastHandoff(
-  {
-    // Structural — adapt YOUR player; nothing here imports @rn-media/player.
-    play: () => player.play(),
-    pause: () => player.pause(),
-    seekTo: (s) => player.seekTo(s),
-    skipToIndex: (i) => player.playlist.jumpTo(i, { autoPlay: false }),
-    getPosition: () => player.getPosition(),
-    isPlaying: () => player.state.playing,
-  },
-  {
-    // One coherent read of YOUR queue at handoff time. Resolve signed /
-    // logical URLs here — the receiver fetches them itself.
-    snapshot: () => ({
-      items: queue.map((t) => ({
-        id: t.id,
-        url: resolve(t),
-        mimeType: t.mimeType,
-        metadata: { title: t.title, artist: t.artist, artworkUrl: t.artUrl },
-      })),
-      index: currentIndex,
-      position: player.getPosition(),
-      playWhenReady: player.state.playing,
-    }),
-    // While cast-active this is the ONLY truthful source for your
-    // playbackState/mediaItem broadcasts. `{position, at, rate}` is a
-    // position anchor: project locally, never poll.
-    onReceiverState: (s) => broadcastReceiverState(s),
-    // One per direction per handoff — a position discontinuity.
-    onTransfer: ({ direction, position, itemIndex }) => log(direction),
-    // canCastMedia-filtered items, typed reasons. Never silent.
-    onItemsSkipped: (skipped) => showSkipNotice(skipped),
-    onError: (error) => {
-      if (error.code === 'cast-receiver-fetch') {
-        // The re-resolve-and-reload recipe for expired signed URLs: get a
-        // fresh URL into your snapshot's `url`, then reload the projection.
-        refreshSignedUrls().then(() => handoff.syncQueue())
-      }
-    },
-  }
-)
+| Contract | Detail |
+|---|---|
+| The JS queue stays the source of truth | The receiver queue is a castable *projection* of it, and every receiver status is reconciled back to a JS index (`onReceiverState.itemIndex`, `receiverItemIndex`). Receiver-side advancement is on, so the queue survives the phone sleeping; the receiver queue dying with the session is fine, because it is rebuilt next time |
+| Position ownership is exclusive | Local owns the clock until the `toCast` transfer, the receiver until `toLocal`. Both transfers are discontinuities carrying `{ position, itemIndex }` |
+| A session that exists *before* wiring is left alone | Auto-casting over a receiver at app launch would be destructive; the next `castTo` reuses it |
+| `stopCasting({ transferBackToLocal: false })` does **not** keep the receiver playing | It disconnects, and the receiver stops anyway — see the ceilings below |
+| A live handoff joins the live edge | Mark live entries with `live: true`. The projection sends live start items with **no start position**: a nonzero `playPosition` against an unseekable live stream wedges the Default Media Receiver in BUFFERING at that offset forever. Nothing is lost, because a live clock is a stream-timeline offset, not a resumable position |
+| A live transfer-back never seeks the local player | The `restoreLocal` contract carries `live` and the wire skips the seek, which mpv would reject. Reopening at the live edge *is* the resume for live audio |
+| Resolve playlist redirects before the handoff | The Default Media Receiver never starts playback for an HLS playlist URL answering with a 302, though the redirect target plays immediately. Resolve the final URL at the same seam where you resolve signed URLs, sender-side |
+| Live casting needs no special hints | `audio/aacp` plays a Shoutcast stream as-is, and `application/x-mpegurl` plays audio-only HLS with TS/AAC segments without any `hlsSegmentFormat` |
+| `reduceCastHandoff` and `projectCastQueue` are exported | The pure state machine and projection, for tests and custom orchestration |
 
-const [device] = await Cast.getCastDevices()
-if (device !== undefined) await handoff.castTo(device.id)
-                                      // …or let <CastButton/> / the system
-                                      // output switcher start the session —
-                                      // the same machine handles both.
-await handoff.stopCasting()           // transfer back; { transferBackToLocal:
-                                      // false } just disconnects (it does NOT
-                                      // keep the receiver playing — see the
-                                      // ceilings below).
-handoff.syncQueue()                   // JS queue edited while casting
-handoff.skipToNext()                  // receiver transport over the queue
-                                      // mapping (skips non-castable items)
-```
+`onError` with `code === 'cast-receiver-fetch'` is where expired signed URLs are
+handled: refresh them into your snapshot's `url`, then call `handoff.syncQueue()`.
 
-Contracts worth knowing:
+## `<CastButton/>`
 
-- **The JS queue stays the source of truth.** The receiver queue is a
-  castable *projection* of it; every receiver status is reconciled back to a
-  JS index (`onReceiverState.itemIndex`, `receiverItemIndex`). Receiver-side
-  advancement is on (`autoplay` per item) so the queue survives the phone
-  sleeping; the receiver queue dying with the session is fine — it is rebuilt
-  from the JS queue next time.
-- **Position ownership is exclusive.** Local owns the clock until the
-  `toCast` transfer; the receiver owns it until `toLocal`. Both transfers are
-  discontinuities carrying `{position, itemIndex}`.
-- A session that exists *before* wiring (framework resumption) is left
-  alone — auto-casting over a receiver at app launch would be destructive;
-  the next `castTo` reuses it.
-- The pure reducer (`reduceCastHandoff`) and projection (`projectCastQueue`)
-  are exported for tests and custom orchestration.
+A real native view — an `androidx.mediarouter.app.MediaRouteButton` handed to
+`CastButtonFactory.setUpMediaRouteButton` on Android, a `GCKUICastButton` on iOS
+([ARCHITECTURE](../../ARCHITECTURE.md#castbutton-is-a-real-native-view-because-the-switcher-is-unreachable-otherwise)).
 
-### Live streams (device-verified truths, 2026-08-14)
+| Behaviour | Detail |
+|---|---|
+| Android 13+ opens the **system output switcher** | The same sheet the volume rocker and the media notification open. That wiring is the only thing that honours `setShowSystemOutputSwitcherOnCastIconClick(true)`, which this package's `CastOptions` sets. Below 13, or without `MediaTransferReceiver`, it falls back to the in-app `MediaRouteChooserDialog` |
+| iOS opens the SDK's own device dialog | Discovery starts on the first tap by SDK design, which is what makes the local-network prompt appear when the user asked for devices rather than at launch |
+| It hides itself while cast is unavailable | Before `Cast.initialize()` resolves, and forever on a Play-services-less Android device. That is the Cast Design Checklist's own rule — do not re-implement it |
+| It has no intrinsic size | A Nitro view's shadow node has no measure function, so the button is exactly as big as `style` says and defaults to 40×40. The icon is drawn centred at the platform's own size and never scaled |
+| `tintColor` is honoured on both platforms | iOS sets the button's `tintColor`; Android recolours the drawn icon, because `MediaRouteButton` reads its tint from a theme attribute once at construction. Both keep Google's own icon and its connecting animation |
+| A tap starts an ordinary cast session | A wired `wireCastHandoff` picks it up exactly as if you had called `handoff.castTo(id)` |
 
-Mark live entries with `live: true` in the snapshot (and `CastMediaSource`) —
-it sets `STREAM_TYPE_LIVE` on the receiver *and* changes what the handoff
-does, because live position semantics are different in kind:
+The headless path is fully supported for apps that want their own picker —
+`startDiscovery()` + `getCastDevices()` + `requestSession(id)`, or
+`Cast.requestSession()` for the SDK picker without the view. It just does not get
+the system output switcher.
 
-- **A live handoff joins the live edge.** The projection sends live start
-  items with **no start position**. Measured on hardware: `queueLoad` with a
-  nonzero `playPosition` against an unseekable live stream (Icecast) wedged
-  the Default Media Receiver in BUFFERING at that offset *forever* — the
-  "casting a live station loads forever" failure. There is nothing lost:
-  mpv's clock on a live stream is a stream-timeline offset (an HLS master
-  reported ~95 000 s), never a resumable position.
-- **A live transfer-back never seeks the local player.** The receiver's live
-  clock is that same timeline offset; the `restoreLocal` contract carries
-  `live` and the wire skips the seek (mpv would reject it: `Cannot seek in
-  this stream`). Reopening at the live edge IS the resume for live audio.
-- **Resolve playlist redirects before the handoff.** The Default Media
-  Receiver never started playback for an HLS playlist URL answering with a
-  302 (the redirect *target* played immediately; mpv follows redirects fine —
-  the asymmetry is the receiver's). Resolve the final URL at the same seam
-  where you resolve signed URLs, sender-side.
-- **What live casting does *not* need** (the usual suspects, ruled out on the
-  receiver directly): `audio/aacp` plays a Shoutcast stream as-is, and
-  `application/x-mpegurl` plays audio-only HLS with TS/AAC segments without
-  any `hlsSegmentFormat` hint.
+## Platform parity
 
-### Which tracks can cast — `canCastMedia`
+Everything works the same on both platforms **except** the rows below.
 
-Receivers decode far less than mpv does. Grey the cast route out per track
-instead of failing at load:
+| Member | Android | iOS | Why |
+|---|---|---|---|
+| Hardware volume buttons drive receiver volume | the framework routes the keys for a connected session | **no** | Google's own guide says the behaviour is "currently not supported for iOS 15+", so this package leaves the switch off rather than shipping one that does nothing. Use `setDeviceVolume()` |
+| `error.statusCode` and the receiver's reason string on a media error | present | **absent** | GoogleCast 4.8.6 has no media-error callback at all, so the iOS half synthesizes the failure from `playerState == .idle && idleReason == .error`. Branch on `error.code`, never on `statusCode` being present |
+| Changing the receiver app id after the first `initialize()` | honoured | logged and ignored | `GCKCastContext` exposes only `+setSharedInstanceWithOptions:`, with no way to swap the live discovery criteria. Pass the id on the first call, or through the Expo plugin |
+| `'transferring'` state, the `transferring` / `transferred` / `transferFailed` session events | from the system output switcher | **never fire** | iOS has no such surface. `startFailed` covers a failed session *start* on both; a failed session *resume* only on Android, because 4.8.6 has no resume-failure callback |
+| Lock-screen controls during a session | drawn | **none** | The phone plays no audio — an OS ceiling shared by every cast app, and Google's own checklist marks lock-screen controls Android-only |
 
-```ts
-import { canCastMedia } from '@rn-media/cast'
+## Ceilings
 
-const verdict = canCastMedia({ url, mimeType, headers })
-// { castable: false, reason: 'codec' | 'local-file' | 'headers' }
-```
-
-### `<CastButton/>` — the platform's own button
-
-A real native view (a Nitro HybridView, so the same codegen story as the rest
-of the package), not an icon we drew:
-
-```tsx
-import { CastButton } from '@rn-media/cast'
-
-<CastButton style={{ width: 32, height: 32 }} tintColor="#e7e7ea" />
-```
-
-- **Android** — an `androidx.mediarouter.app.MediaRouteButton` handed to
-  `CastButtonFactory.setUpMediaRouteButton`. That wiring is the *only* thing
-  that honours `setShowSystemOutputSwitcherOnCastIconClick(true)` (which this
-  package's `CastOptions` already sets), so on **Android 13+** a tap opens the
-  **system output switcher** — the same sheet the volume rocker and the media
-  notification open — instead of an in-app dialog. Device-verified (POCO F4,
-  Android 16, cast framework 22.3.1): tap → system switcher → "Bedroom
-  speaker" → session up, and the `wireCastHandoff` machine ran the handoff
-  without a line of app code. Below Android 13 (or without the manifest's
-  `MediaTransferReceiver`) it falls back to the in-app
-  `MediaRouteChooserDialog`.
-- **iOS** — a `GCKUICastButton` with the SDK's own device dialog left on
-  (`triggersDefaultCastDialog`, default `YES`). Discovery starts on the first
-  tap by SDK design, which is what makes the iOS local-network prompt appear
-  when the user asked for devices rather than at launch.
-
-Contracts worth knowing:
-
-- **It hides itself while cast is unavailable** — before `Cast.initialize()`
-  resolves, and forever on a GMS-less Android device. That is the Cast Design
-  Checklist's own rule, applied for you. Do not do it again in your own code.
-  (`MediaRouteButton` does *not* hide itself when no routes are around:
-  `setAlwaysVisible` is a no-op in mediarouter 1.8.0-beta01 and nothing in the
-  class touches visibility any more. Our state-driven hide is the honest
-  replacement, not a duplicate.)
-- **It has no intrinsic size.** A Nitro view's shadow node has no measure
-  function, so the button is exactly as big as `style` says; it defaults to
-  40×40. The icon is drawn centred at the platform's own size (24 dp/pt) and
-  never scaled — the view's size is the touch target.
-- `tintColor` is honoured on **both** platforms: iOS sets the button's
-  `tintColor`; Android recolours the drawn icon (`MediaRouteButton` reads its
-  tint from the `mediaRouteButtonTint` *theme* attribute once at construction
-  and has no per-instance setter, so the tint is applied where the icon is
-  painted). Both keep Google's own icon, connecting animation included.
-- The session a tap starts is an ordinary cast session: a wired
-  `wireCastHandoff` picks it up exactly as if you had called
-  `handoff.castTo(id)`.
-
-The headless path is still fully supported for apps that want their own
-picker — `Cast.startDiscovery()` + `getCastDevices()` + `requestSession(id)`,
-or `Cast.requestSession()` for the SDK picker without the view. It just does
-not get the system output switcher.
-
-### `useCastState()` / `useIsCasting()` — the state, as React state
-
-The same subscription `<CastButton/>` uses, exported so your own UI can have
-it without wiring a listener:
-
-```tsx
-import { Text } from 'react-native'
-import { useCastState, useIsCasting } from '@rn-media/cast'
-
-function OutputBadge(): React.JSX.Element | null {
-  const state = useCastState() // 'unavailable' | 'idle' | 'connecting' | 'connected' | 'transferring'
-  const casting = useIsCasting() // 'connected' or 'transferring'
-
-  if (state === 'unavailable') return null
-  return <Text>{casting ? 'Casting' : state}</Text>
-}
-```
-
-- **Seeded synchronously.** The first value is a direct `Cast.getCastState()`
-  read, so the first paint is already right instead of flashing through
-  `'unavailable'`; the effect re-reads once on subscribe, because
-  `Cast.initialize()` may resolve between that render and the effect.
-- **`useIsCasting()` re-renders only when the answer flips.** The boolean — not
-  the state — is what it holds, so `idle → connecting` writes the same `false`
-  and React bails out. It is deliberately *not* `isCastingState(useCastState())`.
-- **`'transferring'` counts as casting.** That state is a receiver-to-receiver
-  stream transfer (the Android output switcher moving a session between
-  speakers): the phone is still not the output and the session is still alive,
-  so treating it as "not casting" would flicker a UI back to local controls
-  mid-transfer. `isCastingState(state)` is the same rule, exported for
-  non-React callers so the two cannot drift.
-- **No timer, no polling.** The `castState` event is the only thing that moves
-  either hook, and each caller's listener is dropped on unmount.
-
-`'unavailable'` is an honest answer, not an error: it is the state before
-`initialize()` resolves *and* forever on a device without Google Play services.
-
-## Honest ceilings (read before shipping)
-
-- **Receiver codec ceiling** — receivers decode HE-/LC-AAC, MP3, FLAC (≤
-  96 kHz/24-bit), Opus, Vorbis, WAV, WebM audio
-  ([developers.google.com/cast/docs/media](https://developers.google.com/cast/docs/media)).
-  **Not castable**: ALAC, hi-res FLAC > 96 kHz, WMA, APE, WavPack, TTA, DSD,
-  AIFF, `.mka`, AC-3/DTS-as-audio, tracker formats. mpv plays them; Cast
-  receivers do not. `canCastMedia()` exists for exactly this.
-- **The receiver fetches the URL itself.** `file://`/`content://` sources
-  cannot cast (no local HTTP server in v1 — a deliberate, documented
-  decision). Per-source **auth headers do not travel**: the Default Media
-  Receiver cannot attach them. Signed-query URLs work; header-auth needs your
-  own custom Web Receiver plus the `credentials` passthrough on
-  `load`/`queueLoad`.
-- **iOS**: deployment floor 16.0; the local-network permission prompt appears
-  on the *first cast-button use*, never before (OS rule); the lock screen
-  stays dormant during a cast session (the phone plays no audio — an OS
-  ceiling shared by every cast app; Google's own checklist marks lock-screen
-  controls "Android only").
-- **iOS: hardware volume buttons cannot drive receiver volume.** The switch
-  still exists (`GCKCastOptions.physicalVolumeButtonsWillControlDeviceVolume`)
-  but Google's own guide says the behaviour is *"currently not supported for
-  iOS 15+"*
-  ([ios_sender/integrate](https://developers.google.com/cast/docs/ios_sender/integrate)),
-  so this package deliberately leaves it off rather than shipping a switch
-  that does nothing. Use `setDeviceVolume()`; on Android the framework routes
-  the volume keys to the receiver for a connected session.
-- **iOS: no receiver *detail* on a media error.** The `error` event fires on
-  both platforms with the same `cast-receiver-fetch` code and the same
-  message — but `statusCode` and the receiver's reason string are Android-only.
-  GoogleCast 4.8.6 has no media-error callback at all
-  (`GCKRemoteMediaClientListener` declares ten optional methods and none of
-  them reports an error; `GCKMediaStatus` has no error field), so the iOS half
-  synthesizes the failure from `playerState == .idle && idleReason == .error`.
-  Branch on `error.code`, never on `error.statusCode` being present.
-- **iOS: the receiver app id is fixed at the first `initialize()`.**
-  `GCKCastContext` exposes only `+setSharedInstanceWithOptions:` — no
-  `setReceiverApplicationId` (Android has one), no way to swap the live
-  `GCKDiscoveryCriteria`. A later `initialize()` with a *different* id is
-  honoured on Android and logged-and-ignored on iOS. Pass it on the first
-  call, or set it through the Expo plugin.
-- **iOS: no stream transfer, and no resume-failure notification.** The
-  `transferring`/`transferred`/`transferFailed` session events and the
-  `transferring` connection state come from Android's system output switcher
-  (`CastContext.addSessionTransferCallback`); iOS has no such surface.
-  `startFailed` covers a failed session *start* on both, but a failed session
-  *resume* only on Android — 4.8.6 has no `didFailToResume…` callback
-  anywhere (Google's own `CastVideos-swift` sample still implements one, which
-  is precisely the silent no-op this list exists to prevent).
-- **iOS: `Cast.requestSession()` with no id always resolves.**
-  `-[GCKCastContext presentCastDialog]` returns `void`, so "the picker was
-  shown" is unverifiable; Android rejects `invalid-state` with no foreground
-  Activity. Watch the `castState`/`session` events for the outcome on both.
-- **iOS init timing**: Google recommends initializing the Cast context in
-  `didFinishLaunching` so a session survives process death.
-  `Cast.initialize()` from JS is later than that; automatic *post-process-
-  death* session resumption may be missed until the first initialize of a
-  launch.
-- **Android**: no Google Play services → `initialize()` resolves
-  `'unavailable'` (typed capability answer, never a crash). Full
-  output-switcher behaviour needs Android 13+.
-- **Leaving the receiver playing is not possible from a lone sender** —
+- **Receiver codec ceiling.** Receivers decode HE-/LC-AAC, MP3, FLAC (≤ 96 kHz /
+  24-bit), Opus, Vorbis, WAV and WebM audio
+  ([reference](https://developers.google.com/cast/docs/media)). Not castable:
+  ALAC, hi-res FLAC above 96 kHz, WMA, APE, WavPack, TTA, DSD, AIFF, `.mka`,
+  AC-3/DTS-as-audio, tracker formats. `canCastMedia()` exists for exactly this.
+- **The receiver fetches the URL itself.** `file://` and `content://` sources
+  cannot cast — there is no local HTTP server in v1. Per-source auth headers do
+  not travel either, because the Default Media Receiver cannot attach them:
+  signed-query URLs work, header auth needs your own Web Receiver plus the
+  `credentials` passthrough on `load`/`queueLoad`.
+- **The iOS local-network prompt appears on the first cast-button use**, never
+  before. That is an OS rule.
+- **Leaving the receiver playing is not possible from a lone sender.**
   `endSession({ transferBackToLocal: false })` disconnects without resuming
-  locally, but the receiver stops anyway. Android: measured on hardware across
-  every teardown path (framework 22.3.1). iOS: documented in the SDK itself —
-  `endSessionAndStopCasting:` *"only applies when multiple sender devices are
-  connected"*, and with one sender the receiver stops *"even if it's set to
-  `NO`"* (`GCKSessionManager.h`, 4.8.6).
-- **Gapless does not survive the handoff**: receiver queues pre-buffer
-  (`preloadTime`), they do not promise sample-accurate gapless.
-- **Receiver app id**: zero-config default is Google's Default Media Receiver.
-  A styled/custom receiver requires a [Cast Developer
-  Console](https://cast.google.com/publish) registration (one-time $5) — and
-  is the only path to receiver-side header auth.
-- **Volume has two layers**: *device* volume (primary — what users mean) and
-  *stream* volume (secondary, app-level). Prefer `setDeviceVolume()`.
+  locally, but the receiver stops anyway — the iOS SDK documents that
+  `endSessionAndStopCasting:` "only applies when multiple sender devices are
+  connected".
+- **Gapless does not survive the handoff.** Receiver queues pre-buffer
+  (`preloadTime`); they do not promise sample-accurate gapless.
+- **Receiver app id.** The zero-config default is Google's Default Media
+  Receiver. A styled or custom receiver needs a [Cast Developer
+  Console](https://cast.google.com/publish) registration, and is the only path to
+  receiver-side header auth.
+- **Volume has two layers**: *device* volume (what users mean) and *stream*
+  volume (app-level). Prefer `setDeviceVolume()`.
 - The [Cast Design Checklist](https://developers.google.com/cast/docs/design_checklist)
-  binds your app (cast icon placement, user-initiated casting only).
+  binds your app: cast icon placement, user-initiated casting only.
 
 ## Version pins
 
-| SDK | Version | Verified against |
-| --- | --- | --- |
-| `com.google.android.gms:play-services-cast-framework` | 22.3.1 | Google Maven group index, 2026-08-13 |
-| `google-cast-sdk` (CocoaPods) | 4.8.6 | CocoaPods trunk, 2026-08-13 |
+| SDK | Version |
+| --- | --- |
+| `com.google.android.gms:play-services-cast-framework` | 22.3.1 |
+| `google-cast-sdk` (CocoaPods) | 4.8.6 |
 
-Pinned exactly on purpose (Google's iOS 4.8.0/4.8.1 broke discovery);
+Pinned exactly on purpose — an earlier iOS 4.8.x release broke discovery — and
 `scripts/check-upstream.mjs` watches both rows so a lag is loud, not silent.
 
 ## Also exported
@@ -464,6 +255,6 @@ Pinned exactly on purpose (Google's iOS 4.8.0/4.8.1 broke discovery);
 | Media | `CastMediaMetadata` — `{ title?, artist?, albumTitle?, artworkUrl? }`; `CastQueueItemInput`, `CastQueueItemSnapshot`, `SkippedCastItem`, `CanCastInput` |
 | Errors | `CastErrorCode`, `CastIdleReason`, `errorFromIdleReason`, `receiverFetchError`, `toCastError` |
 | Events and status | `CastEventMap`, `CastEventName`, `CastStateEvent`, `CastSessionEvent`, `CastSessionEventType`, `CastMediaStatus`, `CastPlayerState`, `CastDeviceVolume`, `CastTransferEvent`, `CastSeekResumeState` |
-| Handoff internals | `CastHandoffState`, `CastHandoffPhase`, `CastHandoffEvent`, `CastHandoffEffect`, `CastHandoffTransition`, `CastHandoffQueueSnapshot`, `CastHandoffLocalPlayer`, `WireCastHandoffOptions`, `initialCastHandoffState`, `projectReceiverPosition`, `CastQueueProjection`, `castabilityTables` — the pure state machine `wireCastHandoff` runs, exported for tests and custom hosts |
+| Handoff internals | `CastHandoffState`, `CastHandoffPhase`, `CastHandoffEvent`, `CastHandoffEffect`, `CastHandoffTransition`, `CastHandoffQueueSnapshot`, `CastHandoffQueueItem`, `CastHandoffLocalPlayer`, `CastReceiverSnapshot`, `WireCastHandoffOptions`, `initialCastHandoffState`, `projectReceiverPosition`, `CastQueueProjection`, `castabilityTables` — the pure state machine `wireCastHandoff` runs, exported for tests and custom hosts |
 | Components | `CastButtonProps`; the native pair `RnMediaCast`, `RnMediaCastButton`, `RnMediaCastButtonProps` |
 | Native events | `CastApi` (the typed surface `Cast` implements) and the raw `NativeCastStateEvent`, `NativeCastSessionEvent`, `NativeCastDevicesEvent`, `NativeCastMediaStatusEvent`, `NativeCastMediaErrorEvent`, `NativeDeviceVolumeEvent` the JS layer normalises — not API |

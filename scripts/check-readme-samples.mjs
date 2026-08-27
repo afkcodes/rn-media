@@ -7,7 +7,7 @@
  *    everything, docs whose samples typecheck)"
  *
  * This is the thing that makes the last clause true. It extracts every ```ts /
- * ```tsx fenced block out of the five shipped READMEs, writes each one to
+ * ```tsx fenced block out of every shipped README and recipe, writes each one to
  * `.readme-samples/` as a standalone module, and runs `tsc --noEmit` over them
  * with `@rn-media/*` mapped at the workspace packages' `src` — the real export
  * surface, not a stale `lib/` build. A sample that drifts from the code is then
@@ -27,11 +27,10 @@
  *     generated file is a build artifact nobody should have to read. The
  *     mapping is exact because a block is copied verbatim and the one-line
  *     prelude is the only thing added above it.
- *   - **One project per README.** The `declare`s a README's prose earns are
- *     global to its project, and two READMEs may legitimately introduce the
- *     same name (`tracks`, `player`) with different shapes. Separate projects
- *     keep those from colliding, and give the per-README block counts the
- *     report prints.
+ *   - **One project per file.** The `declare`s a file's prose earns are global
+ *     to its project, and two files may legitimately introduce the same name
+ *     (`tracks`, `player`) with different shapes. Separate projects keep those
+ *     from colliding, and give the per-file block counts the report prints.
  *   - A block is a MODULE. If it declares no import/export of its own the
  *     harness appends `export {}` — the only edit ever made to sample text, and
  *     it changes no line numbering.
@@ -40,8 +39,8 @@
  *     block created). It is deliberately small, per-README, and **typed** —
  *     nothing here is `any`, so a sample cannot pass by accident. A sample that
  *     needs more than a handful is a sample that should declare them itself,
- *     which is why the root README's recipes have almost none: those are whole
- *     programs by contract.
+ *     which is why `docs/recipes/` leans on one shared back end and nothing
+ *     else: those samples are whole programs by contract.
  *   - `MODULES` is the same allowance for a *file* the prose names — `./library`
  *     in a recipe that opens `// src/playback.ts`. Written as a real source
  *     file next to the sample, so the import resolves the way the reader's
@@ -84,16 +83,10 @@ declare module '@react-native-async-storage/async-storage' {
 `;
 
 /**
- * Identifiers the prose around a block introduces. Global to that README's
- * project only; a block that binds the same name shadows this at module scope,
- * which is exactly what should happen.
- *
- * @type {Record<string, string>}
+ * The catalogue / back end the `docs/recipes/` samples are written *against*.
+ * Shared by every recipe project, because they document one imagined app.
  */
-const AMBIENTS = {
-  // The recipes are whole programs by contract, so this list stays tiny: it is
-  // only the catalogue/back end each recipe is explicitly written *against*.
-  root: `
+const RECIPE_BACKEND = `
 declare const service: import('@rn-media/media-session').MediaServiceApi
 declare const station: { id: string; name: string; url: string; logoUri: string }
 declare const episode: { id: string; url: string }
@@ -132,7 +125,25 @@ declare function setStationLine(
   bitrate: string | undefined
 ): void
 declare function Bar(): import('react').JSX.Element
-`,
+`;
+
+/**
+ * Identifiers the prose around a block introduces. Global to that file's
+ * project only; a block that binds the same name shadows this at module scope,
+ * which is exactly what should happen.
+ *
+ * @type {Record<string, string>}
+ */
+const AMBIENTS = {
+  // The root README's one quick start is a whole program; it needs nothing
+  // beyond the `./library` module its own first lines import.
+  root: '',
+  'recipe-music-player': RECIPE_BACKEND,
+  'recipe-radio': RECIPE_BACKEND,
+  'recipe-podcast-audiobook': RECIPE_BACKEND,
+  'recipe-self-hosted-library': RECIPE_BACKEND,
+  'recipe-in-the-car': RECIPE_BACKEND,
+  'recipe-cast': RECIPE_BACKEND,
   // `player` is the one created by the "Usage" block at the top of the file;
   // every later block in this README continues from it, and saying so once
   // beats repeating six lines of setup in every snippet.
@@ -237,9 +248,7 @@ declare function refreshSignedUrls(): Promise<void>
  *
  * @type {Record<string, Record<string, string>>}
  */
-const MODULES = {
-  root: {
-    'library.ts': `
+const LIBRARY_MODULE = `
 export interface Track {
   id: string
   title: string
@@ -253,25 +262,35 @@ export const storage = {
   getItem: (_key: string): Promise<string | null> => Promise.resolve(null),
   setItem: (_key: string, _value: string): Promise<void> => Promise.resolve(),
 }
-`,
-    'ui.ts': `
+`;
+
+const UI_MODULE = `
 export declare function Slider(props: {
   value: number
   minimumValue: number
   maximumValue: number
   onSlidingComplete: (value: number) => void
 }): import('react').JSX.Element
-`,
-  },
+`;
+
+const MODULES = {
+  root: { 'library.ts': LIBRARY_MODULE },
+  'recipe-music-player': { 'library.ts': LIBRARY_MODULE, 'ui.ts': UI_MODULE },
 };
 
-/** The five shipped READMEs, in the order the report prints them. */
+/** Every shipped doc that carries samples, in the order the report prints them. */
 const READMES = [
   { slug: 'root', file: 'README.md' },
   { slug: 'player', file: 'packages/player/README.md' },
   { slug: 'media-session', file: 'packages/media-session/README.md' },
   { slug: 'audio-session', file: 'packages/audio-session/README.md' },
   { slug: 'cast', file: 'packages/cast/README.md' },
+  { slug: 'recipe-music-player', file: 'docs/recipes/music-player.md' },
+  { slug: 'recipe-radio', file: 'docs/recipes/radio.md' },
+  { slug: 'recipe-podcast-audiobook', file: 'docs/recipes/podcast-audiobook.md' },
+  { slug: 'recipe-self-hosted-library', file: 'docs/recipes/self-hosted-library.md' },
+  { slug: 'recipe-in-the-car', file: 'docs/recipes/in-the-car.md' },
+  { slug: 'recipe-cast', file: 'docs/recipes/cast.md' },
 ];
 
 /** `@rn-media/*` resolves to the workspace source, never to a built `lib/`. */
@@ -489,7 +508,7 @@ function main() {
     const mine = blocks.filter((b) => b.slug === readme.slug);
     const skipped = mine.filter((b) => b.fragment).length;
     console.log(
-      `  ${readme.file.padEnd(34)} ${String(mine.length - skipped).padStart(2)} blocks` +
+      `  ${readme.file.padEnd(38)} ${String(mine.length - skipped).padStart(2)} blocks` +
         (skipped > 0 ? `  (+${skipped} fragment, skipped)` : '')
     );
   }

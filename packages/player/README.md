@@ -1,33 +1,19 @@
 # @rn-media/player
 
-React Native audio player built on libmpv, powered by Nitro Modules.
+React Native audio player built on libmpv, powered by Nitro Modules. One mpv
+core per `Player`, a gapless queue, a typed filter/EQ chain, a spectrum
+visualizer, and a raw escape hatch onto mpv's client API.
 
 [![Version](https://img.shields.io/npm/v/@rn-media/player.svg)](https://www.npmjs.com/package/@rn-media/player)
-[![Downloads](https://img.shields.io/npm/dm/@rn-media/player.svg)](https://www.npmjs.com/package/@rn-media/player)
 [![License](https://img.shields.io/npm/l/@rn-media/player.svg)](https://github.com/afkcodes/rn-media/blob/main/LICENSE)
 
 ## Requirements
 
-- React Native **v0.82.0 or higher** (New Architecture only)
-- Node 18.0.0 or higher
-
-> **iOS: this player does not configure `AVAudioSession`, on purpose.** The
-> session is a process-wide singleton, and it belongs to
-> [`@rn-media/audio-session`](../audio-session/README.md) — the same split as
-> Android, where this player requests no audio focus and that package requests
-> all of it. The engine is told to keep its hands off
-> (`audiounit-skip-session-management`), because stock mpv reconfigures the
-> session on *every* playback start and would otherwise always win: it resets
-> the route-sharing policy and forces `.moviePlayback`, after which CoreAudio
-> refuses the output client and iOS shows **no Lock Screen or Control Center
-> card at all** (ARCHITECTURE §26).
->
-> The practical consequence: an app that uses this package **without**
-> `@rn-media/audio-session` (or its own session code) gets the process default
-> category rather than `.playback`, which on iOS is the difference between
-> playing in the background and not. Configure a session, or pass
-> `audiounit-skip-session-management=no` in `Player.create`'s options to hand
-> the job back to the engine — caller options are applied after these defaults.
+| | |
+|---|---|
+| React Native | **>= 0.82** (New Architecture only); Node >= 18 |
+| Android | minSdk 24. This package's manifest merges no permissions — not even `RECORD_AUDIO` |
+| iOS | Add `UIBackgroundModes: audio` to your `Info.plist`, or install `@rn-media/media-session` and let its Expo plugin merge it. This package configures no `AVAudioSession`. Install [`@rn-media/audio-session`](../audio-session/README.md) or write your own session code, or the process default category applies and background audio does not work. Pass `audiounit-skip-session-management=no` in `mpvOptions` to hand the job back to the engine ([ARCHITECTURE §26](../../ARCHITECTURE.md#26-avaudiosession-has-exactly-one-owner-and-it-is-not-the-engine)) |
 
 ## Installation
 
@@ -42,397 +28,216 @@ import { Button } from 'react-native';
 import { usePlayer, usePlayerState, useProgress } from '@rn-media/player';
 
 function Screen() {
-  const { player, error } = usePlayer({
-    volume: 0.8,
-    setup: p => p.load('https://example.com/track.flac'),
-  });
-  const state = usePlayerState(player);
-  const { position, duration, buffered } = useProgress(player);
-
-  return (
-    <Button title={state.playing ? 'Pause' : 'Play'} onPress={() => player?.toggle()} />
-  );
+  const { player } = usePlayer({ volume: 0.8, setup: p => p.load('https://x/a.flac') });
+  const { playing } = usePlayerState(player);
+  const { position, duration } = useProgress(player);
+  return <Button title={playing ? 'Pause' : 'Play'} onPress={() => player?.toggle()} />;
 }
 ```
 
-Outside React:
+Outside React, `await Player.create(options)` gives the same object, and
+[the recipes](../../docs/recipes/music-player.md) build whole apps on it.
+
+## API
+
+### Lifecycle and loading
+
+| | what it does | notes |
+|---|---|---|
+| `Player.create(options?: PlayerOptions): Promise<Player>` | Builds one mpv core and initialises it | Options out of mpv's range throw before a core is created. Multiple players are first-class: one mpv core each |
+| `player.destroy(): void` / `player.destroyed: boolean` | Terminates the core and frees everything | Idempotent; every method afterwards throws `disposed` |
+| `usePlayer(options?: UsePlayerOptions)` | `create` on mount, `destroy` on unmount | `options.setup?: (p: Player) => void \| Promise<void>` runs once, after create |
+| `createMpvClient(): MpvClient` | The raw binding, with no `Player` wrapper | [docs/engine.md](../../docs/engine.md#reaching-into-mpv) |
+| `load(source, options?: LoadOptions): Promise<void>` | Replaces the queue with one entry | `{ autoPlay?, startPosition?, headers?, mpvOptions? }`. `startPosition` is applied by mpv at open, so there is no audible jump |
+| `loadPlaylist(sources, options?: LoadPlaylistOptions)` | One mpv playlist — this is what gapless *is* | adds `{ startIndex?, shuffle? }`; the two together throw, because after a whole-list shuffle an index no longer identifies the source you passed |
+| `setSourceResolver(resolver \| null): void` | Install, replace or remove the resolver at any time | `(req: { uri, entryId? }) => string \| Promise<string>` |
+| `setScreenStateSource(source)` / `getScreenStateSource()` | Replace the display-state signal the visualizer gates on | For an external display or a head unit — not for turning the gate off |
+
+`PlayerOptions`:
+
+| option | default | notes |
+|---|---|---|
+| `volume`, `rate`, `pitch`, `muted`, `loop` | mpv's | `volume` is `0..1` |
+| `cacheSecs` | `30` | mpv's own default is ~1000 hours, which on a radio stream downloads for hours even while paused. Startup is unaffected: `cache-pause-initial` is `no` |
+| `prefetchPlaylist` | `false` | Opens the next entry as soon as the current one is fully read. 25 ms handover with it; 644 ms and a logged device underrun without |
+| `gaplessAudio` | `'weak'` | `'weak'` keeps the device open while the output format matches; `'yes'` always, resampling later entries into the first entry's format; `'no'` never. Pin `--audio-samplerate`/`--audio-format` if you choose `'yes'` |
+| `userAgent` | `rn-media (libmpv)` | Real Shoutcast hosts reject the literal `libmpv` |
+| `replayGain` | off | `{ mode, preamp?, clip?, fallback? }` — see [Audio processing](#audio-processing) |
+| `networkReconnect` | on | `{ enabled?, maxDelaySeconds? }` — FFmpeg's own retry, inside libavformat |
+| `retry` | `{ maxAttempts: 2 }` | `{ maxAttempts, retryLiveEof? }` — whether the queue moves on |
+| `sourceResolver`, `resolverTimeoutMs`, `resolverTtlMs` | none, `10_000`, `600_000` | See [Dynamic source resolution](#dynamic-source-resolution-signed-urls-transcode-sessions) |
+| `logLevel`, `mpvOptions` | | Raw `mpvOptions` always win. Precedence at init, weakest first: library defaults, typed options, `mpvOptions`. `profile` and `include` are unsupported there — set them after creation |
+| per-source `headers` | none | The typed form of mpv's `http-header-fields`, escaped through both of mpv's list layers and rejecting CR/LF/NUL/colon, which mpv would write into the request verbatim. It belongs to the **entry**, so a resolver rewriting the URL does not lose it. `.m3u8`/`.m3u` sources additionally force a caller-overridable `demuxer=lavf`, so mpv's playlist demuxer cannot explode your queue into segment entries |
+
+### Playback
+
+| | what it does | notes |
+|---|---|---|
+| `play()` / `pause()` / `toggle()` | | Synchronous — they set mpv's `pause` property |
+| `isPlaying(): boolean` | `state.playing` as a method | What makes a `Player` satisfy `audio-session`'s player contract |
+| `seekTo(seconds): Promise<void>` | Absolute seek | |
+| `seekBy(delta): Promise<void>` | Relative seek | Immune to projection error — use it for ±15 s buttons |
+| `stop(options?: { clearPlaylist? }): Promise<void>` | Stops playback; **the queue survives** | mpv's own `stop` clears it; this library inverts that default. `{ clearPlaylist: true }` is the destructive opt-in |
+| `setRate(rate): void` | Pitch-corrected speed | mpv's `scaletempo2` sits downstream of the filter chain, so rate, filters and ReplayGain compose freely |
+| `setPitch(ratio): void` | Transpose, independent of rate | A frequency **ratio**, not semitones: `2 ** (n / 12)` is the twelve-tone version |
+| `getVolume()` / `setVolume(v)` / `setMuted(muted)` | Volume is `0..1` | mpv's own curve is `gain = (volume / 100) ** 3`. Use `setPropertyNumber('volume', …)` for its amplification range |
+| `setLoop(mode)` / `setAudioChannels(mode)` | `'off' \| 'track' \| 'playlist'`; `'auto-safe' \| 'auto' \| 'stereo' \| 'mono'` | The second is an accessibility downmix; `'auto-safe'` restores |
+| `setPrefetchPlaylist(enabled): void` | The runtime twin of the create option | Takes effect from the next prefetch decision; turning it off does not abort a running opener |
+
+### Queue (`player.playlist.*`)
+
+| | what it does | notes |
+|---|---|---|
+| `entries(): readonly PlaylistEntry[]` | `{ uri, entryId, current }[]`, read from mpv | One synchronous node read, constant whatever the length. A pull, not a subscription — call it when something says the queue moved |
+| `add(source, options?: PlaylistAddOptions)` | Insert one entry | See the position table below |
+| `remove(index)` / `move(from, to)` | | `move` has ordinary array semantics |
+| `jumpTo(index, options?: { autoPlay? })` | Play that entry | Clears `pause` by default, like `load()`. `{ autoPlay: false }` stays paused |
+| `next()` / `previous(options?: { restartThreshold? })` | The ⏭ / ⏮ buttons | Past the threshold (3 s), `previous` restarts the track instead of moving back |
+| `clear()` | | Keeps the entry that is playing |
+| `shuffle(): Promise<readonly PlaylistEntry[]>` | mpv `playlist-shuffle` | Permutes **every** entry including the playing one, so you get a `trackChanged` for a track that did not change. Returns the new order |
+| `unshuffle(): Promise<readonly PlaylistEntry[]>` | Undoes it — **once** | mpv keeps one level of history, and each shuffle overwrites it. To restore a user-visible order after several shuffles, keep it yourself and rebuild with `loadPlaylist` |
+
+`PlaylistAddOptions` adds `position` and `play` to the per-source options:
+
+| `position` | where the entry lands |
+|---|---|
+| omitted | the end of the queue |
+| `'next'` | immediately after the current entry |
+| `number` | that exact index; outside `0 … count` it **throws** rather than clamping, because mpv's own behaviour there is to silently append |
+| plus `play: true` | mpv's `*-play` variant: start playback *if nothing is currently playing*. Not "play this now" — for that, add the entry and `jumpTo` it |
+
+| Constraint | Detail |
+|---|---|
+| Insertion is one command, not two | `position` compiles onto mpv's own `insert-next` / `insert-at` load actions, so the queue is never briefly wrong the way an append-then-move pair leaves it. Key your own metadata on `entryId`, never on the array index: an insert renumbers everything after it, and `entryId` is unique for the life of the core |
+| `queueChanged.reason` is `'resized'` or `'reordered'` | A reorder issued through the raw `command()` escape hatch is invisible to the event, because a reorder changes no observable mpv property — the price of not streaming the queue across the bridge |
+| An insert during an in-flight prefetch is not itself prefetched | The insert is correct; it costs the prefetch in flight, and the boundary opens cold. Insert well before the current track ends |
+
+### State, metadata and chapters
+
+| | what it does | notes |
+|---|---|---|
+| `player.state: PlayerState` | Immutable snapshot | `status`, `playing`, `duration`, `isLive`, `rate`, `pitch`, `volume`, `muted`, `loop`, `playlist: { index, count }`, `hasNext`, `hasPrevious`, `chapter`, `title`, `seeking`, `seekable`, `bufferedPosition`, `bufferingPercent`, `positionAnchor`, `positionAnchorMs`, `error`, … |
+| `onStateChange(fn): Unsubscribe` | Fires only on real changes | |
+| `getPosition()` / `resyncPosition()` | Seconds, **projected locally**; the second re-reads mpv and re-anchors | No bridge traffic, no timers |
+| `clearError(): boolean` | Dismiss `state.error` | Clears state only — it never suppresses or replays an event |
+| `getMetadata()` / `getMetadataValue(key)` / `getCommonMetadata()` | mpv's typed tag map, one case-insensitive tag, or the normalised set | One node read, no string parsing, and the map cannot mix two tag generations. `'icy-title'` is how radio now-playing arrives |
+| `getChapters()` · `setChapter(index)` · `nextChapter()` · `previousChapter()` | `{ title?, start }[]` with `start` in seconds, plus navigation | Podcasts, m4b audiobooks; `[]` when there are none, never an error |
+
+**Position is an anchor, never a stream.** `positionAnchor` is
+`{ position, timestamp, rate }` in **seconds**, updated only on discontinuities;
+every surface projects `position + elapsed × rate` locally. `positionAnchorMs` is
+the same fact in `media-session`'s `{ value, at, rate }` milliseconds with
+`rate: 0` already applied — broadcast that one
+([ARCHITECTURE §7](../../ARCHITECTURE.md#7-position-is-never-streamed--anchors--projection)).
+
+### Hooks
+
+All take `Player | undefined`, so they are safe before `create()` resolves.
+
+| | returns |
+|---|---|
+| `usePlayer(options?)` | `{ player, error }` |
+| `usePlayerState(player)` / `usePlayerState(player, selector, isEqual?)` | the whole `PlayerState`, or one derived slice that re-renders only when it changes |
+| `useProgress(player, intervalMs = 250)` | `{ position, duration, buffered, isLive }`; the interval stops whenever playback is not advancing |
+| `useMilestones(player, onMilestone, { marks = [25,50,75,90], intervalMs? })` | nothing — calls back at the scrobbling marks. A hook rather than a player timer, because JS timers freeze with the screen off |
+| `usePrefetchStatus(player)` | `{ active: false } \| { active: true, uri, entryId?, at }` |
+| `useEqualizer(player, options?)` | `Equalizer` — see [below](#audio-filters-and-eq) |
+| `useVisualizer(player, options?, enabled?, pauseWhenInactive?)` | `{ frame, error, active }` |
+
+### Events
+
+`player.on(name, listener): Unsubscribe`.
+
+| event | payload |
+|---|---|
+| `trackChanged` / `trackEnded` | `{ index, previousIndex }` / `{ index }` — the second means finished naturally |
+| `queueEnded` | *(none)* — playback ran off the end |
+| `queueChanged` / `chapterChanged` | `{ count, reason: 'resized' \| 'reordered' }` / `{ index?, previousIndex? }` |
+| `seekStarted` / `seekCompleted` | `{ reason: 'seek' \| 'auto-advance', from }` / `{ …, position }` — the pair analytics reconstructs listened time from, and it arrives with the screen off |
+| `metadataChanged` | `Metadata` — at most once per native event batch, and only while something is listening |
+| `prefetchStarted` | `{ uri, entryId? }` — fires seconds into the current track, when mpv releases its opener thread. Needs no resolver, and never occurs on a build without the fork's hook |
+| `retrying` / `error` | `{ index, attempt, maxAttempts, error }` / `(error: PlayerError, info: { attempts })` |
+| `log` | `{ level, prefix, text }` from mpv itself |
+
+### Audio processing
+
+| | what it does | notes |
+|---|---|---|
+| `setAudioFilters(filters): void` | Compiles typed descriptors into mpv's `af` grammar | Replaces the whole user chain. Rejects a chain carrying an `@rnmedia_…` label, which is reserved for managed entries |
+| `clearAudioFilters()` / `getAudioFilters(): string` | Clear the user chain, or read the compiled chain as mpv sees it | `clearAudioFilters` leaves the managed loudnorm entry alone |
+| `setAudioFilterParam(filter, param, value)` | mpv's `af-command`: change one value without rebuilding the chain | Needs a labelled entry. `AUDIO_FILTER_RUNTIME_PARAMS` lists what can change this way; `diffAudioFilterParams(from, to)` answers "same graph, different numbers?" |
+| `setReplayGain(options): void` / `getReplayGainMode()` | Volume-domain gain from the file's tags: `{ mode: 'no' \| 'track' \| 'album', preamp?` (dB, `-150 … 150`)`, clip?, fallback?` (dB, `-200 … 60`)` }` | Applies to the *playing* track with no gap and no reload. Only the fields you pass are written, and out-of-range values throw instead of being clamped. `clip` means "**allow** clipping": peak limiting is on by default and `clip: true` turns it off. `fallback` replaces the tag logic for untagged files *and* whenever `mode` is `'no'`, so pass `{ mode: 'no', fallback: 0 }` to return to unity gain |
+| `setLoudnessNormalization(enabled, options?)` / `getLoudnessNormalization()` | A managed `loudnorm` entry for files with no tags | `{ targetLufs?, loudnessRange?, truePeakDb?, dualMono? }` |
+| `AudioFilters.*` | `equalizer`, `bass`, `treble`, `lowpass`, `highpass`, `graphicEqualizer`, `crossfeed`, `compressor`, `limiter`, `dynamicNormalizer`, `loudnorm`, `volume`, `custom` | `custom` reaches any ffmpeg audio filter compiled in; `GRAPHIC_EQUALIZER_BANDS` is the 18-band centre list |
+| `EQUALIZER_PRESETS` / `EQUALIZER_PRESET_LIST` / `EQUALIZER_BANDS` | 22 tuned 10-band curves; the list is picker-ordered; the bands are the ISO centres | `EQUALIZER_BAND_COUNT` is 10 |
+| `equalizerPresetChain(preset, options?)` | Preset → filter chain with a computed pre-amp | `{ editable: true }` labels every band so `setAudioFilterParam` can find it, and emits all ten bands so the chain's shape never depends on the gains |
+| `defineEqualizerPreset(id, name, gainsDb)` | Validates a user-designed curve | Exactly 10 gains |
+| `serializeEqualizerSettings` / `parseEqualizerSettings` | The on-disk form `useEqualizer`'s `storage` writes | Parse returns a typed `EqualizerRestoreResult` and never throws |
+| `player.visualizer.capabilities` | `{ fft, waveform, maxFps, minFftSize, maxFftSize }` | `fft: false` on binaries without the PCM-tap patch |
+| `player.visualizer.subscribe(listener, options?)` | Imperative spectrum | Never auto-paused — the hook is what pauses |
+
+ReplayGain and `setLoudnessNormalization` are **mutually exclusive** and the API
+enforces it, because their gains would stack. Enabling either disables the other.
+
+### Escape hatch
+
+`command` · `getPropertyString` / `Number` / `Bool` · `setPropertyString` /
+`Number` / `Bool` · `observeProperty` · `unobserveProperty` ·
+`getRawHandle(): bigint`. A complete raw mpv client, with two documented limits:
+an extra observed property does not become a `Player` event, and video stays out
+([docs/engine.md](../../docs/engine.md#reaching-into-mpv)).
+
+## Audio filters and EQ
 
 ```ts
-import { Player } from '@rn-media/player';
+import { AudioFilters, EQUALIZER_PRESETS, equalizerBandLabel, equalizerPresetChain } from '@rn-media/player'
 
-const player = await Player.create({ volume: 0.8 });
-const unsubscribe = player.onStateChange(state => console.log(state.status));
-player.on('trackEnded', ({ index }) => console.log('finished', index));
-player.on('error', err => console.error(err.code, err.message));
+player.setAudioFilters([AudioFilters.bass({ gain: 4 }), AudioFilters.crossfeed({ strength: 0.3 })])
 
-await player.loadPlaylist(sources, { startIndex: 0 }); // gapless, mpv playlist
-player.play();
-await player.seekTo(30);
-player.setRate(1.5);
-player.setVolume(0.5); // 0..1, mapped onto mpv's 0..100
-player.getVolume(); // 0..1, read straight back from mpv
-player.setLoop('playlist');
-
-player.getPosition(); // projected locally — never polls native
-
-unsubscribe();
-player.destroy();
-```
-
-### Queue
-
-```ts
-await player.loadPlaylist(sources, { startIndex: 2 }); // gapless, mpv playlist
-await player.loadPlaylist(sources, { shuffle: true }); // shuffled, starts at the top
-
-await player.playlist.add(uri); // append
-await player.playlist.add(uri, { position: 'next' }); // after the current entry
-await player.playlist.add(uri, { position: 2 }); // exact index
-await player.playlist.add(uri, { play: true }); // …and start if nothing is playing
-await player.playlist.remove(3);
-await player.playlist.move(0, 4); // ordinary array semantics
-await player.playlist.jumpTo(2); // plays it; pass { autoPlay: false } to stay paused
-await player.playlist.next();
-await player.playlist.previous();
-await player.playlist.clear(); // keeps the entry that is playing
-await player.playlist.shuffle(); // mpv `playlist-shuffle`, RETURNS the new order
-await player.playlist.unshuffle(); // undoes the last shuffle — once
-
-player.playlist.entries(); // [{ uri, entryId, current }, …] — the contents
-player.on('queueChanged', ({ count, reason }) => refreshQueueUi());
-```
-
-**Reading the queue back.** `PlayerState.playlist` is a *cursor* (index and
-count); `playlist.entries()` is the contents. It is **one** synchronous native
-call — a single `mpv_get_property("playlist", MPV_FORMAT_NODE)`, constant
-whatever the queue length — and it is a pull, not a subscription, on purpose.
-Observing the playlist would put a variable-size array on the bridge every time
-the queue is touched and make `PlayerState` a second copy of state mpv already
-owns; that is the same trade this library refuses for position (anchored and
-projected, never streamed) and for metadata (pulled, never pushed). One node read
-is also the only *coherent* answer: a walk of `playlist/N/filename` can
-interleave with a `playlist-move` and hand you two halves of two different
-orders.
-
-Call it when something says the queue moved — not on a timer, and not per render.
-
-**`queueChanged` tells you when, and is honest about what it knows.**
-
-| `reason` | fires when | how it is known |
-| --- | --- | --- |
-| `'resized'` | add / remove / clear / a fresh `loadPlaylist` | `playlist-count` is observed, so this rides the ordinary event batch |
-| `'reordered'` | `move` / `shuffle` / `unshuffle` | emitted by those methods — a reorder changes **no** observable mpv property, so nothing else could report it |
-
-The gap that leaves, stated rather than papered over: a reorder issued through
-the raw `player.command()` escape hatch is invisible to this event. That is the
-price of not streaming the queue across the bridge.
-
-**Key on `entryId`, not on the array index.** An insert renumbers everything
-after it, so any app-side `index → metadata` map is silently one row off from
-the next `playlist.add(uri, { position: 'next' })` onwards — the queue is
-correct, the labels are wrong, and it shows up later as the wrong artwork on the
-wrong song. mpv's `entryId` is "unique for the entire life time of the current
-mpv core instance" and survives inserts, removes, moves and shuffles:
-
-```ts
-const byUri = new Map(myTracks.map(t => [t.uri, t]));
-const rows = player.playlist.entries().map(e => ({ ...e, track: byUri.get(e.uri) }));
-```
-
-**Insertion is one command, and it is validated.** `position` compiles straight
-onto mpv 0.38+'s `loadfile` insert actions — `insert-next` / `insert-next-play`
-for `'next'`, `insert-at` / `insert-at-play` plus the index argument for a
-number — so the queue is never briefly wrong the way an `append` + `playlist-move`
-pair would leave it. A numeric `position` outside `0 … playlist.count` **throws**
-rather than being clamped: mpv's own behaviour there is to silently append, which
-turns an off-by-one into a track at the wrong end of the queue.
-
-`play: true` is mpv's `*-play` variant, and it means exactly what mpv means: start
-playback *if nothing is currently playing*. It is not "play this now" — for that,
-add the entry and `jumpTo` it.
-
-**Caveat with `prefetchPlaylist`.** An entry inserted while mpv is already
-prefetching the *old* next entry is not prefetched itself (`prefetch_next()`
-returns early while an opener is active), and at the boundary mpv drops the
-now-wrong prefetch and opens cold. The insert is correct; it costs the prefetch
-that was in flight. Insert well before the current track ends and nothing is lost.
-
-**Shuffle.** `playlist.shuffle()` is mpv's `playlist-shuffle`, which permutes
-*every* entry, including the one playing. The track keeps playing (mpv tracks the
-entry, not the index), but its `playlist-pos` moves — so you get a `trackChanged`
-event for a track that did not change. Read `state.playlist.index` and carry on.
-
-`shuffle()` and `unshuffle()` **return the resulting order** (the same value
-`entries()` would give). mpv reports nothing about the permutation it performed,
-so before this an app's only options were to re-read the playlist itself or to
-guess; the read happens once, after the command, where it cannot be missed.
-
-`playlist.unshuffle()` is a **one-level undo**, and mpv says so: "Attempt to
-revert the previous `playlist-shuffle` command. This works only once (multiple
-successive `playlist-unshuffle` commands do nothing)." Each shuffle overwrites
-the recorded original order. If you need to restore a user-visible order after
-several shuffles, keep it in your app and rebuild with `loadPlaylist`.
-
-`loadPlaylist(sources, { shuffle: true })` shuffles after every entry is
-appended and before playback starts, so playback begins at the top of the
-shuffled order. **Combining it with `startIndex` throws** an `invalid-state`
-`PlayerError`: after a whole-list shuffle an index no longer identifies the
-source you passed at that position, and quietly reinterpreting it would be a
-coin flip. For "shuffle, but start with *this* track", put that track first
-yourself, or load in order and call `playlist.shuffle()` afterwards.
-
-### Audio filters and EQ
-
-```ts
-import {
-  AudioFilters,
-  EQUALIZER_PRESETS,
-  equalizerBandLabel,
-  equalizerPresetChain,
-} from '@rn-media/player'
-
-player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.rock))
-player.setAudioFilters([
-  AudioFilters.equalizer({ frequency: 60, widthType: 'o', width: 1, gain: 4 }),
-  AudioFilters.crossfeed({ strength: 0.3 }),
-  AudioFilters.limiter(),
-])
-player.getAudioFilters() // mpv's own `af` string, read back
-player.clearAudioFilters()
-
-// A slider does NOT rewrite the chain: it commands the running filter. Every
-// entry of an editable chain carries a label — that is how you find one again.
+// A slider commands the running filter instead of rewriting the chain.
 const chain = equalizerPresetChain(curve, { editable: true })
 player.setAudioFilters(chain)
 const band = chain.find((f) => f.label === equalizerBandLabel(5)) // the 1 kHz band
-if (band !== undefined) await player.setAudioFilterParam(band, 'g', -3) // `af-command`
+if (band !== undefined) await player.setAudioFilterParam(band, 'g', -3)
 ```
 
-Typed descriptors compile into mpv's `af` grammar — one mpv entry per filter,
-escaped exactly the way mpv's own serialiser writes it. Factories:
-`equalizer`, `bass`, `treble`, `lowpass`, `highpass`, `graphicEqualizer`
-(18-band `superequalizer`), `crossfeed`, `compressor`, `limiter`,
-`dynamicNormalizer`, `loudnorm`, `volume`, and `custom` for any other
-libavfilter audio filter that is compiled in. Each validates against the
-underlying filter's documented ranges and throws `invalid-state` rather than
-letting mpv fail later.
+Each factory validates against the underlying filter's ranges and throws
+`invalid-state` rather than letting mpv fail later.
 
-**Presets.** `EQUALIZER_PRESETS` holds 22 tuned 10-band curves (ISO octave
-centres, nothing beyond ±9 dB); `EQUALIZER_PRESET_LIST` is the same set in
-picker order, and `defineEqualizerPreset(id, name, gainsDb)` validates a
-user-designed one. Apply them through `equalizerPresetChain`, which computes the
-pre-amp from the *summed* magnitude response — octave-spaced bells overlap and
-add, so `Loudness` peaks at +8.8 dB from +7 dB sliders and attenuating by the
-largest slider would still clip. Bands at 0 dB are dropped and a flat preset
-compiles to an empty chain.
+| Constraint | Detail |
+|---|---|
+| `af` is a global mpv option, not per-entry | A chain survives track changes by design, and unmounting an EQ screen does not clear it. `setEnabled(false)` takes it off |
+| A preset's pre-amp comes from the summed magnitude response | Octave-spaced bells overlap and add, so attenuating by the largest slider would still clip. Bands at 0 dB are dropped, and a flat preset compiles to an empty chain |
+| Every non-flat curve gets an `alimiter` on the tail | The pre-amp bounds gain in the frequency domain; clipping is a time-domain event, so the limiter is where the guarantee comes from (`{ limiter: false }` opts out). It costs 5 ms of uncompensated look-ahead: 5 ms of silence when the chain is built, and the last 5 ms of the stream is never flushed. ffmpeg's `level` option also scales the result back up to full scale — pass `autoLevel: false` with any ceiling below 1 |
+| `setAudioFilters` recreates every entry whose arguments changed | Fine for a settings change, ruinous for a slider. Use `setAudioFilterParam` during a gesture and write the chain once it is over |
+| `getAudioFilters()` shows the value an entry was created with | `af-command` deliberately does not rewrite the property, so anything that rebuilds the chain from it puts the old value back |
+| The chain order is equaliser → your chain → the managed loudness entry | The pre-amp must attenuate before the boosts it is sized for; the loudness entry must hear everything above it |
+| Availability | The filters are in the pinned binaries on both platforms. On an older or overridden binary the call fails with an `mpv` `PlayerError` carrying `errno: -11` |
 
-**The limiter, and why it is on.** Every non-flat curve gets an `alimiter` on
-the tail — cut-only curves included, a single +0.1 dB band included
-(`{ limiter: false }` opts out). The pre-amp bounds `max |H(f)|`, which is a
-*frequency-domain* guarantee; clipping is a time-domain event, and the tight
-bound on a filter's sample-peak gain is the L1 norm of its impulse response,
-which is always larger. At 48 kHz: `Rock` after its −4.8 dB pre-amp still has
-+4.9 dB of worst-case peak gain, and `Bass Reducer` — pure cuts, so no pre-amp
-is computed at all — has +5.7 dB. So "this curve cannot clip" is false for
-every curve that does anything, and the limiter is where the guarantee actually
-comes from.
+Design rationale: [ARCHITECTURE §18](../../ARCHITECTURE.md#18-eqdsp-is-a-typed-chain-over-mpvs-af-not-a-native-module).
 
-It is not a tone control. Its gain reduction is a running scalar that starts at
-1 and only moves when a sample exceeds the ceiling, so below full scale the
-output is sample-identical to the input, and ffmpeg's `level` option — which
-sounds like automatic levelling — is the constant `1 / limit`, i.e. exactly 1
-at the default ceiling of full scale. What it does cost is 5 ms of look-ahead
-that ffmpeg does not compensate by default: the chain emits 5 ms of silence
-when it is built and never flushes the last 5 ms of the stream. (The same
-`level` behaviour is a trap if you build a limiter by hand:
-`AudioFilters.limiter({ limit: 0.891 })` limits to −1 dBFS and then scales the
-result back up to 0 dBFS. Pass `autoLevel: false` with any ceiling below 1.)
+### `useEqualizer()`
 
-**Changing a value without rebuilding the chain.** `setAudioFilters` writes the
-whole `af` property, and mpv answers that by destroying and recreating every
-entry whose arguments changed — fine for a settings change, ruinous sixty times
-a second, which is what a slider is. `setAudioFilterParam(filter, param, value)`
-sends mpv's `af-command` instead: the biquad's coefficients are recomputed with
-its state left alone, so a gain sweeps rather than clicks, and nothing in the
-chain is torn down. It needs an entry with a **label**, which is what
-`equalizerPresetChain(curve, { editable: true })` produces (and that chain also
-emits all ten bands, so its *shape* never depends on the gains). The options
-that can be changed this way are listed, with their FFmpeg citations, in
-`AUDIO_FILTER_RUNTIME_PARAMS`; `diffAudioFilterParams(from, to)` answers "is
-this a new graph, or the same graph with different numbers?" and returns the
-commands when it is the latter. `useEqualizer` is built on exactly this.
+The whole EQ screen on one hook ([worked
+example](../../docs/recipes/music-player.md#an-eq-screen-over-the-same-player)).
+Returns `{ enabled, bands, gainsDb, gainRangeDb, preset, presets, savedPresets,
+error, hydrated }` plus `setEnabled`, `setBandGain`, `setBandGains`,
+`applyPreset`, `reset`, `savePreset`, `deletePreset`. Options: `initialPreset`,
+`initialEnabled`, `chain`, `gainRangeDb` (±12 dB), `storage`, `storageKey`,
+`onStorageError`, and the deprecated `extraFilters`.
 
-Two consequences worth knowing: mpv's `af` property is deliberately *not*
-rewritten, so `getAudioFilters()` keeps showing the value the entry was created
-with until you write the chain again — and anything that rebuilds the chain from
-that property (a new file, an audio-device switch) puts the old value back. Write
-the chain once the gesture is over. The library's own bookkeeping is kept in
-step, so `setLoudnessNormalization` never reverts a commanded value.
+| Behaviour | Detail |
+|---|---|
+| `preset` is derived, not remembered, and there is no change event | `preset` is whichever preset the current gains *are*, and `undefined` is what a UI draws as "Custom". The returned object is the notification: every mutator re-renders with a fresh immutable snapshot |
+| A gain-only change is pushed with `af-command` | No chain rebuild and no click, whatever the frame rate of the gesture. A graph change is one `setAudioFilters` |
+| 250 ms after the last in-place change, one `setAudioFilters` commits | So the curve survives the next track or device switch. That is the hook's only timer, and it is flushed on unmount |
+| The hook owns only its own `@rnmedia_eq_…` entries | Your `setAudioFilters` chain survives a slider drag |
+| Gains are clamped; wrong lengths and non-finite values throw | A slider at its stop is not a bug; ten gains that are not ten gains is |
+| `storage` is injected, and this package depends on none | A **synchronous** engine is read through synchronously, so the first `af` write is already the restored curve; an **asynchronous** one leaves `hydrated` `false` and writes nothing to mpv until the record arrives |
+| Built-in presets are never persisted | So a release that retunes `Rock` takes effect. A corrupt record means "start from the defaults"; a *storage* failure reaches `onStorageError` |
+| `savePreset(name)` joins `presets` | Saving twice under one name replaces it; `deletePreset(id)` throws on a built-in id and no-ops on an unknown one |
 
-Notes:
-
-- **`af` is a global mpv option, not per-entry** — a chain survives track
-  changes by design.
-- **Nothing interacts.** mpv's speed handling (`scaletempo2`) sits downstream
-  of the user chain, and ReplayGain is volume-domain, so filters, `setRate()`
-  and `setReplayGain()` compose freely. Watch total headroom, not ordering.
-- **Availability probe.** The filters exist in our pinned binaries on both
-  platforms (Android `v1.1.9-rnmedia.2`, iOS `v0.7.2-rnmedia.2`), so no
-  platform branching is needed. On an older or overridden binary the call fails
-  honestly with a `mpv` `PlayerError` carrying `errno: -11`.
-
-### `useEqualizer()` — the whole EQ screen, on one hook
-
-The pieces above are the primitives. This is them assembled: the curve, the
-preset bank, the persistence, and the one `af` write that puts it on the
-signal.
-
-```tsx
-import { useEqualizer, type Player } from '@rn-media/player'
-
-function EqualizerScreen({ player }: { player: Player | undefined }) {
-  const eq = useEqualizer(player)
-
-  return (
-    <>
-      {eq.presets.map(preset => (
-        <Chip
-          key={preset.id}
-          label={preset.name}
-          active={preset.id === eq.preset?.id}
-          onPress={() => eq.applyPreset(preset)}
-        />
-      ))}
-      {eq.bands.map((band, index) => (
-        <Slider
-          key={band.frequency}
-          value={band.gainDb}
-          minimumValue={eq.gainRangeDb.min}
-          maximumValue={eq.gainRangeDb.max}
-          onValueChange={db => eq.setBandGain(index, db)}
-        />
-      ))}
-      <Chip label="Reset" onPress={() => eq.reset()} />
-    </>
-  )
-}
-```
-
-The returned object is `{ enabled, bands, gainsDb, gainRangeDb, preset,
-presets, savedPresets, error, hydrated }` plus `setEnabled`, `setBandGain`,
-`setBandGains`, `applyPreset`, `reset`, `savePreset`, `deletePreset`.
-
-- **`preset` is derived, not remembered.** It is whichever preset the current
-  gains *are*, so dragging away from `Rock` and back onto it re-selects `Rock`,
-  and no sequence of edits can leave a chip highlighted on a curve that is not
-  playing. `undefined` is what a UI draws as "Custom".
-- **There is no `onBandChange`/`onPresetChange` event, on purpose.** The
-  returned object *is* the notification — every mutator re-renders, and the
-  value is a fresh immutable snapshot. An event carrying the same fact would be
-  a second source of truth to fall out of sync with.
-- **Built to be dragged.** Nothing is written unless the compiled chain would
-  actually differ, and *how* it is written depends on what changed. A gain-only
-  change — the slider case — is pushed into the running filters with
-  `af-command`: no chain rebuild, no blocked JS thread, no click, whatever the
-  frame rate of the gesture. A change to the graph (EQ toggled, `extraFilters`
-  or `chain` options changed, the curve leaving or returning to flat) is one
-  `setAudioFilters`. Then, 250 ms after the last in-place change, one more
-  `setAudioFilters` makes mpv's `af` property agree with the running chain
-  again, so the curve survives the next track or device switch; until it lands,
-  `player.getAudioFilters()` still shows the pre-drag string. That commit is the
-  hook's only timer, and it is flushed on unmount. An engine that refuses the
-  commands degrades to commit-only — the curve then lands when the gesture
-  settles rather than following the finger, which is honest; going back to
-  rewriting the chain per frame is what wrecks playback, and it never does that.
-- **It owns its own entries, and only those.** The hook writes
-  `Player.setEqualizerFilters` — the pre-amp, the ten bands and the limiter,
-  every one labelled `@rnmedia_eq_…` — and the player composes the chain as
-  **equaliser → your `setAudioFilters` chain → the managed loudness entry**. So
-  `player.setAudioFilters([...])` keeps working while an EQ screen is mounted,
-  and keeps working across a slider drag:
-
-  ```ts
-  player.setAudioFilters([AudioFilters.crossfeed({ strength: 0.3 })])
-  useEqualizer(player, {
-    chain: { limiter: false }, // EqualizerPresetChainOptions
-  })
-  ```
-
-  The order is not arbitrary: the pre-amp has to attenuate *before* the boosts
-  it is sized for, and the loudness entry has to hear everything above it.
-
-  `useEqualizer`'s `extraFilters` option did the same job by folding your chain
-  into the hook's half, back when the hook replaced the whole `af` property. It
-  still behaves identically and is **deprecated** — call `setAudioFilters`.
-
-  The `rnmedia_` label prefix is reserved for these managed entries;
-  `setAudioFilters` rejects a chain carrying one, because two owners of one mpv
-  label silently overwrite each other.
-- **Unmounting does not clear the chain.** `af` survives track changes by
-  design, and an EQ screen closing is not a reason to stop equalising. Call
-  `setEnabled(false)` to take it off.
-- **Gains are clamped, lengths and non-finite values throw.** A slider at its
-  stop is not a bug; ten gains that are not ten gains is.
-
-#### Saved curves, and where they are kept
-
-`savePreset(name)` turns the current curve into a preset that joins
-`presets`; saving twice under the same name replaces it, which is what "Save
-as…" means everywhere else. `deletePreset(id)` removes one (built-in ids
-throw; an unknown id is an idempotent no-op).
-
-Persistence is **injected, and there is no storage dependency in this
-package** — the same structural two-method interface
-`@rn-media/media-session` takes, so one engine can serve both:
-
-```ts
-import AsyncStorage from '@react-native-async-storage/async-storage'
-import { useEqualizer } from '@rn-media/player'
-
-const eq = useEqualizer(player, {
-  storage: AsyncStorage, // or any { getItem, setItem }
-  onStorageError: cause => console.warn(cause),
-})
-```
-
-Omit `storage` and the preset bank is in-memory for the session. With it, the
-saved curves *and* the live setting (`enabled` + `gainsDb`) are written on
-every effective change and read back on mount. A **synchronous** engine (MMKV)
-is read through synchronously, so the first `af` write is already the restored
-curve; an **asynchronous** one leaves `eq.hydrated` `false` until the record
-arrives and **nothing is written to mpv** in the meantime — either way the
-saved curve is applied once, never flat first and the real curve a tick later.
-The built-in presets are never persisted, so a release that retunes `Rock`
-takes effect instead of being pinned by an old record.
-
-The record is versioned and its reader is exported for anyone who wants to
-inspect or migrate it: `serializeEqualizerSettings`, `parseEqualizerSettings`
-(a typed `EqualizerRestoreResult` — `restored` | `empty` | `unsupportedVersion`
-| `corrupt`, never a throw), `EQUALIZER_SCHEMA_VERSION`,
-`DEFAULT_EQUALIZER_STORAGE_KEY`. A corrupt or unreadable record means "start
-from the defaults"; a *storage* failure is a broken dependency and reaches
-`onStorageError`.
-
-### Visualizer (spectrum + waveform)
-
-```tsx
-import { Text, View } from 'react-native'
-import { useVisualizer, type Player } from '@rn-media/player'
-
-function Bars({ player }: { player: Player | undefined }) {
-  const { frame, error } = useVisualizer(player, { bands: 28 })
-  if (error) return <Text>{error.message}</Text>
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
-      {Array.from(frame?.bands ?? []).map((value, i) => (
-        <View key={i} style={{ width: 6, height: 3 + value * 57 }} />
-      ))}
-    </View>
-  )
-}
-```
-
-Or imperatively, which is what the hook is built on:
+## Visualizer (spectrum + waveform)
 
 ```ts
 if (player.visualizer.capabilities.fft) {
@@ -444,384 +249,50 @@ if (player.visualizer.capabilities.fft) {
 }
 ```
 
-A `VisualizerFrame` carries `bands` (log-spaced, dB-mapped, asymmetrically
-smoothed — paint them directly and the bounce is already there), `peaks`
-(classic peak-hold caps: each snaps up instantly, hangs for `peakHoldFrames`,
-then falls under accumulating `peakGravity` — the floating markers above the
-bars in a Winamp-style analyser), `magnitudes` (raw per-bin **linear**
-magnitudes where `1.0` is a full-scale sinusoid, `fftSize / 2 + 1` long, for
-your own mel/Bark/chroma mapping), `gainDb` (what the auto-gain is currently
-doing) and — only with `{ waveform: true }` — `waveform`, `peak` and `rms` for
-an oscilloscope or VU meter.
+`useVisualizer(player, { bands: 28 })` is the React form.
 
-**How it works, and what that buys you:**
-
-- **Both platforms, one code path, no permission.** The samples come from mpv
-  itself, through two properties (`pcm-tap`, `pcm-tap-frame`) added by this
-  project's own libmpv patch — the same patch file in both binary forks. There is
-  no `Platform.OS` anywhere in the feature and **nothing to add to your
-  manifest**. (The Android-only route through
-  `android.media.audiofx.Visualizer` would have required
-  `android.permission.RECORD_AUDIO` from every consuming app, capped you at
-  ~20 fps and 8-bit data, and had no iOS half at all. See ARCHITECTURE §21.)
-- **It taps what you hear.** The tap sits where mpv hands audio to the device —
-  after the filter chain and after mpv's software gain — so your EQ, ReplayGain
-  and volume are all in the picture.
-- **It needs binaries that carry the patch.** Android `v1.1.9-rnmedia.3`+ or iOS
-  `v0.7.2-rnmedia.3`+, which is what this package pins. On anything older
-  `capabilities.fft` is `false` and `subscribe()` throws a typed `unsupported`
-  `PlayerError` — it never silently does nothing.
-- **30 fps by default, 60 available and reached.** That is the *delivery* rate.
-  New spectral content arrives no faster than the audio device consumes chunks
-  (measured at ~20-45 Hz on Android, where `ao_audiotrack` writes one
-  `getMinBufferSize() × 2` chunk at a time), and the asymmetric smoothing is what
-  turns a stepped target into continuous motion. Measured in a release build of
-  `apps/example`: **60 requested, 60.0 delivered, zero dropped.** `frame.dropped`
-  tells you when your painting cannot keep up — and note that a *debug* build of
-  the same screen managed 24-26, so measure this in release or you will blame the
-  wrong layer.
-- **Zero cost when nobody is looking.** No sampler thread, no FFT table, no
-  ring — mpv's tap is disarmed and its whole write path is a single atomic load
-  per device chunk. The first `subscribe()` creates all of it, the last
-  unsubscribe frees it. Reading `capabilities` allocates nothing.
-- **The FFT is native, the optics are yours.** The PCM never crosses into
-  JavaScript: it is downmixed, Hann-windowed and transformed on a native sampler
-  thread, and only the spectrum makes the trip (~4 KB per frame). Everything
-  above that — bands, dB window, tilt, auto-gain, smoothing, peak ballistics —
-  is TypeScript, per subscriber, and unit-tested without a device.
-- **Subscribers share one engine.** `fftSize`, `fps` and `waveform` are resolved
-  as the union across live subscribers; `bands`, the dB window, `tiltDbPerOctave`
-  and the smoothing are per subscriber, so two components can paint the same
-  audio with different ballistics.
-
-Two display aids exist — `tiltDbPerOctave` and `autoGain` — and both default to off (faithful-by-default; see ARCHITECTURE).** Music's power falls at roughly 3 dB per octave.
-  Drawn literally, the top half of the display barely moves whatever is playing.
-  Set `0` for a physically literal spectrum.
-- **`autoGain: false`.** A fixed dB window cannot serve both a `-8 LUFS` master
-  and a quiet acoustic recording — one pegs every bar, the other never leaves the
-  floor. The gain is bounded (`-6`…`+18 dB`), backs off four times faster than it
-  builds, and holds still below `-95 dBFS` so it can never amplify a noise floor
-  into a full-height display. Set `false` for a calibrated meter whose height
-  means one fixed thing.
-
-`useVisualizer(player, options, enabled, pauseWhenInactive)` re-renders at the
-frame rate by design, so keep it in a small leaf component. `apps/example` shows
-the render pattern worth copying: the coloured column and the LED grid are laid
-out once and never touched, and each frame moves **two** Views per band by
-`transform` only — no per-frame layout. For anything heavier, subscribe
-imperatively and drive an animated value instead of React state.
-
-**The hook pauses itself when nothing can be seen**, and takes the subscription
-back when something can (`pauseWhenInactive`, default `true`). This is not a
-battery nicety, it is a correctness fix: the frames are **native** callbacks, so
-— unlike a JS timer, which the platform freezes for you — they keep arriving at
-full rate behind a locked screen. An ungated visualizer would sit there calling
-`setState` 60 times a second at a display that cannot present anything, and the
-app would have all of that to work through at the moment the user unlocks.
-Because the tap is derived from the listener set, pausing the hook really does
-stop everything: mpv's ring, the sampler thread and the FFT tables are all
-released for the duration.
-
-"Can be seen" is **two** signals ANDed together, because on Android one is not
-enough: `AppState` (is the app foreground) *and* the device's display state
-(`PowerManager.isInteractive()` + `ACTION_SCREEN_ON`/`OFF`, via this package's
-own `RnMediaScreenState` native object). A screen-off soak on a Poco F4 (MIUI)
-caught `AppState` reporting the app active again **with the display still off**,
-and the visualizer ran at 65-80 % of a core in that window. Either signal saying
-"inactive" pauses; both must say "active" to resume. On iOS the display signal is
-a constant `true`, and correctly so — locking an iPhone resigns the app's active
-state and backgrounds it, and no iOS app is foreground-active with the display
-off, so there `AppState` already *is* the display truth.
-Presenting somewhere other than the phone's screen (an external display, a head
-unit)? Replace the signal with `setScreenStateSource(yourSource)` rather than
-turning the gate off.
-
-- **Audio is unaffected.** Playback, the media session and the notification
-  carry on exactly as before; only the picture stops.
-- **Resuming is a fresh subscription**, so it re-arms with the same `options`
-  but smoothing, peak caps and auto-gain start from rest — `frame` is
-  `undefined` for a frame or two and the bars rise from zero rather than
-  resuming mid-bounce.
-- **On iOS this includes `'inactive'`** (notification centre, incoming call),
-  which is a brief state — a glance-away costs a re-subscribe, not a stall.
-- **Opt out** — `useVisualizer(player, options, true, false)` — only for a
-  surface that genuinely paints while inactive. For a non-UI consumer, use
-  `player.visualizer.subscribe()` directly: **the imperative API is never
-  `AppState`-gated**, and pausing is entirely a property of the hook.
-
-### ReplayGain (loudness normalisation)
-
-```ts
-import { Player } from '@rn-media/player';
-
-const player = await Player.create({
-  replayGain: { mode: 'album', preamp: -3, fallback: -6 },
-});
-
-player.setReplayGain({ mode: 'track' }); // applies to the playing track, no reload
-```
-
-| Field      | mpv option             | Range / values         |
-| ---------- | ---------------------- | ---------------------- |
-| `mode`     | `replaygain`           | `'no' \| 'track' \| 'album'` |
-| `preamp`   | `replaygain-preamp`    | dB, `-150 … 150`       |
-| `clip`     | `replaygain-clip`      | boolean                |
-| `fallback` | `replaygain-fallback`  | dB, `-200 … 60`        |
-
-All four carry mpv's `UPDATE_VOL` flag, so `setReplayGain()` re-runs mpv's gain
-computation immediately — no gap, no reload. Only the fields you pass are
-written; out-of-range values throw an `invalid-state` `PlayerError` instead of
-being silently clamped.
-
-> **`clip` means "allow clipping".** mpv 0.35.1's manual has this backwards
-> ("Prevent clipping … Use `--replaygain-clip=no` to disable this"), but the
-> code is `if (!rgain_clip) { rgain = MPMIN(rgain, 1.0 / peak); }` and the
-> default is off — i.e. peak limiting is on by default and `clip: true` turns it
-> **off**. mpv fixed the wording in 0.38.0: "Allow the volume gain to clip
-> (default: no)." Leave `clip` alone unless you want the limiter gone.
-
-Files with no ReplayGain tags get `fallback` and nothing else — mpv applies it
-*instead of* the tag logic, not on top of it. The same branch runs when `mode`
-is `'no'`: mpv's manual calls `replaygain-fallback` "always applied if the
-replaygain logic is somehow inactive", so `setReplayGain({ mode: 'no' })` does
-**not** silence a non-zero fallback written earlier — pass
-`{ mode: 'no', fallback: 0 }` to return to unity gain.
-
-> **This and `setLoudnessNormalization` are mutually exclusive, and the API
-> enforces it.** They level the same thing by different means — ReplayGain is a
-> volume-domain gain read from tags (no DSP, no latency, dynamics intact),
-> `loudnorm` is a live filter — and run together their gains *stack*, so a
-> track ReplayGain already leveled gets re-leveled and re-compressed. Any
-> `mode` other than `'no'` therefore turns loudness normalization off, and
-> `setLoudnessNormalization(true)` sets `replaygain` to `'no'`. Ask
-> `player.getReplayGainMode()` and `player.getLoudnessNormalization()` for which
-> one is live — a settings screen with two switches needs to know.
->
-> Switching the loser off costs nothing when it was already off: both states are
-> tracked in TypeScript, so the rule adds no bridge traffic in the ordinary case
-> and exactly one property write in the case that needed it.
-
-### Gapless transitions
-
-A queue is one mpv playlist, and mpv keeps the audio device open across an entry
-change, so consecutive tracks join with no device teardown in between. Measured
-on a Poco F4 (Android 16, release build) with a 60 s tone cut in half and encoded
-twice with identical AAC parameters: **one** `AO: [audiotrack] 44100Hz stereo 2ch
-float` line for the whole session covering both files, the handover from one
-entry's last decoded audio to the next entry's first taking 26 ms while the audio
-device still held 739 ms of the previous track — no reopen, no underrun.
-
-```ts
-import { Player } from '@rn-media/player';
-
-await Player.create({ gaplessAudio: 'weak' }); // mpv `gapless-audio`, the default
-```
-
-The option exists for the case where consecutive entries decode to *different*
-output formats:
-
-| | behaviour |
+| | Detail |
 |---|---|
-| `'weak'` (default) | Device kept open while the format matches; closed and reopened when it changes — gapless for an album, a short gap across a format change. |
-| `'yes'` | Device kept open always, using the **first** entry's format; later entries are resampled into it. |
-| `'no'` | Device torn down and reopened between entries. |
+| A `VisualizerFrame` carries | `bands` (log-spaced, dB-mapped, asymmetrically smoothed), `peaks` (peak-hold caps that snap up, hang for `peakHoldFrames`, then fall under accumulating `peakGravity`), `magnitudes` (raw per-bin linear magnitudes, `fftSize / 2 + 1` long, for your own mel/Bark/chroma mapping), `gainDb`, and — only with `{ waveform: true }` — `waveform`, `peak` and `rms` |
+| Both platforms, one code path, no permission | The samples come from mpv itself through a `pcm-tap` patch in both binary forks. There is no `Platform.OS` in the feature and nothing to add to your manifest |
+| It taps what you hear, and it needs binaries carrying the patch | The tap sits where mpv hands audio to the device, after the filter chain and after mpv's software gain. On a binary without it, `capabilities.fft` is `false` and `subscribe()` throws a typed `unsupported` error — it never silently does nothing |
+| 30 fps by default, 60 available | That is the *delivery* rate; new spectral content arrives no faster than the audio device consumes chunks. `frame.dropped` tells you when painting cannot keep up — measure it in a release build |
+| Zero cost when nobody is looking | The tap is disarmed and its write path is one atomic load per device chunk; the first `subscribe()` creates the ring, the FFT tables and the sampler thread, and the last unsubscribe frees them |
+| The FFT is native, the optics are yours | PCM never crosses into JavaScript; ~4 KB of spectrum per frame does. Bands, dB window, tilt, auto-gain, smoothing and peak ballistics are TypeScript, per subscriber. `fftSize`, `fps` and `waveform` are the union across live subscribers; everything else is per subscriber |
+| `tiltDbPerOctave` and `autoGain` default to off | Faithful by default. Auto-gain is bounded to −6…+18 dB, backs off four times faster than it builds, and holds still below −95 dBFS so it cannot amplify a noise floor |
+| The hook pauses itself when nothing can be seen | Frames are native callbacks, so unlike a JS timer they keep arriving behind a locked screen. "Can be seen" is `AppState` **and** the device display state, ANDed, because on Android those are different facts. Resuming is a fresh subscription, so bars rise from zero. Audio is unaffected |
 
-This library does not force `'yes'`, because it buys the gap back with silent
-resampling: one 22.05 kHz interlude at the head of a queue would degrade
-everything after it, with nothing in the state to see it by. If you want `'yes'`,
-pin the shared output format too — mpv's own advice is to set
-`--audio-samplerate` / `--audio-format` (via `mpvOptions`) so you choose the
-format rather than inherit whichever file happened to play first.
+Opt out of the pause with `useVisualizer(player, options, true, false)`, or
+subscribe imperatively, which is never `AppState`-gated. The hook re-renders at
+the frame rate, so keep it in a small leaf component
+([ARCHITECTURE §21](../../ARCHITECTURE.md#21-the-visualizer-taps-mpv-itself--we-patched-libmpv-rather-than-ship-an-android-only-feature)).
 
-Gapless is an *output* guarantee, not a network one. mpv is explicit that it
-"relies on audio output device buffering to continue playback while moving from
-one file to another. If playback of the new file starts slowly, for example
-because it is played from a remote network location […] then the buffered audio
-may run out before playback of the new file can start" — which is what the next
-section is for.
+## Dynamic source resolution (signed URLs, transcode sessions)
 
-### Prefetching the next track
-
-```ts
-import { Player } from '@rn-media/player';
-
-await Player.create({ prefetchPlaylist: true }); // mpv `prefetch-playlist`
-```
-
-Opens the next playlist entry's URL as soon as the current one is fully read, so
-a gapless transition does not pay for a fresh connection. Off by default, and
-mpv is explicit about the assumptions you are buying into:
-
-> This can give subtly wrong results if per-file options are used, or if options
-> are changed in the time window between prefetching start and next file played.
-> This can occasionally make wrong prefetching decisions. For example, it can't
-> predict whether you go backwards in the playlist, and assumes you won't edit
-> the playlist.
-
-So if your app mutates the queue (`move`, `remove`, `shuffle`) or steps backwards
-while a track is ending, mpv may already have opened the wrong entry. It also
-does **not** prefill the cache — only the current entry's data is cached.
-
-**On a network queue this is the difference between gapless and not.** Same
-device and build as above, HTTPS AAC/MP4 from a commercial CDN, two runs each,
-timestamps taken from mpv's own verbose log in `logcat` (so they include the
-native→JS hop; treat them as ±1 batch, not microseconds):
-
-| | handover, decoder EOF → next entry's audio queued | device buffer left | outcome |
-|---|---|---|---|
-| `prefetchPlaylist: false` (default) | 644 ms / 641 ms | 202 ms / 204 ms | mpv logged `Audio device underrun detected` at the boundary — an audible gap |
-| `prefetchPlaylist: true` | 25 ms / 26 ms | 816 ms / 826 ms | no underrun; mpv took its `previous audio still playing; continuing` path |
-
-Off it goes to the network only once the current entry has ended — 568 ms of that
-644 ms was waiting for the CDN's response headers, more than the device had
-buffered. On, mpv opens the next entry as soon as the current one is fully read
-into cache, which for a normal audio file is seconds after it *starts* (in the
-measured runs the next entry had been open for ~18 s by the boundary, and that
-was a short track — there is no fixed lead time; the trigger is demuxer EOF, not
-proximity to the end). If you play network queues and do not rewrite the queue
-mid-track, turn it on.
-
-### Dynamic source resolution (signed URLs, transcode sessions)
-
-Queues whose entries cannot be written down ahead of time — a signed CDN link
-that expires in minutes, a transcode session that has to be created per track —
-do not have to be resolved when the queue is built. Give the player a resolver
-and it asks, per entry, moments before mpv opens it:
+For queues whose entries cannot be written down ahead of time: a signed CDN link
+that expires in minutes, a transcode session created per track.
 
 ```ts
-import { Player } from '@rn-media/player';
+import { Player, type SourceResolver } from '@rn-media/player';
 
-const player = await Player.create({
-  prefetchPlaylist: true,
-  sourceResolver: async ({ uri }) => {
-    if (!uri.startsWith('library://')) return uri; // nothing to do
-    const { url } = await api.signPlaybackUrl(uri.slice('library://'.length));
-    return url;
-  },
-});
-
+const resolve: SourceResolver = async ({ uri }) => {
+  if (!uri.startsWith('library://')) return uri;                    // pass through
+  return (await api.signPlaybackUrl(uri.slice('library://'.length))).url;
+};
+const player = await Player.create({ prefetchPlaylist: true, sourceResolver: resolve });
 await player.loadPlaylist(['library://a', 'library://b', 'library://c']);
 ```
 
-Install or replace it later with `player.setSourceResolver(fn)`, and remove it
-with `player.setSourceResolver(null)`.
+| Constraint | Detail |
+|---|---|
+| Nothing about the URL changes until you install a resolver | The two mpv load hooks are registered when the core starts, but the handler is disarmed: it reads nothing and continues the hook immediately, so what mpv opens is byte-for-byte the URI you queued |
+| Resolution runs ahead | The current and next entries are resolved as the queue moves, read from mpv's own playlist, so it follows `next()`, repeat and shuffle. A resolved entry costs a map lookup and one property write |
+| Only a play-time miss holds mpv | For up to `resolverTimeoutMs`; on timeout the original URI is used and mpv fails the load on its own terms, arriving as an ordinary typed `error` |
+| Your resolver must be deterministic while an entry is queued | mpv opens each entry twice and reuses the prefetched stream only if the two URLs are byte-identical, so a fresh nonce per call defeats prefetching and the boundary opens cold. One answer per URI is cached and replayed for `resolverTtlMs`: mint once per track, and size the TTL to cover a track while staying inside your signature's lifetime |
+| A resolver that throws, rejects or returns a non-string | Emits a typed `load-failed` error, caches nothing, and is retried on the next queue movement |
+| The prefetch half needs our forks | Upstream mpv deliberately does not fire a hook there. On a stock libmpv the play-time half still works and prefetched entries open unresolved |
 
-**Nothing about the URL changes until you install one.** The two mpv load hooks
-are registered when the core starts, always, but the handler is disarmed until a
-resolver arrives: it reads nothing, rewrites nothing, and continues the hook
-immediately, so what mpv opens is byte-for-byte the URI you queued. Registering
-up front rather than on demand is deliberate — the fork's "identical to stock
-mpv" guarantee holds only while the hook name has *no* client, so a late
-registration would not preserve stock behaviour, it would just move the moment
-behaviour changes into the middle of a session. The cost is one immediate
-`mpv_hook_continue` per load boundary, and it is what makes `prefetchStarted`
-(below) available to players that never resolve anything.
-
-**Resolution happens ahead of time.** The current and next entries are resolved
-as soon as the queue moves — read from mpv's own playlist, so it follows
-`playlist.next()`, repeat and shuffle rather than guessing — and the answers are
-pushed into a native cache. When mpv reaches an entry that is already resolved,
-the whole thing costs a map lookup and one property write, with no JavaScript
-anywhere near mpv's core. If it reaches one that is not, mpv is held for up to
-`resolverTimeoutMs` (default 10 s) while the resolver answers; on timeout the
-original URI is used and mpv fails the load on its own terms, which arrives as an
-ordinary typed `error` event.
-
-**Your resolver must be deterministic while an entry is queued.** mpv opens each
-entry twice — once speculatively on the prefetch path, once for real — and reuses
-the prefetched stream only if the two URLs are byte-identical
-(`open_demux_reentrant`, mpv 0.41.0 `player/loadfile.c:1223`). A resolver that
-mints a fresh nonce per call therefore *defeats* prefetching: mpv drops the
-prefetched stream, joins the opener thread on its core thread at the boundary,
-and opens cold. The library removes most of that hazard for you by caching the
-first answer per URI and replaying it, so in practice: mint once per track, not
-once per call, and size `resolverTtlMs` (default 10 min) so it covers a track but
-stays inside your signature's lifetime.
-
-| option | default | meaning |
-|---|---|---|
-| `sourceResolver` | none | the resolver; also settable via `setSourceResolver` |
-| `resolverTimeoutMs` | `10_000` | how long a *play-time* miss may hold mpv. `0` = never hold |
-| `resolverTtlMs` | `600_000` | how long one resolution is replayed before being recomputed |
-
-A resolver that throws (or rejects, or returns a non-string) emits a typed
-`load-failed` error on `player.on('error', …)`, caches nothing, and is retried on
-the next queue movement.
-
-> Requires a libmpv built from the rn-media forks for the *prefetch* half: our
-> patch fires an `on_prefetch_load` hook that upstream mpv deliberately does not
-> ("This does not work with URLs resolved by the youtube-dl wrapper, and it
-> won't" — mpv's own manual, on `--prefetch-playlist`). On a stock libmpv the
-> play-time half still works; prefetched entries simply open unresolved.
-
-### Knowing when a prefetch starts
-
-```ts
-import { Player } from '@rn-media/player';
-
-const player = await Player.create({ prefetchPlaylist: true });
-
-player.on('prefetchStarted', ({ uri, entryId }) =>
-  console.log('opening ahead:', uri, entryId),
-);
-```
-
-Fires once per prefetched entry, at the instant mpv releases its opener thread on
-it — which is seconds *into* the current track (mpv arms the prefetch on the first
-cache poll after the current file is fully read), not near the boundary. It needs
-no resolver.
-
-Two conditions, both of them honest: `prefetchPlaylist` has to be on (it is off by
-default), and the linked libmpv has to carry the `on_prefetch_load` hook — Android
-`v1.1.9-rnmedia.5`+ / iOS `v0.7.2-rnmedia.4`+. On any other build mpv accepts the
-hook registration and never raises it ("if the name is unknown, the hook event
-will simply be never raised" — `mpv/client.h`), so the event simply never occurs.
-There is no error and no capability flag: an event that does not happen is not a
-failure. `entryId` is mpv's playlist *entry id* — stable across `playlist-move`
-and `playlist-remove`, unlike an index — and is absent on binaries that predate
-the `prefetch-playlist-entry-id` property.
-
-### Cache tuning
-
-```ts
-import { Player } from '@rn-media/player';
-
-await Player.create({ cacheSecs: 60 }); // mpv `cache-secs`, default 30 here
-```
-
-Finite and `>= 0` (mpv's own range); anything else throws `invalid-state`.
-`mpvOptions['cache-secs']` still wins over it. See the note below for why the
-library default is 30 s rather than mpv's.
-
-### Metadata
-
-```ts
-player.getMetadata(); // { title: '…', artist: '…', 'icy-title': '…' }
-player.getMetadataValue('icy-title'); // one tag, one read; case-insensitive
-
-player.on('metadataChanged', metadata => updateNowPlaying(metadata));
-```
-
-`getMetadata()` is **one** read: mpv's `metadata` fetched as an
-`MPV_FORMAT_NODE` map and converted natively, so **no string parsing is
-involved** anywhere (the manual's "Trying to retrieve this property as a raw
-string doesn't work" is about the *string* format; the node read is the
-documented way, and it is atomic — the map cannot mix two tag generations). It
-walked `metadata/list/count` + `metadata/list/N/key` + `metadata/list/N/value`
-until 2026-08-12, which cost `2N + 1` blocking round-trips into mpv's core — 41
-of them for a 20-tag FLAC, issued at a track boundary. It is still a pull rather
-than a field of `PlayerState`, but a cheap one; `getMetadataValue(key)` remains a
-single read of one tag.
-
-`metadataChanged` fires at most once per native event batch, and only while at
-least one listener is registered — a player nobody is asking pays nothing. It is
-driven by mpv's `metadata` and `media-title` observations, which mpv invalidates
-together on `MP_EVENT_METADATA_UPDATE`.
-
-#### Two routes to a title, and which one you want
-
-ICY now-playing (and every other tag) is reachable two ways. They are not
-redundant — each one exists because the other cannot do its job.
+## Two routes to a title, and which one you want
 
 | | `state.title` | `metadataChanged` + `getMetadataValue()` |
 | --- | --- | --- |
@@ -830,289 +301,99 @@ redundant — each one exists because the other cannot do its job.
 | cost | none beyond the snapshot | one node read per batch that touched the tags |
 | on a radio stream | the currently-playing **song**, updating on its own | the **station**: `icy-name`, `icy-genre`, `icy-br`, … |
 
-**Use `state.title` for the now-playing line.** mpv folds `icy-title` into
-`media-title` and invalidates both on the same event, so it *is* the song, and
-it changes every few minutes on a live stream with no track change. It has to be
-a state field: a media session re-broadcasts state, not events, so a title
-delivered only as an event would never reach the notification.
+Use `state.title` for the now-playing line: a media session re-broadcasts state
+rather than events, so a title delivered only as an event would never reach the
+notification. Use `metadataChanged` for specific keys — building the map is a
+synchronous read into mpv's core, so it is opt-in.
 
-**Use `metadataChanged` + `getMetadataValue()` for specific keys.** The map
-cannot be a state field — building it is a synchronous read into mpv's core and
-most apps never look at it — so it is opt-in, and pays nothing when nobody
-subscribes.
+## Recovering from network failures
 
-```ts
-// The song, for free, everywhere:
-const song = player.state.title;
-// The station, only if you asked for it:
-player.on('metadataChanged', tags => setStation(tags['icy-name']));
-```
+Two layers, answering different questions.
 
-### Recovering from network failures
+**1. FFmpeg reconnection (`networkReconnect`, on by default)** answers "can this
+connection be re-made". It runs inside libavformat's read loop with no JavaScript
+and no timers — the only kind of retry that works with the screen off. Through
+mpv's `stream-lavf-o` it sets `reconnect=1`, `reconnect_on_network_error=1`,
+`reconnect_streamed=1` and `reconnect_delay_max=5`; FFmpeg's backoff is
+`delay = 1 + 2 * delay` from `0`, so `5` means attempts at 0 s, 1 s and 3 s. Opt
+out with `{ enabled: false }`, widen it with `{ maxDelaySeconds: 20 }`.
 
-Two layers, and they answer different questions.
+`reconnect_at_eof` is deliberately not set: FFmpeg does not guard it on whether
+the stream is seekable, so on a sized file the natural end of the response *is*
+`AVERROR_EOF`, and enabling it turns every clean track end into a retry storm
+ending in `EIO`. HTTP status codes are not retried either — that is
+`reconnect_on_http_error`, a policy an app chooses for itself. A live-only app
+can opt in by replacing the whole list through `mpvOptions['stream-lavf-o']`.
 
-**1. FFmpeg reconnection (`networkReconnect`, on by default).** Native, inside
-libavformat's read loop, with no JavaScript and no timers — which is the only
-kind of retry that works with the screen off, because
-[JS timers freeze in the background](../../ARCHITECTURE.md). It is wired through
-mpv's `stream-lavf-o` and sets exactly four AVOptions:
+**2. Player-level re-attempt (`retry`, 2 attempts by default, `0` disables)**
+answers "should the queue move on?". mpv's own behaviour on a hard failure is to
+advance, which is right for a file that will never play and wrong for a stream
+that was unlucky.
 
-```text
-reconnect=1                   premature end of a sized response
-reconnect_on_network_error=1  DNS / refused TCP / TLS failure at connect
-reconnect_streamed=1          allows mid-read retry on a non-seekable stream
-reconnect_delay_max=5         give up once the next backoff step exceeds this
-```
+| Constraint | Detail |
+|---|---|
+| `error` counts give-ups, not failures | A retryable failure jumps back to the entry, preserves whether it was playing, and emits `retrying`; no `error` is emitted for that attempt |
+| There is no delay between attempts | The only way to wait in JavaScript is a timer, and JS timers freeze with the screen off — spaced backoff is layer 1's job. The re-attempt is issued after mpv already started the next entry, so a failure at a queue boundary can produce a brief blip of the following track |
+| Attempts are tracked per entry generation | Reset when the entry plays, when a different entry fails, or when the app moves the cursor or edits the queue |
+| `retryLiveEof` (off) re-attempts a clean close on a **live** entry | A finite track is never affected. The re-attempt emits `retrying` with a synthesised `network` error and no `trackEnded`; once the budget is spent the end is reported as the `trackEnded` it always was. The budget refills only after 30 s of playback, so a server hanging up every second cannot loop forever |
 
-FFmpeg's backoff is `delay = 1 + 2 * delay` from `0`, so `5` means attempts at
-0 s, 1 s and 3 s — about four seconds of trying. FFmpeg's own defaults are
-off / `120 s`, which is why this is opt-*out*:
-`networkReconnect: { enabled: false }`, or `{ maxDelaySeconds: 20 }` to widen it.
+## Errors
 
-**`reconnect_at_eof` is deliberately not set**, and that is worth knowing if
-your queue is only live streams. It is the option that makes a live stream
-reconnect when the server simply closes the connection — but FFmpeg does not
-guard it on "is this stream seekable" (`http.c`), so on an ordinary sized file
-the natural end of the response *is* `AVERROR_EOF` and enabling it turns every
-clean track end into a `maxDelaySeconds`-long retry storm that finishes with
-`EIO`. That would convert "the song finished" into "the song failed" — the exact
-distinction this library is built on. A live-only app can opt in through the raw
-escape hatch, which replaces the whole list:
-
-```ts fragment
-mpvOptions: {
-  'stream-lavf-o':
-    'reconnect=1,reconnect_on_network_error=1,reconnect_streamed=1,' +
-    'reconnect_delay_max=5,reconnect_at_eof=1',
-}
-```
-
-HTTP status codes (`404`, `503`) are not retried either; that is
-`reconnect_on_http_error`, a policy decision an app should make for itself.
-
-**2. Player-level re-attempt (`retry`, 2 attempts by default).** This is the
-layer FFmpeg cannot be: it answers *"should the queue move on?"*. mpv's own
-behaviour on a hard failure is to advance to the next entry, which is right for
-a file that will never play and wrong for a stream that was unlucky.
-
-```ts
-import { Player } from '@rn-media/player';
-
-const player = await Player.create({ retry: { maxAttempts: 2 } }); // 0 disables
-
-player.on('retrying', ({ index, attempt, maxAttempts }) =>
-  showBanner(`Reconnecting… ${attempt}/${maxAttempts}`)
-);
-player.on('error', (error, { attempts }) =>
-  showBanner(`Gave up after ${attempts} attempts: ${error.message}`)
-);
-```
-
-When an entry fails with a `retryable` error, the player jumps **back** to it,
-preserving whether it was playing, and emits `retrying`. **No `error` event is
-emitted for that attempt** — nothing has finally failed yet. When the budget is
-spent, the advance mpv already performed stands and `error` fires with the
-count. So `error` counts *give-ups*, not failures.
-
-**There is no delay between attempts, on purpose.** The only way to wait in
-JavaScript is a timer, and JS timers freeze with the screen off — a backoff
-written here would silently become "retry when the user next unlocks the phone",
-a bug invisible to every test that runs with the display on. Spaced, backed-off
-retrying is layer 1's job. The consequence: a re-attempt is issued a moment
-*after* mpv has already started the next entry, so a failure at a queue boundary
-can produce a brief blip of the following track.
-
-Attempts are tracked per **entry generation** and reset when the entry plays,
-when a different entry fails, or when the app moves the cursor or edits the
-queue (`jumpTo`, `next`, `previous`, `load`, `loadPlaylist`, `add`, `remove`,
-`move`, `clear`, `shuffle`, `unshuffle`). A user who skips during a retry has
-said what they want, and the player stops arguing.
-
-**Live streams: the clean close (`retryLiveEof`, off by default).** A radio
-server that hangs up *politely* is not a failure at any layer — FFmpeg does not
-reconnect on it (`reconnect_at_eof` is unsafe as a default, see above) and mpv
-reports a clean `eof`, so the queue moves on. Opt in and an `eof` on an entry
-that was **live** (`state.isLive`, i.e. mpv's `seekable = no`) is re-attempted
-under the same bounded budget:
-
-```ts
-import { Player } from '@rn-media/player';
-
-const player = await Player.create({
-  retry: { maxAttempts: 2, retryLiveEof: true }, // radio app
-});
-```
-
-A finite track is never affected, whatever this is set to. The re-attempt emits
-`retrying` with a synthesised `network` error and no `trackEnded`; once the
-budget is spent the end is reported as the `trackEnded` it always was — never as
-an `error`. The budget refills only after `LIVE_EOF_BUDGET_RESET_SECONDS` (30 s)
-of playback, so a server that hangs up after one second cannot loop forever. The
-trade, stated plainly: a broadcast that has genuinely ended is re-attempted
-`maxAttempts` times before the queue moves on.
-
-### Errors: `retryable`, and dismissing one
-
-Every `PlayerError` carries `retryable: boolean` — "could repeating the
-identical operation plausibly succeed with nothing else changed?". Read that
-field instead of maintaining a table of codes, which is how such tables go
-stale. It is also what `retry` consumes.
-
-| code | `retryable` |
-| --- | --- |
-| `network` | `true` |
-| `mpv` with `errno: -14` (`AO_INIT_FAILED`) | `true` — the audio device is shared, and another app or a route change can lose you one open and not the next |
-| everything else | `false` |
-
-`load-failed` is `false`, and that is a fact about the classifier rather than a
-policy: failures are split on whether the URI is a network scheme, so every
-network source became `network` and what is left in `load-failed` is a local
-path (or an unknown one). Neither improves by being asked twice.
-
-`state.error` clears itself three ways — a new entry starting, playback
-restarting, or a deliberate stop. It survives in exactly one case: the last
-entry failed and nothing has happened since. `player.clearError()` is the button
-for that (a user dismissing a banner). It clears **state only** — it never
-suppresses, replays or undoes an event.
-
-### Notes
-
-- **Position is projected, never streamed.** `time-pos` is not observed. The
-  player anchors on discontinuities (seek, playback restart, pause/unpause,
-  rate change, track change) and extrapolates in JS; `useProgress` re-renders on
-  an interval that stops whenever playback is not advancing.
-- **Volume is `0..1`.** mpv's own `volume` is a percentage where `100` means no
-  attenuation, and its curve is `gain = (volume / 100) ** 3`. Use
-  `setPropertyNumber('volume', …)` if you need mpv's amplification range.
-- **Errors are typed.** Every failure is a `PlayerError`
-  (`network` | `unsupported-format` | `load-failed` | `disposed` |
-  `invalid-state` | `unsupported` | `mpv`), each carrying `retryable`; a natural
-  end of stream is a `trackEnded` event and never an error.
-- **Escape hatch.** `player.command()`, `player.getProperty*` /
-  `setProperty*` / `observeProperty` reach anything mpv can do, and
-  `createMpvClient()` exposes the raw binding directly.
-- **Init option order is not preserved** — `profile` and `include` are not
-  supported in `mpvOptions`; set them after creation.
-- **Jumping plays.** `playlist.jumpTo(i)` clears `pause` by default, like
-  `load()`'s `autoPlay`. mpv's `playlist-play-index` restarts the entry but
-  leaves the global `pause` property alone, so without this a player loaded
-  with `autoPlay: false` would open the entry, fill its cache and stay silent.
-  Pass `{ autoPlay: false }` to keep the current pause state.
-- **The demuxer cache is bounded to 30 s** (`cache-secs`). mpv's default is
-  1000 hours, capped only by the 150 MiB `demuxer-max-bytes` — which on a radio
-  stream means downloading for hours, even while paused. Startup is unaffected
-  (`cache-pause-initial` is `no`, so playback never waits on the cache).
-  Override with the typed `cacheSecs` option, or raw with
-  `mpvOptions: { 'cache-secs': '…' }`.
-- **Prefetching is runtime-settable.** `player.setPrefetchPlaylist(enabled)` is
-  the twin of the `prefetchPlaylist` create option, with every one of its
-  caveats plus one: flipping it takes effect from the *next* prefetch decision,
-  so turning it off does not abort an opener that is already running.
-- **Raw `mpvOptions` always win.** Precedence at init, weakest first: this
-  library's defaults (`user-agent`, `cache-secs`, `stream-lavf-o`), then the
-  typed options (`userAgent`, `cacheSecs`, `prefetchPlaylist`, `replayGain`,
-  `networkReconnect`), then whatever you put in `mpvOptions`.
+Every `PlayerError` carries `retryable: boolean` — "could repeating the identical
+operation plausibly succeed with nothing else changed?". Read that rather than
+maintaining a table of codes; it is also what `retry` consumes. `network` is
+`true`, and so is `mpv` with `errno: -14` (`AO_INIT_FAILED`), because the audio
+device is shared and a route change can lose you one open and not the next.
+Everything else is `false`. A natural end of stream is a `trackEnded` event and
+never an error; `PlayerErrorException` is the thrown form. `state.error` clears
+on a new entry starting, on playback restarting, or on a deliberate stop, and
+survives only when the last entry failed and nothing has happened since — which
+is what `clearError()` is for.
 
 ## Platform parity
 
-Every public member of this package behaves identically on Android and iOS
-except the three rows below. There is no member that exists on one platform and
-quietly does nothing on the other — where a platform genuinely cannot, it is
-named here and in the TSDoc.
-
-**Why the surface is symmetric by construction.** Playback, the queue, filters,
-EQ, ReplayGain, prefetch, the source resolver, the visualizer and the whole
-error taxonomy live in one shared C++ core over libmpv's client API. There is
-no `#if defined(__APPLE__)`, no `#ifdef __ANDROID__` and no `Platform.OS` in the
-playback path, and the core sets no `ao=` at all — each platform's libmpv has
-exactly one audio output compiled in (`audiotrack` on Android, `audiounit` on
-iOS), so mpv picks the only one there is. The two binary forks are configured
-against each other on every release: **103 mpv options each, 101 identical, and
-the only two that differ are those audio outputs**; the 17 audio filters the EQ
-and loudness APIs compile to, the PCM-tap patch the visualizer needs and the
-prefetch-hook patch `prefetchStarted` needs are the same patch files in both
-(see `android/libmpv.gradle` and `ios/libmpv.pin`, which carry the pinned tags
-and SHA-256s, and ARCHITECTURE §11).
+Every public member behaves identically on Android and iOS except the rows below.
+There is no member that exists on one platform and quietly does nothing on the
+other.
 
 | Member | Android | iOS | Verdict |
 |---|---|---|---|
-| `getScreenStateSource().interactive` and its subscription | `PowerManager.isInteractive()` + `ACTION_SCREEN_ON`/`OFF` | constant `true`, subscription never fires | **ceiling** |
+| `getScreenStateSource().interactive` and its subscription | `PowerManager.isInteractive()` + `ACTION_SCREEN_ON`/`OFF` | constant `true`, subscription never fires | **ceiling** — locking an iPhone resigns active state, so `AppState` already *is* the display truth, and there is no public API for display power |
 | Background playback setup | nothing to add | `UIBackgroundModes: audio` in your `Info.plist` | **setup differs** |
-| `content://` sources | `ContentResolver` → mpv `fd://`, transparently | n/a (iOS has no equivalent scheme) | **parity** |
+| `content://` sources | `ContentResolver` → mpv `fd://`, transparently | n/a — iOS has no equivalent scheme | **parity** |
+| Verification coverage | device-verified | CI build plus shipped-binary inspection, simulator slice only | **coverage differs** |
 
-- **The display-state signal has no iOS half, and answering `true` is the
-  honest implementation.** It exists because on Android `AppState` and "is the
-  display on" are different facts — a measured MIUI soak flapped `AppState` back
-  to `active` with the screen off and burned 65-80 % of a core drawing a
-  spectrum nobody could see. On iOS the two are the same fact by construction:
-  locking the device resigns active state and moves the app to the background,
-  which `AppState` already reports, and there is no public API for the display's
-  power state (`UIScreen` exposes `brightness`, not on/off). So
-  `useVisualizer` ANDs `AppState` with this signal on both platforms, and on iOS
-  the second input is a constant that changes nothing. Nothing else in the
-  package reads it. See `src/specs/screen-state.nitro.ts`.
-- **Background audio is an iOS-only setup step.** Neither package touches your
-  `Info.plist`; add the `audio` background mode yourself, or install
-  `@rn-media/media-session`, whose Expo plugin merges it. On Android this
-  package's `AndroidManifest.xml` is deliberately empty: it merges **no**
-  permissions into your app — in particular no `RECORD_AUDIO`, because the
-  visualizer taps mpv rather than `android.media.audiofx.Visualizer`. The one
-  permission network playback needs, `android.permission.INTERNET`, is yours to
-  declare; the React Native app template already does, so this only bites a
-  manifest someone has trimmed.
-- **`content://` URIs play, and there is nothing to configure.** Android's
-  storage picker, `MediaStore` and every SAF provider hand back a `content://`
-  URI, which is a row in another app's `ContentProvider` — not a path, and not
-  something libmpv or FFmpeg could ever add a handler for, because resolving it
-  is a Binder call into another process. `load()`, `loadPlaylist()` and
-  `playlist.add()` open it through `ContentResolver` and hand mpv its own
-  `fd://` protocol instead, once per URI, for the life of the player. The
-  descriptors are closed by `player.destroy()`.
+The surface is symmetric by construction: everything from playback to the error
+taxonomy lives in one shared C++ core over libmpv's client API, with no platform
+branch and no `ao=` set at all
+([ARCHITECTURE §11](../../ARCHITECTURE.md#11-binaries-pinned-forked-lgpl-dynamically-linked)).
+`content://` URIs play with nothing to configure: `load()`, `loadPlaylist()` and
+`playlist.add()` open them through `ContentResolver` and hand mpv its own `fd://`
+protocol, once per URI, for the life of the player
+([ARCHITECTURE §32](../../ARCHITECTURE.md#32-content-is-a-binder-call-so-it-becomes-a-file-descriptor)).
 
-  Three things worth knowing. **Seeking follows the provider**: mpv decides
-  seekability by `lseek`-ing the descriptor (`stream/stream_file.c:373-379`), so
-  a file-backed URI — every `MediaStore` row — is seekable and reports a
-  duration, while a *pipe*-backed one (some cloud providers stream through
-  `openPipeHelper`) is not, and surfaces exactly like a live stream:
-  `state.seekable === false`, `state.isLive === true`, no duration. That is the
-  same honest answer this library already gives for an unseekable HTTP stream,
-  not a special case. **The grant is yours to keep**: a picker's read permission
-  dies with the process, so a stored URI needs
-  `ContentResolver.takePersistableUriPermission()` or the next load fails with a
-  typed `load-failed`. And **do not put the same `content://` URI at two
-  adjacent queue positions** — one descriptor serves one URI, and mpv would have
-  the playing entry and the prefetched one reading the same file offset.
-
-  Everything else — `https://`, `file://` and absolute paths — behaves the same
-  on both platforms.
-- **Verification is not symmetric either.** The Android engine and player are
-  device-verified (Poco F4, AOSP); the iOS half is verified by CI plus
-  inspection of the shipped `Mpv.xcframework`, and CI builds the simulator slice
-  only. See ARCHITECTURE §11.
-
-## Credits
-
-Bootstrapped with [create-nitro-module](https://github.com/patrickkabwe/create-nitro-module).
-
-## Contributing
-
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+| `content://` constraint | Detail |
+|---|---|
+| Seeking follows the provider | mpv decides seekability by `lseek`-ing the descriptor, so a file-backed URI is seekable and reports a duration while a pipe-backed one surfaces exactly like a live stream |
+| The grant is yours to keep | A picker's read permission dies with the process; call `takePersistableUriPermission()` for a URI you store, or the next load fails with a typed `load-failed` |
+| Never queue one `content://` URI at two adjacent positions | One descriptor serves one URI, so the playing and prefetched entries would share a file offset |
 
 ## Also exported
 
-Named here so nothing public is undocumented; the tables above are the
-everyday surface.
-
 | Group | Exports |
 |---|---|
-| Error taxonomy | `PlayerError` — the union `NetworkError \| UnsupportedFormatError \| LoadFailedError \| DisposedError \| InvalidStateError \| UnsupportedError \| RawMpvError`; `PlayerErrorCode` — `'network' \| 'unsupported-format' \| 'load-failed' \| 'disposed' \| 'invalid-state' \| 'unsupported' \| 'mpv'`; `PlayerErrorException` (the thrown form); `Retryable`; `toPlayerError(thrown, uri?)`, `isRetryableErrno(errno)`, `isNetworkUri(uri)`; `EndFileOutcome` / `classifyEndFile` (natural end vs network EOF vs error) |
+| Error taxonomy | `PlayerError` — the union `NetworkError \| UnsupportedFormatError \| LoadFailedError \| DisposedError \| InvalidStateError \| UnsupportedError \| RawMpvError`; `PlayerErrorCode`; `PlayerErrorException`; `Retryable`; `toPlayerError(thrown, uri?)`, `isRetryableErrno(errno)`, `isNetworkUri(uri)`; `EndFileOutcome` / `classifyEndFile` |
 | Defaults | `DEFAULT_USER_AGENT` = `'rn-media (libmpv)'`, `DEFAULT_CACHE_SECS` = `30`, `DEFAULT_RETRY_MAX_ATTEMPTS` = `2`, `DEFAULT_RECONNECT_DELAY_MAX_SECONDS` = `5`, `DEFAULT_RESOLVER_TIMEOUT_MS` = `10_000`, `DEFAULT_RESOLVER_TTL_MS` = `600_000`, `DEFAULT_VISUALIZER_FPS` = `30` |
 | Option types | `RetryOptions`, `NetworkReconnectOptions`, `SourceResolverOptions`, `VisualizerOptions`, `VolumeOptions`, `GaplessAudioMode`, `ReplayGainMode`, `HttpHeaders` |
-| Equaliser | `EqualizerPreset`, `EqualizerPresetId`, `EqualizerBand`, `EqualizerGainRange`, `EqualizerSettings`, `EqualizerStorage` (the injected persistence interface), `UseEqualizerOptions`, `EQUALIZER_PREAMP_LABEL`, `EQUALIZER_LIMITER_LABEL`, `LOUDNESS_NORMALIZATION_LABEL` |
+| Equaliser | `EqualizerPreset`, `EqualizerPresetId`, `EqualizerBand`, `EqualizerGainRange`, `EqualizerSettings`, `EqualizerStorage`, `UseEqualizerOptions`, `EQUALIZER_PREAMP_LABEL`, `EQUALIZER_LIMITER_LABEL`, `LOUDNESS_NORMALIZATION_LABEL`, `EQUALIZER_SCHEMA_VERSION`, `DEFAULT_EQUALIZER_STORAGE_KEY` |
 | Filters | `CompressorOptions`, `LimiterOptions`, `LoudnormOptions`, `DynamicNormalizerOptions`, `CrossfeedOptions`, `ShelfOptions`, `PassOptions`, `BiquadWidthType`, `assertValidAudioFilters` |
 | State and events | `PlayerStatus`, `PositionAnchor`, `PositionAnchorMs`, `Progress`, `Milestone`, `PlaylistApi`, `PlaylistPosition`, `PlayerEvent`, `PlayerEventMap`, `PlayerEventName`, the per-event types (`TrackChangedEvent`, `TrackEndedEvent`, `SeekEvent`, `QueueChangedEvent`, `ChapterChangedEvent`, `PrefetchStartedEvent`, `RetryingEvent`, `LogEvent`, …), `PositionDiscontinuityReason`, `QueueChangeReason` |
 | Hooks' result types | `UsePlayerResult`, `UseVisualizerResult`, `PlayerStateSelector` |
 | Visualizer | `VisualizerController`, `VisualizerCapabilities`, `VisualizerCapture`, `VisualizerListener`, `VISUALIZER_DEFAULTS` |
 | Escape hatch | `MpvEvent`, `MpvEventKind`, `MpvProperty`, `MpvPropertyValue`, `MpvFormat`, `MpvLogLevel`, `MpvEndFileReason`, `OBSERVED_PROPERTIES`, `MpvClientFactory` |
-| Pure internals, exported for tests — **not API** | the reducer and its helpers (`createInitialState`, `toPlayerEvent`, `toPlayerEvents`, `ReducerContext`, `withResyncedAnchor`, `isPositionDiscontinuity`, `clearPlayerError`, `disposedError`, `toVisualizerError`, `TrackChangeReads`, `LoopRaw`), the mpv property helpers (`ObservedProperty`, `isMetadataProperty`, `metadataKeyProperty`, `metadataByKeyProperty`, `metadataValueProperty`, `playlistFilenameProperty`, `toCommonMetadata`), filter-string helpers (`escapeAfParam`, `escapeSubparam`, `peakResponseDb`, `compileHttpHeaderFields`, `HTTP_HEADER_FIELDS_OPTION`, `utf8Length`, `AudioFilterOption`, `AudioFilterParamChange`, `EqualizerOptions`, `GraphicEqualizerOptions`), visualizer decoding (`createDecodeState`, `decodeVisualizerFrame`, `resolveVisualizerOptions`, `VisualizerDecodeState`, `VisualizerUnsubscribe`), the raw mpv event types (`StartFileEvent`, `EndFileEvent`, `PlaybackRestartEvent`, `SeekStartedEvent`, `SeekCompletedEvent`, `PropertyEvent`, `ShutdownEvent`), `PrefetchStatus` / `PrefetchIdle` / `PrefetchActive`, `SourceOptions`, `SourceResolutionRequest`, `SourceResolverController`, `PlayerErrorInfo`, `PlayerLogLevel`, and the tuning constants `AGC_SILENCE_DB`, `BUFFERED_POSITION_STEP`, `BUFFERING_PERCENT_STEP`, `DEFAULT_EQUALIZER_GAIN_RANGE_DB`, `DEFAULT_LOUDNESS_TARGET_LUFS`, `DEFAULT_MILESTONES`, `DEFAULT_PROGRESS_INTERVAL_MS`, `DEFAULT_RESTART_THRESHOLD_SECONDS`, `MPV_VOLUME_SCALE`. They carry no stability promise |
+| Pure internals, exported for tests — **not API**, and carrying no stability promise | the reducer and its helpers (`createInitialState`, `toPlayerEvent`, `toPlayerEvents`, `ReducerContext`, `withResyncedAnchor`, `isPositionDiscontinuity`, `clearPlayerError`, `disposedError`, `toVisualizerError`, `TrackChangeReads`, `LoopRaw`), the mpv property helpers (`ObservedProperty`, `isMetadataProperty`, `metadataKeyProperty`, `metadataByKeyProperty`, `metadataValueProperty`, `playlistFilenameProperty`, `toCommonMetadata`), filter-string helpers (`escapeAfParam`, `escapeSubparam`, `peakResponseDb`, `compileHttpHeaderFields`, `HTTP_HEADER_FIELDS_OPTION`, `utf8Length`, `AudioFilterOption`, `AudioFilterParamChange`, `EqualizerOptions`, `GraphicEqualizerOptions`), visualizer decoding (`createDecodeState`, `decodeVisualizerFrame`, `resolveVisualizerOptions`, `VisualizerDecodeState`, `VisualizerUnsubscribe`), the raw mpv event types (`StartFileEvent`, `EndFileEvent`, `PlaybackRestartEvent`, `SeekStartedEvent`, `SeekCompletedEvent`, `PropertyEvent`, `ShutdownEvent`), `PrefetchStatus` / `PrefetchIdle` / `PrefetchActive`, `SourceOptions`, `SourceResolutionRequest`, `SourceResolverController`, `PlayerErrorInfo`, `PlayerLogLevel`, and the tuning constants `AGC_SILENCE_DB`, `BUFFERED_POSITION_STEP`, `BUFFERING_PERCENT_STEP`, `DEFAULT_EQUALIZER_GAIN_RANGE_DB`, `DEFAULT_LOUDNESS_TARGET_LUFS`, `DEFAULT_MILESTONES`, `DEFAULT_PROGRESS_INTERVAL_MS`, `DEFAULT_RESTART_THRESHOLD_SECONDS`, `MPV_VOLUME_SCALE` |
+
+## Contributing
+
+See [`CONTRIBUTING.md`](../../CONTRIBUTING.md). Bootstrapped with
+[create-nitro-module](https://github.com/patrickkabwe/create-nitro-module).
