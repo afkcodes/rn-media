@@ -49,6 +49,8 @@ automatic ducking.
 ### Player integration
 
 ```ts
+import { AudioSessionPresets, wireAudioSession } from '@rn-media/audio-session'
+
 const unwire = wireAudioSession(player, {
   preset: AudioSessionPresets.music,
   duckVolume: 0.3,
@@ -157,3 +159,12 @@ npm run codegen    # nitrogen + bob build
 npm run typecheck  # tsc --noEmit (strict)
 npm test           # vitest
 ```
+
+## Also exported
+
+| Group | Exports |
+|---|---|
+| Config | `AudioSessionConfig`, `IosAudioSessionConfig`, `AndroidAudioSessionConfig`; the iOS unions `IosAudioSessionCategory`, `IosAudioSessionMode`, `IosAudioSessionCategoryOption`, `IosRouteSharingPolicy`; the Android unions `AndroidAudioUsage`, `AndroidAudioContentType`, `AndroidAudioFocusGain` — every member is the platform constant's own name, so the platform documentation applies verbatim |
+| Events | `AudioSessionEventMap`, `AudioSessionEventName`, `AudioSessionInterruptionEvent`, `AudioSessionRouteChangeEvent`, `AudioInterruptionType` — `'duck' \| 'pause'` |
+| Wiring | `WireAudioSessionOptions`, `AudioSessionPlayerLike` (the structural player the wiring accepts), `AudioSessionApi` |
+| Native layer | `RnMediaAudioSession`, `NativeInterruptionEvent`, `NativeRouteChangeEvent` |

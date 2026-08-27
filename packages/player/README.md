@@ -38,6 +38,7 @@ npm install @rn-media/player react-native-nitro-modules
 ## Usage
 
 ```tsx
+import { Button } from 'react-native';
 import { usePlayer, usePlayerState, useProgress } from '@rn-media/player';
 
 function Screen() {
@@ -64,7 +65,7 @@ const unsubscribe = player.onStateChange(state => console.log(state.status));
 player.on('trackEnded', ({ index }) => console.log('finished', index));
 player.on('error', err => console.error(err.code, err.message));
 
-await player.loadPlaylist([a, b, c], { startIndex: 0 }); // gapless, mpv playlist
+await player.loadPlaylist(sources, { startIndex: 0 }); // gapless, mpv playlist
 player.play();
 await player.seekTo(30);
 player.setRate(1.5);
@@ -183,7 +184,12 @@ yourself, or load in order and call `playlist.shuffle()` afterwards.
 ### Audio filters and EQ
 
 ```ts
-import { AudioFilters, EQUALIZER_PRESETS, equalizerPresetChain } from '@rn-media/player'
+import {
+  AudioFilters,
+  EQUALIZER_PRESETS,
+  equalizerBandLabel,
+  equalizerPresetChain,
+} from '@rn-media/player'
 
 player.setAudioFilters(equalizerPresetChain(EQUALIZER_PRESETS.rock))
 player.setAudioFilters([
@@ -194,10 +200,12 @@ player.setAudioFilters([
 player.getAudioFilters() // mpv's own `af` string, read back
 player.clearAudioFilters()
 
-// A slider does NOT rewrite the chain: it commands the running filter.
-const chain = equalizerPresetChain(curve, { editable: true }) // labelled bands
+// A slider does NOT rewrite the chain: it commands the running filter. Every
+// entry of an editable chain carries a label — that is how you find one again.
+const chain = equalizerPresetChain(curve, { editable: true })
 player.setAudioFilters(chain)
-await player.setAudioFilterParam(chain[6], 'g', -3) // mpv's `af-command`
+const band = chain.find((f) => f.label === equalizerBandLabel(5)) // the 1 kHz band
+if (band !== undefined) await player.setAudioFilterParam(band, 'g', -3) // `af-command`
 ```
 
 Typed descriptors compile into mpv's `af` grammar — one mpv entry per filter,
@@ -280,7 +288,7 @@ preset bank, the persistence, and the one `af` write that puts it on the
 signal.
 
 ```tsx
-import { useEqualizer } from '@rn-media/player'
+import { useEqualizer, type Player } from '@rn-media/player'
 
 function EqualizerScreen({ player }: { player: Player | undefined }) {
   const eq = useEqualizer(player)
@@ -368,6 +376,7 @@ package** — the same structural two-method interface
 
 ```ts
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { useEqualizer } from '@rn-media/player'
 
 const eq = useEqualizer(player, {
   storage: AsyncStorage, // or any { getItem, setItem }
@@ -396,9 +405,10 @@ from the defaults"; a *storage* failure is a broken dependency and reaches
 ### Visualizer (spectrum + waveform)
 
 ```tsx
-import { useVisualizer } from '@rn-media/player'
+import { Text, View } from 'react-native'
+import { useVisualizer, type Player } from '@rn-media/player'
 
-function Bars({ player }) {
+function Bars({ player }: { player: Player | undefined }) {
   const { frame, error } = useVisualizer(player, { bands: 28 })
   if (error) return <Text>{error.message}</Text>
   return (
@@ -531,6 +541,8 @@ turning the gate off.
 ### ReplayGain (loudness normalisation)
 
 ```ts
+import { Player } from '@rn-media/player';
+
 const player = await Player.create({
   replayGain: { mode: 'album', preamp: -3, fallback: -6 },
 });
@@ -575,6 +587,8 @@ entry's last decoded audio to the next entry's first taking 26 ms while the audi
 device still held 739 ms of the previous track — no reopen, no underrun.
 
 ```ts
+import { Player } from '@rn-media/player';
+
 await Player.create({ gaplessAudio: 'weak' }); // mpv `gapless-audio`, the default
 ```
 
@@ -604,6 +618,8 @@ section is for.
 ### Prefetching the next track
 
 ```ts
+import { Player } from '@rn-media/player';
+
 await Player.create({ prefetchPlaylist: true }); // mpv `prefetch-playlist`
 ```
 
@@ -648,6 +664,8 @@ do not have to be resolved when the queue is built. Give the player a resolver
 and it asks, per entry, moments before mpv opens it:
 
 ```ts
+import { Player } from '@rn-media/player';
+
 const player = await Player.create({
   prefetchPlaylist: true,
   sourceResolver: async ({ uri }) => {
@@ -714,6 +732,8 @@ the next queue movement.
 ### Knowing when a prefetch starts
 
 ```ts
+import { Player } from '@rn-media/player';
+
 const player = await Player.create({ prefetchPlaylist: true });
 
 player.on('prefetchStarted', ({ uri, entryId }) =>
@@ -739,6 +759,8 @@ the `prefetch-playlist-entry-id` property.
 ### Cache tuning
 
 ```ts
+import { Player } from '@rn-media/player';
+
 await Player.create({ cacheSecs: 60 }); // mpv `cache-secs`, default 30 here
 ```
 
@@ -833,7 +855,7 @@ clean track end into a `maxDelaySeconds`-long retry storm that finishes with
 distinction this library is built on. A live-only app can opt in through the raw
 escape hatch, which replaces the whole list:
 
-```ts
+```ts fragment
 mpvOptions: {
   'stream-lavf-o':
     'reconnect=1,reconnect_on_network_error=1,reconnect_streamed=1,' +
@@ -850,6 +872,8 @@ behaviour on a hard failure is to advance to the next entry, which is right for
 a file that will never play and wrong for a stream that was unlucky.
 
 ```ts
+import { Player } from '@rn-media/player';
+
 const player = await Player.create({ retry: { maxAttempts: 2 } }); // 0 disables
 
 player.on('retrying', ({ index, attempt, maxAttempts }) =>
@@ -888,6 +912,8 @@ that was **live** (`state.isLive`, i.e. mpv's `seekable = no`) is re-attempted
 under the same bounded budget:
 
 ```ts
+import { Player } from '@rn-media/player';
+
 const player = await Player.create({
   retry: { maxAttempts: 2, retryLiveEof: true }, // radio app
 });
@@ -1029,3 +1055,21 @@ Bootstrapped with [create-nitro-module](https://github.com/patrickkabwe/create-n
 ## Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+
+## Also exported
+
+Named here so nothing public is undocumented; the tables above are the
+everyday surface.
+
+| Group | Exports |
+|---|---|
+| Error taxonomy | `PlayerError` — the union `NetworkError \| UnsupportedFormatError \| LoadFailedError \| DisposedError \| InvalidStateError \| UnsupportedError \| RawMpvError`; `PlayerErrorCode` — `'network' \| 'unsupported-format' \| 'load-failed' \| 'disposed' \| 'invalid-state' \| 'unsupported' \| 'mpv'`; `PlayerErrorException` (the thrown form); `Retryable`; `toPlayerError(thrown, uri?)`, `isRetryableErrno(errno)`, `isNetworkUri(uri)`; `EndFileOutcome` / `classifyEndFile` (natural end vs network EOF vs error) |
+| Defaults | `DEFAULT_USER_AGENT` = `'rn-media (libmpv)'`, `DEFAULT_CACHE_SECS` = `30`, `DEFAULT_RETRY_MAX_ATTEMPTS` = `2`, `DEFAULT_RECONNECT_DELAY_MAX_SECONDS` = `5`, `DEFAULT_RESOLVER_TIMEOUT_MS` = `10_000`, `DEFAULT_RESOLVER_TTL_MS` = `600_000`, `DEFAULT_VISUALIZER_FPS` = `30` |
+| Option types | `RetryOptions`, `NetworkReconnectOptions`, `SourceResolverOptions`, `VisualizerOptions`, `VolumeOptions`, `GaplessAudioMode`, `ReplayGainMode`, `HttpHeaders` |
+| Equaliser | `EqualizerPreset`, `EqualizerPresetId`, `EqualizerBand`, `EqualizerGainRange`, `EqualizerSettings`, `EqualizerStorage` (the injected persistence interface), `UseEqualizerOptions`, `EQUALIZER_PREAMP_LABEL`, `EQUALIZER_LIMITER_LABEL`, `LOUDNESS_NORMALIZATION_LABEL` |
+| Filters | `CompressorOptions`, `LimiterOptions`, `LoudnormOptions`, `DynamicNormalizerOptions`, `CrossfeedOptions`, `ShelfOptions`, `PassOptions`, `BiquadWidthType`, `assertValidAudioFilters` |
+| State and events | `PlayerStatus`, `PositionAnchor`, `Progress`, `Milestone`, `PlaylistApi`, `PlaylistPosition`, `PlayerEvent`, `PlayerEventMap`, `PlayerEventName`, the per-event types (`TrackChangedEvent`, `TrackEndedEvent`, `SeekEvent`, `QueueChangedEvent`, `ChapterChangedEvent`, `PrefetchStartedEvent`, `RetryingEvent`, `LogEvent`, …), `PositionDiscontinuityReason`, `QueueChangeReason` |
+| Hooks' result types | `UsePlayerResult`, `UseVisualizerResult`, `PlayerStateSelector` |
+| Visualizer | `VisualizerController`, `VisualizerCapabilities`, `VisualizerCapture`, `VisualizerListener`, `VISUALIZER_DEFAULTS` |
+| Escape hatch | `MpvEvent`, `MpvEventKind`, `MpvProperty`, `MpvPropertyValue`, `MpvFormat`, `MpvLogLevel`, `MpvEndFileReason`, `OBSERVED_PROPERTIES`, `MpvClientFactory` |
+| Pure internals, exported for tests — **not API** | the reducer and its helpers (`createInitialState`, `toPlayerEvent`, `toPlayerEvents`, `ReducerContext`, `withResyncedAnchor`, `isPositionDiscontinuity`, `clearPlayerError`, `disposedError`, `toVisualizerError`, `TrackChangeReads`, `LoopRaw`), the mpv property helpers (`ObservedProperty`, `isMetadataProperty`, `metadataKeyProperty`, `metadataByKeyProperty`, `metadataValueProperty`, `playlistFilenameProperty`, `toCommonMetadata`), filter-string helpers (`escapeAfParam`, `escapeSubparam`, `peakResponseDb`, `compileHttpHeaderFields`, `HTTP_HEADER_FIELDS_OPTION`, `utf8Length`, `AudioFilterOption`, `AudioFilterParamChange`, `EqualizerOptions`, `GraphicEqualizerOptions`), visualizer decoding (`createDecodeState`, `decodeVisualizerFrame`, `resolveVisualizerOptions`, `VisualizerDecodeState`, `VisualizerUnsubscribe`), the raw mpv event types (`StartFileEvent`, `EndFileEvent`, `PlaybackRestartEvent`, `SeekStartedEvent`, `SeekCompletedEvent`, `PropertyEvent`, `ShutdownEvent`), `PrefetchStatus` / `PrefetchIdle` / `PrefetchActive`, `SourceOptions`, `SourceResolutionRequest`, `SourceResolverController`, `PlayerErrorInfo`, `PlayerLogLevel`, and the tuning constants `AGC_SILENCE_DB`, `BUFFERED_POSITION_STEP`, `BUFFERING_PERCENT_STEP`, `DEFAULT_EQUALIZER_GAIN_RANGE_DB`, `DEFAULT_LOUDNESS_TARGET_LUFS`, `DEFAULT_MILESTONES`, `DEFAULT_PROGRESS_INTERVAL_MS`, `DEFAULT_RESTART_THRESHOLD_SECONDS`, `MPV_VOLUME_SCALE`. They carry no stability promise |

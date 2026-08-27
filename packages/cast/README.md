@@ -118,8 +118,8 @@ const state = await Cast.initialize()
 
 // Discovery is battery-expensive: scope it to "picker open".
 await Cast.startDiscovery()
-const devices = await Cast.getCastDevices()
-await Cast.requestSession(devices[0].id) // resolves when connected
+const [device] = await Cast.getCastDevices()
+if (device !== undefined) await Cast.requestSession(device.id) // resolves when connected
 await Cast.stopDiscovery()               // AFTER connecting — see below
 
 // Hand the receiver a queue it advances by itself (phone may sleep).
@@ -162,7 +162,7 @@ any → error → typed error + fall back to LOCAL at the last known position
 ```
 
 ```ts
-import { wireCastHandoff } from '@rn-media/cast'
+import { Cast, wireCastHandoff } from '@rn-media/cast'
 
 const handoff = wireCastHandoff(
   {
@@ -206,7 +206,9 @@ const handoff = wireCastHandoff(
   }
 )
 
-await handoff.castTo(devices[0].id)   // or let <CastButton/>/the system
+const [device] = await Cast.getCastDevices()
+if (device !== undefined) await handoff.castTo(device.id)
+                                      // …or let <CastButton/> / the system
                                       // output switcher start the session —
                                       // the same machine handles both.
 await handoff.stopCasting()           // transfer back; { transferBackToLocal:
@@ -268,6 +270,8 @@ Receivers decode far less than mpv does. Grey the cast route out per track
 instead of failing at load:
 
 ```ts
+import { canCastMedia } from '@rn-media/cast'
+
 const verdict = canCastMedia({ url, mimeType, headers })
 // { castable: false, reason: 'codec' | 'local-file' | 'headers' }
 ```
@@ -332,6 +336,7 @@ The same subscription `<CastButton/>` uses, exported so your own UI can have
 it without wiring a listener:
 
 ```tsx
+import { Text } from 'react-native'
 import { useCastState, useIsCasting } from '@rn-media/cast'
 
 function OutputBadge(): React.JSX.Element | null {
@@ -450,3 +455,15 @@ function OutputBadge(): React.JSX.Element | null {
 
 Pinned exactly on purpose (Google's iOS 4.8.0/4.8.1 broke discovery);
 `scripts/check-upstream.mjs` watches both rows so a lag is loud, not silent.
+
+## Also exported
+
+| Group | Exports |
+|---|---|
+| Options | `CastInitOptions` — `{ receiverApplicationId? }`; `CastLoadOptions` — `{ autoplay?, startPosition?, playbackRate? }`; `CastQueueLoadOptions` — `{ startIndex?, startPosition?, repeatMode?, credentials?, credentialsType? }`; `EndSessionOptions`; `CastRepeatMode` |
+| Media | `CastMediaMetadata` — `{ title?, artist?, albumTitle?, artworkUrl? }`; `CastQueueItemInput`, `CastQueueItemSnapshot`, `SkippedCastItem`, `CanCastInput` |
+| Errors | `CastErrorCode`, `CastIdleReason`, `errorFromIdleReason`, `receiverFetchError`, `toCastError` |
+| Events and status | `CastEventMap`, `CastEventName`, `CastStateEvent`, `CastSessionEvent`, `CastSessionEventType`, `CastMediaStatus`, `CastPlayerState`, `CastDeviceVolume`, `CastTransferEvent`, `CastSeekResumeState` |
+| Handoff internals | `CastHandoffState`, `CastHandoffPhase`, `CastHandoffEvent`, `CastHandoffEffect`, `CastHandoffTransition`, `CastHandoffQueueSnapshot`, `CastHandoffLocalPlayer`, `WireCastHandoffOptions`, `initialCastHandoffState`, `projectReceiverPosition`, `CastQueueProjection`, `castabilityTables` — the pure state machine `wireCastHandoff` runs, exported for tests and custom hosts |
+| Components | `CastButtonProps`; the native pair `RnMediaCast`, `RnMediaCastButton`, `RnMediaCastButtonProps` |
+| Native events | `CastApi` (the typed surface `Cast` implements) and the raw `NativeCastStateEvent`, `NativeCastSessionEvent`, `NativeCastDevicesEvent`, `NativeCastMediaStatusEvent`, `NativeCastMediaErrorEvent`, `NativeDeviceVolumeEvent` the JS layer normalises — not API |
