@@ -604,6 +604,160 @@ describe('Player audio filters', () => {
 })
 
 // ---------------------------------------------------------------------------
+// The three halves of the chain compose; none of them clobbers another
+// ---------------------------------------------------------------------------
+
+describe('setEqualizerFilters — composition', () => {
+  let client: FakeMpvClient
+
+  const createPlayer = async (): Promise<Player> =>
+    Player.create({ createClient: () => client })
+
+  /** The last `af` string written to mpv. */
+  const af = (): string | undefined => {
+    const value = client.written.get(MpvProperty.audioFilters)
+    return typeof value === 'string' ? value : undefined
+  }
+
+  /** A one-entry "EQ half", labelled the way an editable chain is. */
+  const eq = (gain: number): AudioFilter[] => [
+    {
+      ...AudioFilters.volume({ gainDb: -3 }),
+      label: 'rnmedia_eq_preamp',
+    },
+    {
+      ...AudioFilters.equalizer({
+        frequency: 1000,
+        widthType: 'o',
+        width: 1,
+        gain,
+      }),
+      label: 'rnmedia_eq_1000',
+    },
+  ]
+
+  const EQ_AF =
+    '@rnmedia_eq_preamp:volume=volume=-3dB,@rnmedia_eq_1000:equalizer=f=1000:t=o:w=1:g=6'
+
+  beforeEach(() => {
+    client = new FakeMpvClient()
+  })
+
+  it('leaves a user chain set BEFORE it in place', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    player.setEqualizerFilters(eq(6))
+    // The regression this whole fix exists for: mounting an EQ screen used to
+    // erase `crossfeed` on the next slider move.
+    expect(af()).toBe(`${EQ_AF},crossfeed`)
+  })
+
+  it('leaves a user chain set AFTER it in place', async () => {
+    const player = await createPlayer()
+    player.setEqualizerFilters(eq(6))
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    expect(af()).toBe(`${EQ_AF},crossfeed`)
+  })
+
+  it('keeps the order equaliser → user → loudness normalization', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    player.setEqualizerFilters(eq(6))
+    player.setLoudnessNormalization(true)
+    // The pre-amp attenuates before the boosts it is sized for; the normalizer
+    // hears everything above it. Both positions are load-bearing (ARCHITECTURE
+    // §18), so the whole string is asserted rather than a membership check.
+    expect(af()).toBe(`${EQ_AF},crossfeed,@rnmedia_loudnorm:loudnorm=I=-16`)
+  })
+
+  it('is idempotent — rewriting the same half writes the same string', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    player.setEqualizerFilters(eq(6))
+    const first = af()
+    player.setEqualizerFilters(eq(6))
+    expect(af()).toBe(first)
+  })
+
+  it('replaces only its own entries when the curve changes', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    player.setEqualizerFilters(eq(6))
+    player.setEqualizerFilters(eq(-4))
+    expect(af()).toContain('crossfeed')
+    expect(af()).toContain('g=-4')
+    expect(af()).not.toContain('g=6')
+  })
+
+  it('an empty equaliser half still leaves the user chain alone', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    player.setEqualizerFilters([])
+    // Before the fix this wrote `''` and silenced the app's own filter.
+    expect(af()).toBe('crossfeed')
+  })
+
+  it('reports the half it owns, and `null` hands ownership back', async () => {
+    const player = await createPlayer()
+    expect(player.getEqualizerFilters()).toBeUndefined()
+    player.setEqualizerFilters([])
+    expect(player.getEqualizerFilters()).toEqual([])
+    player.setEqualizerFilters(null)
+    expect(player.getEqualizerFilters()).toBeUndefined()
+  })
+
+  it('refuses a managed label in the USER half, naming the owner', async () => {
+    const player = await createPlayer()
+    expectPlayerError(
+      () => player.setAudioFilters([...eq(6)]),
+      'invalid-state'
+    )
+    expectPlayerError(
+      () =>
+        player.setAudioFilters([
+          { ...AudioFilters.loudnorm(), label: 'rnmedia_loudnorm' },
+        ]),
+      'invalid-state'
+    )
+    // An unlabelled or app-labelled chain is untouched by the reservation.
+    player.setAudioFilters([
+      { ...AudioFilters.crossfeed(), label: 'myapp_crossfeed' },
+    ])
+    expect(af()).toBe('@myapp_crossfeed:crossfeed')
+  })
+
+  it('refuses the loudness label in the EQUALISER half too', async () => {
+    const player = await createPlayer()
+    expectPlayerError(
+      () =>
+        player.setEqualizerFilters([
+          { ...AudioFilters.loudnorm(), label: 'rnmedia_loudnorm' },
+        ]),
+      'invalid-state'
+    )
+  })
+
+  it('commits its bookkeeping only after mpv accepted the write', async () => {
+    const player = await createPlayer()
+    player.setAudioFilters([AudioFilters.crossfeed()])
+    client.setPropertyRejection = '[mpv:-11] mpv_set_property_string("af")'
+    expectPlayerError(() => player.setEqualizerFilters(eq(6)), 'mpv')
+    client.setPropertyRejection = undefined
+    // The rejected half never became the remembered one, so the next compose
+    // does not resurrect a chain mpv refused.
+    player.setLoudnessNormalization(true)
+    expect(af()).toBe('crossfeed,@rnmedia_loudnorm:loudnorm=I=-16')
+  })
+
+  it('refuses after destroy()', async () => {
+    const player = await createPlayer()
+    player.destroy()
+    expectPlayerError(() => player.setEqualizerFilters([]), 'disposed')
+    expectPlayerError(() => player.getEqualizerFilters(), 'disposed')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // In-place parameter changes
 // ---------------------------------------------------------------------------
 
@@ -717,7 +871,9 @@ describe('Player.setAudioFilterParam', () => {
 
   it('issues mpv’s af-command and does not touch the `af` property', async () => {
     const player = await createPlayer()
-    player.setAudioFilters([band(31, 3)])
+    // `setEqualizerFilters`, not `setAudioFilters`: `rnmedia_eq_…` is a managed
+    // label and the user half refuses it (see the reservation tests below).
+    player.setEqualizerFilters([band(31, 3)])
     const written = client.written.get(MpvProperty.audioFilters)
 
     await player.setAudioFilterParam(band(31, 6), 'g', 6)
@@ -752,12 +908,12 @@ describe('Player.setAudioFilterParam', () => {
     ])
   })
 
-  it('keeps the remembered user half in step, so nothing later reverts it', async () => {
+  it('keeps the remembered managed half in step, so nothing later reverts it', async () => {
     const player = await createPlayer()
-    player.setAudioFilters([band(31, 3), band(62, -2)])
+    player.setEqualizerFilters([band(31, 3), band(62, -2)])
     await player.setAudioFilterParam(band(31, 6), 'g', 6)
 
-    // Toggling normalization recomposes the whole property from the user half.
+    // Toggling normalization recomposes the whole property from the halves.
     // Without the mirror update it would put `g=3` back on a running `g=6`.
     player.setLoudnessNormalization(true)
     expect(client.written.get(MpvProperty.audioFilters)).toContain(
@@ -767,7 +923,7 @@ describe('Player.setAudioFilterParam', () => {
 
   it('leaves the mirror alone when mpv rejected the command', async () => {
     const player = await createPlayer()
-    player.setAudioFilters([band(31, 3)])
+    player.setEqualizerFilters([band(31, 3)])
     client.commandRejection = '[mpv:-11] af-command'
 
     await expect(

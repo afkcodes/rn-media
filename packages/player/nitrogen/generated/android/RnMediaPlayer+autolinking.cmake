@@ -33,9 +33,11 @@ target_sources(
   # Autolinking Setup
   ../nitrogen/generated/android/RnMediaPlayerOnLoad.cpp
   # Shared Nitrogen C++ sources
+  ../nitrogen/generated/shared/c++/HybridRnMediaContentSourceSpec.cpp
   ../nitrogen/generated/shared/c++/HybridMpvClientSpec.cpp
   ../nitrogen/generated/shared/c++/HybridRnMediaScreenStateSpec.cpp
   # Android-specific Nitrogen C++ sources
+  ../nitrogen/generated/android/c++/JHybridRnMediaContentSourceSpec.cpp
   ../nitrogen/generated/android/c++/JHybridRnMediaScreenStateSpec.cpp
 )
 

@@ -7,6 +7,11 @@ import {
 } from './errors'
 import type { LogEvent, PlayerEvent } from './events'
 import { toPlayerEvents } from './events'
+import {
+  ContentUriResolver,
+  getContentUriOpener,
+  isContentUri,
+} from './content-uri'
 import type { CommonMetadata } from './common-metadata'
 import { toCommonMetadata } from './common-metadata'
 import type { AudioFilter } from './filters'
@@ -1656,6 +1661,74 @@ export const DEFAULT_LOUDNESS_TARGET_LUFS = -16
 export const LOUDNESS_NORMALIZATION_LABEL = 'rnmedia_loudnorm'
 
 /**
+ * The label prefix this library reserves for the `af` entries it *manages*.
+ *
+ * Two of the three halves of the chain are managed — the equaliser half
+ * ({@link Player.setEqualizerFilters}, labels `rnmedia_eq_…`) and the loudness
+ * normalization entry ({@link LOUDNESS_NORMALIZATION_LABEL}) — and each rewrites
+ * its own entries by label. A user entry carrying one of those labels would be
+ * a second owner of the same mpv label, and mpv resolves that by silently
+ * letting one overwrite the other, so {@link Player.setAudioFilters} refuses
+ * the whole prefix rather than only the labels that exist today.
+ *
+ * Chains built by `equalizerPresetChain(curve)` carry no labels at all and are
+ * unaffected; only `{ editable: true }` emits them, and that mode exists for
+ * the managed half.
+ */
+export const MANAGED_FILTER_LABEL_PREFIX = 'rnmedia_'
+
+/**
+ * The chain with one sub-option of the entry labelled `label` set to `text`.
+ *
+ * @returns The same array contents with the one entry replaced; entries that
+ * do not match are reused, so nothing but the changed entry is reallocated.
+ */
+function withFilterParam(
+  chain: readonly AudioFilter[],
+  label: string,
+  param: string,
+  text: string
+): readonly AudioFilter[] {
+  return chain.map((filter) =>
+    filter.label === label
+      ? {
+          ...filter,
+          options: filter.options.map(([key, existing]) =>
+            key === param ? ([key, text] as const) : ([key, existing] as const)
+          ),
+        }
+      : filter
+  )
+}
+
+/**
+ * Refuse a user chain that carries a label this library manages.
+ *
+ * @param filters - The chain the app passed.
+ * @param method - The method name, for the message.
+ * @throws {@link PlayerErrorException} with code `invalid-state` on the first
+ * offending entry.
+ */
+function assertUnmanagedLabels(
+  filters: readonly AudioFilter[],
+  method: string
+): void {
+  for (const filter of filters) {
+    const label = filter.label
+    if (label === undefined || !label.startsWith(MANAGED_FILTER_LABEL_PREFIX)) {
+      continue
+    }
+    throw invalidArgument(
+      `The filter label '${label}' is reserved: '${MANAGED_FILTER_LABEL_PREFIX}…' labels belong to ` +
+        "this library's managed `af` entries (`setEqualizerFilters` / `useEqualizer` own " +
+        `'rnmedia_eq_…', \`setLoudnessNormalization\` owns '${LOUDNESS_NORMALIZATION_LABEL}'), and two ` +
+        `owners of one mpv label silently overwrite each other. Pick any other label for \`${method}\`, ` +
+        'or use the managed API itself.'
+    )
+  }
+}
+
+/**
  * Resolve {@link LoudnessNormalizationOptions} into the managed, labelled
  * `loudnorm` entry plus the frozen options {@link Player.getLoudnessNormalization}
  * reports. Range validation is delegated to `AudioFilters.loudnorm`, the one
@@ -2188,6 +2261,13 @@ export class Player {
   #visualizer: VisualizerController | undefined
   #resolution: SourceResolverController | undefined
   /**
+   * Android's `content://` → `fd://` rewrite, created the first time a
+   * `content://` URI is loaded and never before — see `#armContentUri`.
+   * `undefined` on every other platform, and on an Android binary older than
+   * the feature, where a `content://` load fails as it always did.
+   */
+  #contentUri: ContentUriResolver | undefined
+  /**
    * The reason of the position jump currently in flight, i.e. the one a
    * `seekStarted` announced and the next `playbackRestart` will complete.
    *
@@ -2250,6 +2330,32 @@ export class Player {
         readonly options: Readonly<LoudnessNormalizationOptions>
       }
     | undefined
+  /**
+   * The managed **equaliser half** of the chain, when something owns it:
+   * pre-amp, bands and limiter, every entry labelled `@rnmedia_eq_…`.
+   * `undefined` means nobody owns it — not "it is empty" — so that
+   * {@link setEqualizerFilters} can hand ownership back with `[]` and the two
+   * are the same chain but not the same fact. Same commit-after-write rule as
+   * `#userAudioFilters`.
+   *
+   * It is a *third* half rather than part of the user half because the two
+   * have different owners: {@link useEqualizer} owns this one for as long as
+   * it is mounted, and the app owns {@link setAudioFilters} the whole time.
+   * Before this existed, mounting the EQ screen silently erased the app's own
+   * filters (README "Common pitfalls": *the EQ screen's changes get wiped*).
+   */
+  #equalizerFilters: readonly AudioFilter[] | undefined
+  /**
+   * The ReplayGain mode mpv currently has, tracked in TS.
+   *
+   * Exists so the mutual exclusion with {@link setLoudnessNormalization} costs
+   * **zero** extra bridge traffic in the ordinary case: the toggle can tell
+   * whether ReplayGain is even on without reading a property back, and writes
+   * `replaygain` only when there is genuinely something to turn off. Seeded
+   * from {@link PlayerOptions.replayGain} at creation, because that is written
+   * into mpv's init options rather than through {@link setReplayGain}.
+   */
+  #replayGainMode: ReplayGainMode = 'no'
 
   readonly #stateListeners = new Set<(state: PlayerState) => void>()
   readonly #eventListeners: {
@@ -2306,6 +2412,9 @@ export class Player {
     const now = options.now ?? Date.now
     const client = factory()
     const player = new Player(client, now)
+    // Seeded, not written: `replayGainOptions()` puts this into mpv's init
+    // options below. The field only has to agree with what mpv ends up with.
+    player.#replayGainMode = options.replayGain?.mode ?? 'no'
     const retry = resolveRetryOptions(options.retry)
     player.#maxRetryAttempts = retry.maxAttempts
     player.#retryLiveEof = retry.retryLiveEof
@@ -2321,6 +2430,9 @@ export class Player {
         player.#emit('error', error, { attempts: 0 })
       },
       now,
+      // Dormant until `#armContentUri` arms it, so this costs a player that
+      // never touches a `content://` URI exactly nothing.
+      builtIn: (uri) => player.#contentUri?.resolve(uri) ?? uri,
     })
 
     try {
@@ -2540,6 +2652,7 @@ export class Player {
     // machinery was still arguing about. See `RetryOptions`.
     this.#resetRetry()
     this.#currentUri = source
+    this.#armContentUri([source])
     // Before the command, not after: `loadfile` makes mpv open the source, and
     // resolving first is what lets the load hook hit a warm cache instead of
     // holding mpv's core open while JavaScript answers.
@@ -2600,6 +2713,7 @@ export class Player {
     this.#resetRetry()
     const startIndex = options.startIndex ?? 0
     this.#currentUri = sources[startIndex] ?? sources[0]
+    this.#armContentUri(sources)
 
     // The entry that is about to play, and the one after it. Everything further
     // out is resolved as the queue reaches it, so a 500-track queue does not
@@ -3022,6 +3136,7 @@ export class Player {
     add: async (source, options) => {
       this.#assertAlive('playlist.add')
       this.#resetRetry()
+      this.#armContentUri([source])
       const position = options?.position
       // Validated before the command, like every other typed option here: an
       // out-of-range index must not reach mpv, which would quietly append.
@@ -3183,11 +3298,41 @@ export class Player {
    * @param options - See {@link ReplayGainOptions}.
    * @throws {@link PlayerErrorException} with code `invalid-state` if `mode` is
    * not a {@link ReplayGainMode} or a gain is outside mpv's range.
+   *
+   * @remarks
+   * **This and {@link setLoudnessNormalization} are mutually exclusive, and the
+   * API enforces it.** Any `mode` other than `'no'` turns loudness
+   * normalization off; `setLoudnessNormalization(true)` turns ReplayGain off.
+   * They level the same thing by different means and their gains *stack*, so
+   * running both is never what anyone wants — it was the top loudness bug in
+   * this library's own README ("everything is 3 dB too loud"), and leaving it
+   * to a documentation line was what made it a bug rather than a footnote.
+   * {@link getReplayGainMode} and {@link getLoudnessNormalization} both report
+   * the outcome, so a settings screen can show which switch won.
+   *
+   * Turning the loser off is free when it was already off: the state of both is
+   * tracked in TypeScript, so the exclusion adds **no** bridge traffic in the
+   * ordinary case and exactly one property write in the case that needed it.
    */
   setReplayGain(options: ReplayGainOptions): void {
     this.#assertAlive('setReplayGain')
     assertReplayGain(options)
+    // The exclusion, applied only when it costs something — see
+    // `setLoudnessNormalization` for the other half of the same rule. Enabling
+    // ReplayGain removes the managed `loudnorm` entry, because the two level
+    // the same thing and their gains stack; `mode: 'no'` is not "enabling" and
+    // leaves the normalizer alone, so `{ mode: 'no', fallback: 0 }` is still
+    // just "stop honouring tags".
+    if (options.mode !== 'no' && this.#loudnessNormalization !== undefined) {
+      this.#writeAudioFilters(
+        this.#userAudioFilters,
+        this.#equalizerFilters,
+        undefined
+      )
+      this.#loudnessNormalization = undefined
+    }
     this.#setString(MpvProperty.replayGain, options.mode)
+    this.#replayGainMode = options.mode
     if (options.preamp !== undefined) {
       this.#setNumber(MpvProperty.replayGainPreamp, options.preamp)
     }
@@ -3275,24 +3420,85 @@ export class Player {
    */
   setAudioFilters(filters: readonly AudioFilter[]): void {
     this.#assertAlive('setAudioFilters')
-    for (const filter of filters) {
-      if (filter.label === LOUDNESS_NORMALIZATION_LABEL) {
-        throw invalidArgument(
-          `The filter label '${LOUDNESS_NORMALIZATION_LABEL}' is reserved for \`setLoudnessNormalization\`; ` +
-            'a user entry carrying it would fight the managed one for the same mpv label. ' +
-            'Pick any other label, or use `setLoudnessNormalization` itself.'
-        )
-      }
-    }
-    this.#setString(
-      MpvProperty.audioFilters,
-      compileAudioFilters(
-        this.#composeAudioFilters(filters, this.#loudnessNormalization?.filter)
-      )
+    assertUnmanagedLabels(filters, 'setAudioFilters')
+    this.#writeAudioFilters(
+      filters,
+      this.#equalizerFilters,
+      this.#loudnessNormalization?.filter
     )
     // After the write: a chain mpv rejected must not become the remembered
     // "user half" that the next normalization toggle re-applies.
     this.#userAudioFilters = [...filters]
+  }
+
+  /**
+   * Replace the **equaliser half** of the chain — the managed, labelled
+   * entries an EQ screen owns — leaving every other filter exactly where it is.
+   *
+   * This is what {@link useEqualizer} calls, and it is the reason that hook no
+   * longer clobbers a chain set through {@link setAudioFilters}. Reach for it
+   * directly only if you are driving an equaliser without the hook.
+   *
+   * @param filters - The equaliser entries, in signal-flow order — normally the
+   * output of `equalizerPresetChain(curve, { editable: true })`, i.e. pre-amp,
+   * ten bands, limiter, every entry labelled `@rnmedia_eq_…`. Pass `[]` for a
+   * flat/disabled equaliser that still belongs to you, and `null` to hand
+   * ownership back entirely (they compile to the same `af`, but only `null`
+   * lets the next {@link setAudioFilters} stop composing around you).
+   *
+   * @throws {@link PlayerErrorException} with code `invalid-state` when an
+   * entry carries {@link LOUDNESS_NORMALIZATION_LABEL} (that label has another
+   * owner), and with code `mpv` (`errno: -11`) when mpv rejects the chain — the
+   * same taxonomy as {@link setAudioFilters}.
+   *
+   * @remarks
+   * **Chain order is `equaliser → user → loudness normalization`,** and each of
+   * the three is deliberate. The equaliser leads because its first entry is the
+   * headroom pre-amp, which has to attenuate *before* the boosts it is sized
+   * for, and its last is the limiter that catches what the bands' summed
+   * response still lets through (ARCHITECTURE §18). The user half follows,
+   * unchanged from where `extraFilters` used to put it, so this fix is not
+   * audible on an app that was already composing correctly. The loudness
+   * entry stays at the tail because it must hear everything above it.
+   *
+   * **Same rebuild cost as {@link setAudioFilters}** — it is one write of the
+   * whole `af` property, so a slider still belongs on
+   * {@link setAudioFilterParam}, and `useEqualizer` still only calls this when
+   * the *graph* changes.
+   */
+  setEqualizerFilters(filters: readonly AudioFilter[] | null): void {
+    this.#assertAlive('setEqualizerFilters')
+    const next = filters === null ? undefined : [...filters]
+    if (next !== undefined) {
+      for (const filter of next) {
+        if (filter.label === LOUDNESS_NORMALIZATION_LABEL) {
+          throw invalidArgument(
+            `The filter label '${LOUDNESS_NORMALIZATION_LABEL}' is reserved for \`setLoudnessNormalization\`; ` +
+              'an equaliser entry carrying it would fight the managed one for the same mpv label. ' +
+              'Pick any other label, or use `setLoudnessNormalization` itself.'
+          )
+        }
+      }
+    }
+    this.#writeAudioFilters(
+      this.#userAudioFilters,
+      next,
+      this.#loudnessNormalization?.filter
+    )
+    // After the write, for the same reason as `setAudioFilters`.
+    this.#equalizerFilters = next
+  }
+
+  /**
+   * The equaliser half as {@link setEqualizerFilters} last set it, or
+   * `undefined` when nobody owns it.
+   *
+   * Bookkeeping, not an mpv read — a raw `setPropertyString('af', …)` is
+   * invisible to it, exactly as documented on {@link setLoudnessNormalization}.
+   */
+  getEqualizerFilters(): readonly AudioFilter[] | undefined {
+    this.#assertAlive('getEqualizerFilters')
+    return this.#equalizerFilters
   }
 
   /**
@@ -3432,18 +3638,25 @@ export class Player {
     // fourth argument is not optional in practice; see the remarks above for
     // why mpv's `all` default turns a successful command into a failed one.
     await this.command(['af-command', label, param, text, filter.name])
-    // Only after mpv accepted it: the remembered user half must never claim a
-    // value the running chain does not have.
-    this.#userAudioFilters = this.#userAudioFilters.map((filter) =>
-      filter.label === label
-        ? {
-            ...filter,
-            options: filter.options.map(([key, existing]) =>
-              key === param ? ([key, text] as const) : ([key, existing] as const)
-            ),
-          }
-        : filter
+    // Only after mpv accepted it: the remembered halves must never claim a
+    // value the running chain does not have. Both are updated, because a
+    // labelled entry may live in either — `useEqualizer` commands entries in
+    // the equaliser half, a hand-built labelled chain lives in the user half —
+    // and a mirror that missed the change would revert it on the next compose.
+    this.#userAudioFilters = withFilterParam(
+      this.#userAudioFilters,
+      label,
+      param,
+      text
     )
+    if (this.#equalizerFilters !== undefined) {
+      this.#equalizerFilters = withFilterParam(
+        this.#equalizerFilters,
+        label,
+        param,
+        text
+      )
+    }
   }
 
   /**
@@ -3501,11 +3714,19 @@ export class Player {
    * If your files **do** carry ReplayGain tags, prefer
    * {@link setReplayGain}: it levels loudness in mpv's volume domain from the
    * tags — zero DSP, zero latency, zero resampling — and preserves dynamics
-   * completely. **Do not run both**: they solve the same problem and their
-   * gain changes stack, so a track leveled by ReplayGain gets re-leveled (and
-   * re-compressed) by loudnorm. Tagged library → ReplayGain; untagged /
-   * mixed-provenance streams → this. (The same advice is written on
-   * {@link ReplayGainOptions}, from the other side.)
+   * completely. **You cannot run both, and this method is what stops you**:
+   * `enabled: true` switches ReplayGain to `'no'`, because the two solve the
+   * same problem and their gain changes stack — a track leveled by ReplayGain
+   * would get re-leveled, and re-compressed, by loudnorm. The rule is
+   * symmetric: `setReplayGain({ mode: 'track' | 'album' })` removes this
+   * managed entry. {@link getReplayGainMode} reports which one is live.
+   * Tagged library → ReplayGain; untagged / mixed-provenance streams → this.
+   * (The same rule is written on {@link ReplayGainOptions}, from the other
+   * side.)
+   *
+   * The switch-off costs nothing when there was nothing to switch off: both
+   * states are tracked in TypeScript, so `replaygain` is written only when it
+   * was actually on.
    *
    * For loudness *smoothing* at native sample rate,
    * `AudioFilters.dynamicNormalizer` (ffmpeg `dynaudnorm`) is the cheaper,
@@ -3532,14 +3753,22 @@ export class Player {
   ): void {
     this.#assertAlive('setLoudnessNormalization')
     const next = enabled ? buildLoudnessNormalization(options) : undefined
-    this.#setString(
-      MpvProperty.audioFilters,
-      compileAudioFilters(
-        this.#composeAudioFilters(this.#userAudioFilters, next?.filter)
-      )
+    this.#writeAudioFilters(
+      this.#userAudioFilters,
+      this.#equalizerFilters,
+      next?.filter
     )
     // After the write, for the same reason as `setAudioFilters`.
     this.#loudnessNormalization = next
+    // The exclusion, applied only when it costs something. Turning the
+    // normalizer ON while ReplayGain is active would stack two gains on the
+    // same signal, so ReplayGain goes to `no` — and `#replayGainMode` means we
+    // know whether it was on without reading mpv back, so the ordinary case
+    // (ReplayGain never enabled) writes one property and not two.
+    if (enabled && this.#replayGainMode !== 'no') {
+      this.#setString(MpvProperty.replayGain, 'no')
+      this.#replayGainMode = 'no'
+    }
   }
 
   /**
@@ -3557,22 +3786,62 @@ export class Player {
   }
 
   /**
-   * The full `af` chain: the user half first (signal-flow order is chain
-   * order), then the managed loudness-normalization entry, which must hear the
-   * user chain's output to normalize what is actually audible.
+   * The ReplayGain mode mpv currently has — including one this player switched
+   * off on your behalf.
    *
-   * `managed` is an explicit parameter, never defaulted from the field: both
-   * callers write the property *before* committing their half, so the value to
-   * compose with is "the half that is not changing" — which for
+   * This is what makes the mutual exclusion with
+   * {@link setLoudnessNormalization} *observable* rather than merely true:
+   * after `setLoudnessNormalization(true)` this reads `'no'`, and after
+   * `setReplayGain({ mode: 'album' })` {@link getLoudnessNormalization} reads
+   * `undefined`. Two mutually exclusive switches whose UI cannot see which one
+   * won is how "everything is 3 dB too loud" survives a code review.
+   *
+   * Bookkeeping, not an mpv read — a raw `setPropertyString('replaygain', …)`
+   * through the escape hatch is invisible to it, exactly like the `af` halves.
+   */
+  getReplayGainMode(): ReplayGainMode {
+    this.#assertAlive('getReplayGainMode')
+    return this.#replayGainMode
+  }
+
+  /**
+   * The full `af` chain: the managed equaliser half, then the user half, then
+   * the managed loudness-normalization entry. See
+   * {@link setEqualizerFilters} for why that order.
+   *
+   * **Every parameter is explicit, never defaulted from a field.** All three
+   * callers write the property *before* committing their own half, so the
+   * values to compose with are "the halves that are not changing" — which for
    * `setLoudnessNormalization(false)` is honestly `undefined`, not the entry
    * still sitting in the field. (A default parameter here was the first bug
    * this method had.)
    */
   #composeAudioFilters(
     userFilters: readonly AudioFilter[],
+    equalizerFilters: readonly AudioFilter[] | undefined,
     managed: AudioFilter | undefined
   ): readonly AudioFilter[] {
-    return managed === undefined ? userFilters : [...userFilters, managed]
+    const equalizer = equalizerFilters ?? []
+    // The common case — nothing managed — returns the user half untouched, so
+    // a player with no EQ screen and no normalization allocates nothing here.
+    if (equalizer.length === 0 && managed === undefined) return userFilters
+    const chain = [...equalizer, ...userFilters]
+    if (managed !== undefined) chain.push(managed)
+    return chain
+  }
+
+  /** Compile and write the three halves to mpv's `af`. One property write. */
+  #writeAudioFilters(
+    userFilters: readonly AudioFilter[],
+    equalizerFilters: readonly AudioFilter[] | undefined,
+    managed: AudioFilter | undefined
+  ): void {
+    this.#setString(
+      MpvProperty.audioFilters,
+      compileAudioFilters(
+        this.#composeAudioFilters(userFilters, equalizerFilters, managed)
+      )
+    )
   }
 
   /**
@@ -3976,6 +4245,11 @@ export class Player {
       // swallowing it here is the only way to keep destroy idempotent and
       // total. Nothing downstream can act on it.
     }
+    // AFTER the core, deliberately: these descriptors are what mpv is reading
+    // from, and `client.destroy()` is what shuts its streams down. Closing them
+    // first would pull the file out from under a demuxer that is still running
+    // on mpv's own thread.
+    this.#contentUri?.destroy()
   }
 
   // -------------------------------------------------------------------------
@@ -4138,6 +4412,55 @@ export class Player {
    * destroyed flag — is re-read here rather than captured, so a `destroy()` (or
    * a resolver removal) in a listener between the two is seen.
    */
+  /**
+   * Switch the Android `content://` rewrite on, if any of `sources` needs it.
+   *
+   * @param sources - The URIs about to be loaded. Anything empty is ignored.
+   *
+   * @remarks
+   * **Lazy on purpose, and the laziness is the performance story.** Arming the
+   * rewrite arms mpv's load hooks, which means every load boundary from then on
+   * crosses into JavaScript to be answered. A player that plays `https://` and
+   * `file://` — which is most of them — never pays that, because this only
+   * fires when a `content://` URI is actually handed to `load()`,
+   * `loadPlaylist()` or `playlist.add()`. Once armed it stays armed for the
+   * player's life: the queue can still hold URIs that need it.
+   *
+   * **A platform without the binding is not an error here.** iOS has no
+   * `content://` scheme, and an Android app built before this shipped has no
+   * `RnMediaContentSource` — in both cases the URI reaches mpv unchanged and
+   * fails the way it always did, as a typed error. Throwing from `load()` for a
+   * platform fact would be worse: it would turn a JavaScript-only update into a
+   * crash on the old binary.
+   */
+  #armContentUri(sources: readonly (string | undefined)[]): void {
+    if (this.#contentUri !== undefined) return
+    let needed = false
+    for (const source of sources) {
+      if (source !== undefined && source !== '' && isContentUri(source)) {
+        needed = true
+        break
+      }
+    }
+    if (!needed) return
+    const opener = getContentUriOpener()
+    if (opener === undefined) return
+    const resolver = new ContentUriResolver(opener)
+    this.#contentUri = resolver
+    try {
+      this.#resolution?.armBuiltIn()
+    } catch (thrown) {
+      // Arming is one `installSourceResolver` and it only fails if mpv itself
+      // refused the hook. Roll the field back so the *next* `content://` load
+      // tries again rather than running with a rewrite that can never fire,
+      // then report through the same typed channel every other load failure
+      // uses — the caller is `load()`, which has somewhere to throw.
+      this.#contentUri = undefined
+      resolver.destroy()
+      throw new PlayerErrorException(toPlayerError(thrown, this.#currentUri))
+    }
+  }
+
   #resolveAhead(): void {
     if (this.#destroyed) return
     const resolution = this.#resolution

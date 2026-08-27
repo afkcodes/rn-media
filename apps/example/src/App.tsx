@@ -67,6 +67,7 @@ import { CastSection } from './components/CastSection'
 import { useCastProgress } from './components/useCastProgress'
 import { ErrorBanner } from './components/ErrorBanner'
 import { EqualizerSection } from './components/EqualizerSection'
+import { ContentUriProbe } from './components/ContentUriProbe'
 import { LoudnessSection } from './components/LoudnessSection'
 import { NowPlaying } from './components/NowPlaying'
 import { OutputControls } from './components/OutputControls'
@@ -285,6 +286,10 @@ function App(): React.JSX.Element {
         {/* Deliberately adjacent to ReplayGain: both level loudness, and the
             section copy says why an app should ship one of them, not both. */}
         <LoudnessSection player={player} />
+
+        {/* Dev-only, and renders nothing in a release build: the on-device
+            harness for Android `content://` playback (ARCHITECTURE §32). */}
+        <ContentUriProbe player={player} />
 
         <EqualizerSection player={player} />
 

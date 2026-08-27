@@ -1191,3 +1191,116 @@ describe('bufferingPercent', () => {
     ).toBeUndefined()
   })
 })
+
+/**
+ * `positionAnchorMs` — the same anchor in the units every remote surface
+ * speaks.
+ *
+ * The pitfall this closes was in the README's own list: *"the lock-screen
+ * scrubber is off by 1000×"*, because `media-session`'s anchor is milliseconds
+ * (`{ value, at, rate }`) and `PlayerState.positionAnchor` is seconds
+ * (`{ position, timestamp, rate }`). Converting at the call site is a factor of
+ * a thousand waiting to be typed wrong, so the reducer does it — once, on the
+ * discontinuities that already exist, and never per frame.
+ */
+describe('positionAnchorMs', () => {
+  it('mirrors the seconds anchor, in milliseconds', () => {
+    const state = run(loadedAndPlaying(), [seekEvent(), playbackRestartEvent()], {
+      now: T0 + 5_000,
+      timePos: 42.5,
+    })
+    expect(state.positionAnchor).toEqual({
+      position: 42.5,
+      timestamp: T0 + 5_000,
+      rate: 1,
+    })
+    expect(state.positionAnchorMs).toEqual({
+      value: 42_500,
+      at: T0 + 5_000,
+      rate: 1,
+    })
+  })
+
+  it('reports rate 0 whenever the position is not advancing', () => {
+    // Paused. `positionAnchor.rate` is mpv's `speed` and stays 1 — the local
+    // projection gates on `playing`/`status` separately. A remote surface has
+    // no such gate: it projects `value + elapsed × rate` and nothing else, so
+    // a rate of 1 here would run the lock-screen scrubber over a paused track.
+    const paused = run(loadedAndPlaying(), [
+      propertyEvent(MpvProperty.pause, true),
+    ])
+    expect(paused.positionAnchor.rate).toBe(1)
+    expect(paused.positionAnchorMs.rate).toBe(0)
+
+    // Idle, from the start.
+    expect(createInitialState(T0).positionAnchorMs).toEqual({
+      value: 0,
+      at: T0,
+      rate: 0,
+    })
+
+    // Loading — a fresh entry, nothing decoded yet.
+    const loading = run(createInitialState(T0), [startFileEvent()])
+    expect(loading.status).toBe('loading')
+    expect(loading.positionAnchorMs.rate).toBe(0)
+  })
+
+  it('carries the playback rate through when it IS advancing', () => {
+    const fast = run(loadedAndPlaying(), [propertyEvent(MpvProperty.speed, 1.5)])
+    expect(fast.positionAnchorMs.rate).toBe(1.5)
+  })
+
+  it('is recomputed on a discontinuity, and NOT on anything else', () => {
+    let state = loadedAndPlaying()
+    const anchor = state.positionAnchorMs
+
+    // Twenty events that move something other than the clock. Each may or may
+    // not produce a new snapshot; none of them may produce a new anchor, and
+    // identity is how that is asserted — a fresh object here would wake every
+    // surface subscribed to the scrubber.
+    for (let index = 0; index < 20; index += 1) {
+      state = run(state, [
+        propertyEvent(MpvProperty.volume, 50 + index),
+        propertyEvent(MpvProperty.mediaTitle, `title ${String(index)}`),
+        propertyEvent(MpvProperty.demuxerCacheTime, 0.01 * index),
+      ])
+      expect(state.positionAnchorMs).toBe(anchor)
+    }
+
+    // …and one that does: a pause is a discontinuity for the projection clock.
+    const paused = run(state, [propertyEvent(MpvProperty.pause, true)])
+    expect(paused.positionAnchorMs).not.toBe(anchor)
+    expect(paused.positionAnchorMs.rate).toBe(0)
+  })
+
+  it('is kept in step by the out-of-band producers too', () => {
+    // `withResyncedAnchor` (the one-shot `time-pos` read) and
+    // `clearPlayerError` both mint snapshots without going through
+    // `reducePlayerState`. Two anchors for one fact must not be able to
+    // disagree depending on which door the snapshot came out of.
+    const resynced = withResyncedAnchor(loadedAndPlaying(), 12.25, T0 + 9_000)
+    expect(resynced.positionAnchorMs).toEqual({
+      value: 12_250,
+      at: T0 + 9_000,
+      rate: 1,
+    })
+
+    const failed = run(loadedAndPlaying(), [
+      endFileEvent('error', 'Failed to open.'),
+    ])
+    expect(failed.status).toBe('error')
+    const cleared = clearPlayerError(failed)
+    expect(cleared.positionAnchorMs.at).toBe(cleared.positionAnchor.timestamp)
+    expect(cleared.positionAnchorMs.rate).toBe(0)
+  })
+
+  it('anchors at the duration when a track ends', () => {
+    const ended = run(loadedAndPlaying(), [endFileEvent('endOfFile')])
+    expect(ended.status).toBe('ended')
+    expect(ended.positionAnchorMs).toEqual({
+      value: 180_000,
+      at: T0,
+      rate: 0,
+    })
+  })
+})

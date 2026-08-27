@@ -102,6 +102,20 @@ export const DEFAULT_RESOLVER_TIMEOUT_MS = 10_000
  */
 export const DEFAULT_RESOLVER_TTL_MS = 600_000
 
+/**
+ * A rewrite this library performs itself, before and after the app's resolver.
+ *
+ * Today there is exactly one: Android's `content://` → `fd://` (see
+ * `src/content-uri.ts`). It is a *stage of the same seam* rather than a second
+ * mechanism, so an app that installs a resolver and an app that does not get
+ * the same rewrite, with the same caching and the same determinism guarantee.
+ *
+ * @param uri - The URI as it stands at this point in the pipeline.
+ * @returns The URL to use, or `uri` unchanged when there is nothing to do.
+ * @throws A typed error the controller reports on its error channel.
+ */
+export type BuiltInSourceRewrite = (uri: string) => string
+
 /** What {@link SourceResolverController} needs from its owner. */
 export interface SourceResolverOptions {
   /** Play-time hold budget in milliseconds. */
@@ -112,6 +126,13 @@ export interface SourceResolverOptions {
   readonly onError: (error: PlayerError) => void
   /** Clock used for TTL bookkeeping. Injected by tests. */
   readonly now: () => number
+  /**
+   * The library's own rewrite, if this platform has one. Dormant until
+   * {@link SourceResolverController.armBuiltIn} is called, so a player that
+   * never loads a URI needing it never crosses into JavaScript at a load
+   * boundary.
+   */
+  readonly builtIn?: BuiltInSourceRewrite
 }
 
 interface CacheEntry {
@@ -152,6 +173,8 @@ export class SourceResolverController {
   #resolver: SourceResolver | undefined
   #generation = 0
   #destroyed = false
+  /** Whether the built-in rewrite is switched on for this player. */
+  #builtInArmed = false
 
   /**
    * @param client - The player's mpv binding.
@@ -162,9 +185,42 @@ export class SourceResolverController {
     this.#options = options
   }
 
-  /** Whether a resolver is currently installed. */
+  /**
+   * Whether anything is resolving — the app's resolver, the built-in stage, or
+   * both. This is what decides whether mpv's hooks answer from JavaScript.
+   */
   get installed(): boolean {
+    return this.#resolver !== undefined || this.#builtInArmed
+  }
+
+  /** Whether the app has installed a resolver of its own. */
+  get hasResolver(): boolean {
     return this.#resolver !== undefined
+  }
+
+  /**
+   * Switch the built-in rewrite on for this player. Idempotent.
+   *
+   * Called the first time a URI that needs it is loaded — never at creation —
+   * so a player that only ever plays `https://` and `file://` sources keeps
+   * mpv's load hooks answering natively, with no JavaScript on the load path at
+   * all. Once armed it stays armed: the queue can still hold URIs that need it,
+   * and disarming would be a second state to get wrong for no measurable gain.
+   *
+   * @throws Whatever `installSourceResolver` throws — this is called from
+   * `load()`, which has a caller to reject.
+   */
+  armBuiltIn(): void {
+    if (this.#destroyed || this.#builtInArmed) return
+    if (this.#options.builtIn === undefined) return
+    this.#builtInArmed = true
+    try {
+      // Idempotent on the native side, and registers nothing: see `set()`.
+      this.#client.installSourceResolver(this.#options.timeoutMs)
+    } catch (thrown) {
+      this.#builtInArmed = false
+      throw thrown
+    }
   }
 
   /**
@@ -189,6 +245,14 @@ export class SourceResolverController {
     if (resolver === null) {
       if (this.#resolver === undefined) return
       this.#resolver = undefined
+      if (this.#builtInArmed) {
+        // The built-in stage still needs the native handler armed, so the
+        // handler stays and only its cache is dropped. Removing an app's
+        // resolver must not also switch off a rewrite the app never asked for
+        // and cannot see.
+        this.#client.clearResolvedSources()
+        return
+      }
       // Disarms the native handler and clears its cache. mpv keeps the hook
       // registrations (it has no unregister call), but a disarmed handler
       // continues every hook immediately and unrewritten — i.e. stock mpv.
@@ -225,7 +289,7 @@ export class SourceResolverController {
    * @param uris - Logical URIs, in priority order. Anything falsy is ignored.
    */
   resolveAhead(uris: readonly string[]): void {
-    if (this.#destroyed || this.#resolver === undefined) return
+    if (this.#destroyed || !this.installed) return
     for (const uri of uris) {
       if (uri === '') continue
       if (this.#fresh(uri) !== undefined) continue
@@ -247,7 +311,7 @@ export class SourceResolverController {
    */
   handleRequest(request: SourceResolutionRequest): void {
     const { uri } = request
-    if (this.#destroyed || this.#resolver === undefined) {
+    if (this.#destroyed || !this.installed) {
       // No resolver (it was removed between the hook firing and this callback
       // landing). Release the hold at once rather than making mpv wait out the
       // full timeout for an answer nobody is going to give.
@@ -304,7 +368,10 @@ export class SourceResolverController {
     if (existing !== undefined) return existing
 
     const resolver = this.#resolver
-    if (resolver === undefined) return Promise.resolve(undefined)
+    const builtIn = this.#builtInArmed ? this.#options.builtIn : undefined
+    if (resolver === undefined && builtIn === undefined) {
+      return Promise.resolve(undefined)
+    }
 
     const request: SourceResolutionRequest =
       entryId === undefined ? { uri } : { uri, entryId }
@@ -318,13 +385,26 @@ export class SourceResolverController {
     const pending = Promise.resolve().then(
       async (): Promise<string | undefined> => {
         try {
-          const resolved = await resolver(request)
-          if (typeof resolved !== 'string' || resolved === '') {
+          // The built-in stage runs on BOTH sides of the app's resolver, and
+          // both passes are idempotent (its output is never an input it
+          // recognises) and share one cache, so this is at most two prefix
+          // comparisons. Going in, so a `content://` sitting in the queue is
+          // already an `fd://` when the app's resolver sees it — the app then
+          // does what it does with every URI it did not mint and returns it
+          // unchanged. Coming out, so an app resolver that *produces* a
+          // `content://` (a library id resolved to a MediaStore row) works too;
+          // without that pass its answer would reach mpv unopenable.
+          const seed = builtIn === undefined ? uri : builtIn(uri)
+          if (resolver === undefined) return seed
+          const answer = await resolver(
+            seed === uri ? request : { ...request, uri: seed }
+          )
+          if (typeof answer !== 'string' || answer === '') {
             throw new Error(
-              `the resolver returned ${resolved === '' ? 'an empty string' : String(resolved)} instead of a URL`
+              `the resolver returned ${answer === '' ? 'an empty string' : String(answer)} instead of a URL`
             )
           }
-          return resolved
+          return builtIn === undefined ? answer : builtIn(answer)
         } catch (thrown) {
           // Not swallowed and not cached: the caller hears about it on the typed
           // `error` channel, and mpv is left to open the logical URI and fail on
