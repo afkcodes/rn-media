@@ -18,7 +18,7 @@ here; that is how this repo keeps its memory (see 33a36ff, 78835dd).
 - [ ] `npm run typecheck` clean
 - [ ] `npm test` for every package touched
 - [ ] `npm run test:cpp --prefix packages/player` (C++ changes)
-- [ ] `./gradlew :app:assembleDebug` + `:rn-media_*:lintRelease` (Android changes)
+- [ ] `./gradlew :app:assembleDebug` + `:timbre_*:lintRelease` (Android changes)
 - [ ] New behaviour has a regression test, or a note on why one is not feasible
 - [ ] **Verified on a physical Android device** (never an emulator) — say which
       device, OS version, and what you observed:

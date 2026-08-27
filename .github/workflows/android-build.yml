@@ -124,10 +124,10 @@ jobs:
         working-directory: apps/example/android
         run: >-
           ./gradlew
-          :rn-media_player:lintRelease
-          :rn-media_audio-session:lintRelease
-          :rn-media_media-session:lintRelease
-          :rn-media_cast:lintRelease
+          :timbre_player:lintRelease
+          :timbre_audio-session:lintRelease
+          :timbre_media-session:lintRelease
+          :timbre_cast:lintRelease
           -PreactNativeArchitectures=arm64-v8a
           --no-daemon --build-cache
 
@@ -148,8 +148,8 @@ jobs:
         working-directory: apps/example/android
         run: >-
           ./gradlew
-          :rn-media_media-session:testDebugUnitTest
-          :rn-media_cast:testDebugUnitTest
+          :timbre_media-session:testDebugUnitTest
+          :timbre_cast:testDebugUnitTest
           -PreactNativeArchitectures=arm64-v8a
           --no-daemon --build-cache
 
