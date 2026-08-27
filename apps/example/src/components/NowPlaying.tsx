@@ -13,7 +13,7 @@
  *   `media-title`, i.e. what the station says is on air *right now*;
  * - the **station line** under it comes from the `metadataChanged` event
  *   (`icy-name`/`icy-genre`/`icy-br`) — see the wiring in
- *   `src/playback/engine.ts`.
+ *   `src/playback.ts`.
  *
  * The clock is `useProgress`, which projects the position locally from the
  * player's anchor: nothing is polled across the bridge, and the ticker stops
@@ -33,7 +33,7 @@ import { Image, StyleSheet, Text, View } from 'react-native'
 import type { ChapterEntry, Progress } from '@timbre/player'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { Track } from '../data/tracks'
-import type { ShellState } from '../playback/shell'
+import type { ShellState } from '../projections'
 import { SeekBar, formatTime } from './SeekBar'
 import { Dot } from './ui'
 

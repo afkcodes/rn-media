@@ -1,51 +1,22 @@
 /**
- * `@rn-media` reference integration — the composition root.
+ * Timbre — the reference integration, wired the simple way.
  *
- * Wires all three packages together the way a real app should:
- *
- * - `@timbre/player`      — one mpv core playing a 7-entry mpv playlist.
- * - `@timbre/audio-session` — focus is requested before playback, and
- *                              interruptions / headphone unplugs are handled
- *                              by `wireAudioSession`.
- * - `@timbre/media-session` — a `MediaHandler` subclass behind every remote
- *                              surface (notification, lock screen, Bluetooth),
- *                              fed by three broadcast channels.
+ * This screen is **hooks-first**: it reads the player through `usePlayerState`
+ * and `useProgress` and reads the handful of app-owned facts (queue, station,
+ * errors, restore note) through `usePlayback`. It calls plain command functions
+ * from `playback.ts` for everything else. There is no controller object — the
+ * player, the audio session and the media session all live at module scope in
+ * `playback.ts` (so they outlive this React tree, which on Android is destroyed
+ * on the Back key), and this file only ever draws them.
  *
  * The one rule worth internalising: **broadcast state, never poll it.** The
- * position that moves on the lock screen is projected natively from the anchor
- * this app pushes on discontinuities only; nothing ticks across the bridge.
+ * position that moves on the lock screen is projected natively from an anchor
+ * pushed on discontinuities only; nothing ticks across the bridge.
  *
- * ## The screen
- *
- * Flat and card-less on purpose: whitespace groups, hairline rules, uppercase
- * micro labels, one accent. The artwork and title carry the visual weight;
- * every control is quiet. The layout is a single scroll of feature groups —
- * hero, transport, status strips, queue, modes, output, DSP, visualizer,
- * timers, persistence — one component file per group.
- *
- * ## Where everything lives
- *
- * ```
- * src/data/tracks.ts      the demo queue, and nothing else
- * src/playback/           no React: player, audio session, media session
- *   controller.ts           the commands the UI and the remotes both call
- *   engine.ts               create the player → wire audio → subscribe → load
- *   transport.ts            play/pause/skip/seek, all behind the focus gate
- *   queue.ts                mpv's queue joined to this app's metadata + its edits
- *   output.ts               engine options changeable live (ReplayGain, prefetch)
- *   session.ts              fan-out — the three broadcast channels
- *   handler.ts              fan-in — every remote surface funnels here
- *   broadcast.ts            PlayerState → media-session shapes (pure)
- *   shell.ts                PlayerState → what this screen draws (pure)
- *   persistence.ts          storage + the typed restore result
- *   resolver.ts             demo:// → real URLs
- *   index.ts                the process-scoped instance + `usePlayback`
- * src/components/         one file per surface, self-contained
- * ```
- *
- * The split is not decoration: everything under `src/playback/` keeps working
- * after the React tree is gone, which on Android is every time the user presses
- * Back. See the header of `controller.ts`.
+ * Everything a first app writes is on the first screen (now playing, transport,
+ * a queue, EQ, cast, a sleep timer). Everything it does not — output routing,
+ * ReplayGain, loudness, the `content://` probe, the car browse tree — is behind
+ * the collapsed “Advanced” drawer at the bottom.
  */
 import React from 'react'
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native'
@@ -57,65 +28,66 @@ import {
   type ChapterEntry,
 } from '@timbre/player'
 import { COLORS, SPACE, TYPE } from './theme'
-import { usePlayback } from './playback'
-import { durationMs, nowPlaying } from './playback/broadcast'
-import { runCastSelfTest } from './playback/cast-selftest'
-import { isSignInRequired, setSignInRequired } from './playback/browse'
-import { sameShell, selectShell } from './playback/shell'
-import { formatTime } from './components/SeekBar'
-import { CastSection } from './components/CastSection'
-import { useCastProgress } from './components/useCastProgress'
-import { ErrorBanner } from './components/ErrorBanner'
-import { EqualizerSection } from './components/EqualizerSection'
-import { ContentUriProbe } from './components/ContentUriProbe'
-import { LoudnessSection } from './components/LoudnessSection'
+import * as pb from './playback'
+import { durationMs, nowPlaying, sameShell, selectShell } from './projections'
+import { runCastSelfTest } from './advanced/cast-selftest'
+import { AdvancedSection } from './advanced'
 import { NowPlaying } from './components/NowPlaying'
-import { OutputControls } from './components/OutputControls'
-import { PersistenceNote } from './components/PersistenceNote'
-import { PlaybackModes } from './components/PlaybackModes'
-import { PrefetchBanner } from './components/PrefetchBanner'
+import { TransportControls } from './components/TransportControls'
 import { RetryBanner } from './components/RetryBanner'
-import { CarSection } from './components/CarSection'
+import { ErrorBanner } from './components/ErrorBanner'
 import { SessionErrorBanner } from './components/SessionErrorBanner'
 import { QueueList } from './components/QueueList'
-import { ReplayGainToggle } from './components/ReplayGainToggle'
-import { SleepTimerSection } from './components/SleepTimerSection'
-import { TransportControls } from './components/TransportControls'
+import { PlaybackModes } from './components/PlaybackModes'
+import { CastSection } from './components/CastSection'
+import { useCastProgress } from './components/useCastProgress'
+import { EqualizerSection } from './components/EqualizerSection'
 import { VisualizerSection } from './components/VisualizerSection'
+import { SleepTimerSection } from './components/SleepTimerSection'
+import { PersistenceNote } from './components/PersistenceNote'
 
 function App(): React.JSX.Element {
-  const { player, playback } = usePlayback()
-  // Selector-scoped, not the whole snapshot: see `playback/shell.ts`. The
-  // selector and its comparison are module-level functions so their identities
-  // are stable across renders — an inline arrow here would rebuild the
-  // subscription every time and defeat the memoisation inside the hook.
+  // App-owned facts + the player instance. Player STATE has its own subscription
+  // below — this one fires only for the queue, the station line, errors and the
+  // restore note, which change a handful of times per session.
+  const {
+    player,
+    cast,
+    queueRows,
+    queue,
+    station,
+    retrying,
+    error,
+    errorAttempts,
+    sessionError,
+    shuffleEnabled,
+    restoreNote,
+  } = pb.usePlayback()
+
+  // Selector-scoped, not the whole snapshot: a buffered-position tick must not
+  // re-render the tree. Module-level functions so their identity is stable.
   const shell = usePlayerState(player, selectShell, sameShell)
   // Its own ticker, so only the clock line and the scrubber re-render.
   const progress = useProgress(player)
-  // Scrobbling, the honest way: milestones are a HOOK, not a player feature,
-  // because a mid-track time event needs a tick and this design has none — a
-  // timer inside the player would freeze with the screen off. This one rides
-  // the ticker `useProgress` already runs and starts nothing of its own.
-  useMilestones(player, ({ percent, index }) => {
+  // Scrobbling the honest way: milestones ride the ticker `useProgress` already
+  // runs — a timer inside the player would freeze with the screen off.
+  useMilestones(player, ({ percent, index }) =>
     console.log(`[example] milestone ${String(percent)}% of entry ${String(index)}`)
-  })
+  )
 
-  // While casting the RECEIVER owns the clock: its anchor (projected on a UI
-  // ticker) replaces the local player's progress, and the current row is the
-  // receiver's reconciled queue index — so the hero, the scrubber and the
-  // notification all describe the same playback, which is the §3 contract.
-  const castProgress = useCastProgress(playback)
+  // While casting the RECEIVER owns the clock: its projected anchor replaces the
+  // local player's progress and the current row is the receiver's queue index —
+  // so the hero, the scrubber and the notification all describe the same audio.
+  const castProgress = useCastProgress(cast)
   const casting = castProgress !== undefined
-  const index = playback.cast.receiverIndex ?? shell.index
+  const index = cast.receiverIndex ?? shell.index
 
   const ready = player !== undefined
-  // The queue is app state, not player state — it can be edited — so the
-  // current track is looked up here, where both subscriptions have been read.
-  const track = playback.queue[index]
-  // The same duration the media session gets: `undefined` for a live stream,
-  // where mpv's raw `state.duration` is just how much it has cached. One
-  // function, so the notification and this screen cannot disagree. While
-  // casting, the receiver's duration is that number.
+  // The queue is app state (it can be edited), so the current track is looked up
+  // here, where both subscriptions have been read.
+  const track = queue[index]
+  // The same duration the media session gets: `undefined` on a live stream. One
+  // function, so the notification and this screen cannot disagree.
   const published = casting
     ? castProgress.duration === undefined
       ? undefined
@@ -123,197 +95,120 @@ function App(): React.JSX.Element {
     : track === undefined
       ? undefined
       : durationMs(track, shell)
-  const song =
-    track === undefined || casting ? undefined : nowPlaying(track, shell)
+  const song = track === undefined || casting ? undefined : nowPlaying(track, shell)
   const live = track?.isLive === true || (!casting && progress.isLive)
-  // Chapters are a PULL, like the queue's contents: one node read, taken when
-  // the entry changes rather than kept in state and pushed on every update.
-  // Most entries have none, and this costs exactly one native call per track.
+  const playing = casting ? cast.receiver?.playing === true : shell.playing
+
+  // Chapters are a pull, like the queue's contents: one node read when the entry
+  // changes, not kept in state. Most tracks have none.
   const [chapters, setChapters] = React.useState<readonly ChapterEntry[]>([])
-  // The browse tree's sign-in simulation. Module state in `browse.ts` is the
-  // source of truth (the handler reads it from a thread with no React), and
-  // this mirrors it so the chip re-renders.
-  const [signInRequired, setSignInRequiredState] = React.useState(
-    isSignInRequired()
-  )
   React.useEffect(() => {
-    setChapters(ready ? playback.chapters() : [])
-  }, [playback, ready, shell.index, shell.status])
+    setChapters(ready ? pb.getChapters() : [])
+  }, [ready, shell.index, shell.status])
 
   return (
     <SafeAreaView style={styles.screen}>
-      {/*
-        No `backgroundColor`: React Native 0.87 removed the prop (it was a
-        no-op under the edge-to-edge display that Android 15+ enforces for
-        targetSdk 35+). The status bar takes the window background instead,
-        which `styles.screen` already paints with the same COLORS.background.
-      */}
       <StatusBar barStyle="light-content" />
       <ScrollView
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.wordmark}>rn-media</Text>
-          <Text style={styles.kicker}>reference integration</Text>
+          <Text style={styles.wordmark}>Timbre</Text>
+          <Text style={styles.kicker}>now playing</Text>
         </View>
 
         <NowPlaying
           track={track}
           shell={shell}
           progress={castProgress ?? progress}
-          station={playback.station}
+          station={station}
           song={song}
           durationMs={published}
           live={live}
           ready={ready}
           chapters={chapters}
-          onSeek={(seconds) => playback.seekTo(seconds)}
+          onSeek={pb.seekTo}
         />
 
         <TransportControls
-          playing={casting ? playback.cast.receiver?.playing === true : shell.playing}
+          playing={playing}
           ready={ready}
           hasNext={shell.hasNext}
           hasPrevious={shell.hasPrevious}
-          onPrevious={() => playback.previous()}
-          onToggle={() => playback.toggle()}
-          onNext={() => playback.next()}
-          onSeekBy={(delta) => playback.seekBy(delta)}
-          onStop={() => void playback.stop()}
+          onPrevious={pb.previous}
+          onToggle={pb.toggle}
+          onNext={pb.next}
+          onSeekBy={pb.seekBy}
+          onStop={() => void pb.stopSession()}
         />
 
-        {/* While the player is re-attempting a failed entry, NO `error` event
-            fires — an app that only drew the banner below would show nothing at
-            all while a stream reconnects. */}
-        <RetryBanner note={playback.retrying} />
-
-        {/* `retryable` comes from the error itself; this screen keeps no table
-            of which codes are worth retrying. `Dismiss` calls
-            `player.clearError()`, which clears STATE only — the event already
-            fired and is already in the log. */}
+        {/* While the player re-attempts a failed entry NO `error` event fires —
+            an app that only drew the error banner would show nothing at all. */}
+        <RetryBanner note={retrying} />
         <ErrorBanner
-          error={playback.error ?? shell.error}
-          attempts={playback.errorAttempts}
-          onRetry={() => void playback.jumpTo(shell.index)}
-          onDismiss={() => playback.dismissError()}
+          error={error ?? shell.error}
+          attempts={errorAttempts}
+          onRetry={() => void pb.jumpTo(shell.index)}
+          onDismiss={pb.dismissError}
         />
-
-        {/* The other half of "no swallowed errors": everything above is about
-            the PLAYER failing, this is the media SESSION failing — a refused
-            foreground service, an icon that does not resolve, a cover that
-            404s. All of it used to be a native log line and nothing an app
-            could see. Severity and message are the library's; this screen adds
-            a headline and a colour. */}
-        <SessionErrorBanner
-          error={playback.sessionError}
-          onDismiss={() => playback.dismissSessionError()}
-        />
-
-        {/* The banner's state IS the library's `usePrefetchStatus` hook — the
-            app wires no events and keeps no note. See the component header. */}
-        <PrefetchBanner
-          player={player}
-          enabled={playback.prefetchEnabled}
-          ready={ready}
-          onToggle={(enabled) => playback.setPrefetchEnabled(enabled)}
-        />
+        {/* The media SESSION failing (a refused foreground service, a 404 cover)
+            — everything above is the PLAYER failing. */}
+        <SessionErrorBanner error={sessionError} onDismiss={pb.dismissSessionError} />
 
         <QueueList
-          queue={playback.queueRows}
+          queue={queueRows}
           index={index}
-          playing={casting ? playback.cast.receiver?.playing === true : shell.playing}
+          playing={playing}
           ready={ready}
-          onJump={(index) => void playback.jumpTo(index)}
-          onPlayNext={(item) => void playback.playNext(item)}
-          onAddLast={(item) => void playback.addLast(item)}
-          onRemove={(index) => void playback.removeAt(index)}
-          onClear={() => void playback.clearQueue()}
+          onJump={(i) => void pb.jumpTo(i)}
+          onPlayNext={(item) => void pb.playNext(item)}
+          onAddLast={(item) => void pb.addLast(item)}
+          onRemove={(i) => void pb.removeAt(i)}
+          onClear={() => void pb.clearQueue()}
         />
 
-        {/* Cast is a URL handoff to a second, remote player behind the same
-            broadcast channels: while casting, the transport above and the
-            notification both steer the RECEIVER, because the controller
-            forwards every command to whichever backend owns playback. */}
-        <CastSection
-          cast={playback.cast}
-          queue={playback.queue}
-          ready={ready}
-          onSelfTest={() => runCastSelfTest(playback)}
-        />
-
-        {/* Repeat renders from the player (`shell.loop`), shuffle from the
-            controller — the same two sources the media-session broadcast
-            projects, so this row and the notification cannot disagree. */}
+        {/* Repeat renders from the player (`shell.loop`), shuffle from app state
+            — the same two sources the broadcast projects, so this row and the
+            notification cannot disagree. */}
         <PlaybackModes
           loop={shell.loop}
-          shuffleEnabled={playback.shuffleEnabled}
+          shuffleEnabled={shuffleEnabled}
           ready={ready}
-          onRepeatMode={(mode) => playback.setRepeatMode(mode)}
-          onShuffle={(enabled) => void playback.setShuffleEnabled(enabled)}
+          onRepeatMode={pb.setRepeatMode}
+          onShuffle={(enabled) => void pb.setShuffleEnabled(enabled)}
         />
 
-        {/* While casting, the volume row shows and drives the SPEAKER's
-            device volume — the controller routes `setVolume` to whichever
-            output owns playback, and this reads the matching fact back. */}
-        <OutputControls
-          rate={shell.rate}
-          pitch={shell.pitch}
-          volume={
-            casting
-              ? (playback.cast.deviceVolume?.volume ?? shell.volume)
-              : shell.volume
-          }
-          muted={
-            casting ? playback.cast.deviceVolume?.muted === true : shell.muted
-          }
-          buffered={formatTime(progress.buffered)}
+        {/* Cast is a URL handoff to a second player behind the same broadcast
+            channels: while casting, the transport above and the notification
+            both steer the RECEIVER. */}
+        <CastSection
+          cast={cast}
+          queue={queue}
           ready={ready}
-          onRate={(rate) => playback.setRate(rate)}
-          onPitchSemitones={(semitones) =>
-            playback.setPitchSemitones(semitones)
-          }
-          onVolume={(volume) => playback.setVolume(volume)}
-          onToggleMute={() => playback.toggleMuted()}
+          onSelfTest={() => runCastSelfTest()}
         />
-
-        <ReplayGainToggle
-          mode={playback.replayGain}
-          ready={ready}
-          onChange={(mode) => playback.setReplayGain(mode)}
-        />
-
-        {/* Deliberately adjacent to ReplayGain: both level loudness, and the
-            section copy says why an app should ship one of them, not both. */}
-        <LoudnessSection player={player} />
-
-        {/* Dev-only, and renders nothing in a release build: the on-device
-            harness for Android `content://` playback (ARCHITECTURE §32). */}
-        <ContentUriProbe player={player} />
 
         <EqualizerSection player={player} />
 
         <VisualizerSection player={player} />
 
-        <CarSection
-          signInRequired={signInRequired}
-          onToggleSignIn={(required) => {
-            setSignInRequired(required)
-            setSignInRequiredState(required)
-            // A car already showing a list does not ask again on its own.
-            playback.invalidateBrowse()
-          }}
-        />
-
         <SleepTimerSection
           ready={ready}
-          getTimer={() => playback.sleepTimer()}
-          onArm={(seconds) => playback.setSleepTimer(seconds)}
-          onArmTrackEnd={() => playback.setSleepTimerToTrackEnd()}
-          onCancel={() => playback.cancelSleepTimer()}
+          getTimer={pb.getSleepTimer}
+          onArm={pb.setSleepTimer}
+          onArmTrackEnd={pb.setSleepTimerToTrackEnd}
+          onCancel={pb.cancelSleepTimer}
         />
 
-        <PersistenceNote note={playback.restoreNote} />
+        <AdvancedSection
+          player={player}
+          shell={shell}
+          buffered={progress.buffered}
+          ready={ready}
+        />
+
+        <PersistenceNote note={restoreNote} />
       </ScrollView>
     </SafeAreaView>
   )
@@ -325,21 +220,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACE.xl,
     paddingTop: SPACE.lg,
     paddingBottom: SPACE.section * 2,
-    // Whitespace is the container: one generous, uniform gap between groups
-    // is the whole grouping mechanism of this card-less screen.
+    // Whitespace is the container: one generous, uniform gap between groups is
+    // the whole grouping mechanism of this card-less screen.
     gap: SPACE.section,
   },
   header: { gap: 2 },
   wordmark: {
-    fontSize: TYPE.label,
+    fontSize: TYPE.hero,
     fontWeight: '800',
-    letterSpacing: 3,
-    textTransform: 'uppercase',
+    letterSpacing: -0.5,
     color: COLORS.text,
   },
   kicker: {
     fontSize: TYPE.micro,
-    letterSpacing: 1.2,
+    letterSpacing: 1.6,
     textTransform: 'uppercase',
     color: COLORS.muted,
   },

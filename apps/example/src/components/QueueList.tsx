@@ -30,7 +30,7 @@ import React from 'react'
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import { COLORS, RADIUS, SPACE, TYPE } from '../theme'
 import type { Track } from '../data/tracks'
-import type { QueueRow } from '../playback/queue'
+import type { QueueRow } from '../playback'
 import { Chip, ChipRow, Detail, Section } from './ui'
 
 /**

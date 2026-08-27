@@ -37,7 +37,7 @@ import {
   type SkippedCastItem,
 } from '@timbre/cast'
 import type { Player, PlayerState } from '@timbre/player'
-import { DEMO_SCHEME, type Track } from '../data/tracks'
+import { DEMO_SCHEME, type Track } from './data/tracks'
 import { castMimeOf, castUrlOf } from './cast-broadcast'
 
 export interface CastHooks {

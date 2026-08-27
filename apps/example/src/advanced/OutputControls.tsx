@@ -21,7 +21,7 @@
 import React from 'react'
 import { StyleSheet, Text } from 'react-native'
 import { COLORS, TYPE } from '../theme'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Detail, Section } from '../components/ui'
 
 const RATES: readonly number[] = [0.75, 1, 1.25, 1.5, 2]
 const VOLUMES: readonly number[] = [0.2, 0.5, 0.8, 1]

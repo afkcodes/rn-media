@@ -32,7 +32,7 @@ import {
   DEMO_BROKEN_URI,
   DEMO_SCHEME,
   DEMO_SOURCES,
-} from '../data/tracks'
+} from './data/tracks'
 
 /**
  * Stand-in for the network round trip a real signing call would cost.

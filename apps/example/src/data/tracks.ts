@@ -96,7 +96,7 @@ export const DEMO_BROKEN_TARGET = 'https://127.0.0.1:9/unreachable.aac'
  * 6. **The same asset as 5, behind a `demo://` URI** — added with the modular
  *    restructure, and it earns its place three times over:
  *
- *    - it is the **source-resolver** demo (`src/playback/resolver.ts`): nothing
+ *    - it is the **source-resolver** demo (`src/resolver.ts`): nothing
  *      in this file is a playable URL, so if you hear it, `setSourceResolver`
  *      ran on both the resolve-ahead and the hook path;
  *    - it is the **insert-next** demo target — "Next" on this row is an
@@ -252,7 +252,7 @@ export const TRACKS: readonly Track[] = [
  * endpoint a real music app would call.
  *
  * Kept next to the queue rather than next to the resolver because it is
- * *data*: the resolver in `src/playback/resolver.ts` is the ten lines of policy
+ * *data*: the resolver in `src/resolver.ts` is the ten lines of policy
  * that read it, and swapping this map for `await api.sign(id)` is the whole
  * difference between this demo and a production integration.
  *

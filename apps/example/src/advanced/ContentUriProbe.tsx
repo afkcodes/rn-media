@@ -29,7 +29,7 @@ import React from 'react'
 import { StyleSheet, Text, TextInput, View } from 'react-native'
 import type { Player } from '@timbre/player'
 import { COLORS, SPACE, TYPE } from '../theme'
-import { Chip, ChipRow, Detail, Section } from './ui'
+import { Chip, ChipRow, Detail, Section } from '../components/ui'
 
 /** The `MediaStore` audio collection — the prefix `content query` reports ids for. */
 const MEDIA_STORE_AUDIO = 'content://media/external/audio/media/'

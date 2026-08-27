@@ -2,7 +2,7 @@
  * What the last process left behind, and what this one made of it.
  *
  * The line is the outcome of `restorePersisted` — every branch of its typed
- * result is handled in `src/playback/persistence.ts` and none of them throws, so
+ * result is handled in `src/playback.ts` and none of them throws, so
  * a first launch, an app downgrade and a truncated write all end up here as
  * prose rather than as a crash.
  *
