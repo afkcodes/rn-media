@@ -2,17 +2,25 @@
 
 Player-agnostic media session for React Native: one JavaScript handler behind
 every remote surface — notification, lock screen, Bluetooth, headset, watch,
-Android Auto, Control Center — and one broadcast state that all of them (and
-your own UI) render from.
+Android Auto, CarPlay, Control Center — and three broadcast channels that all of
+them, and your own UI, render from. Nitro Module, Kotlin + Swift, with **no
+dependency on `@rn-media/player`**: the handler interface is the whole contract,
+so it works with any player that can make sound.
 
-Nitro Module, Kotlin + Swift. **No dependency on `@rn-media/player`**: the
-handler interface is the entire contract, so this works with our player,
-react-native-track-player, `expo-audio`, a TTS engine, or anything else that can
-make sound.
+## Install
+
+`npm install @rn-media/media-session react-native-nitro-modules`
+
+| Platform | Setup |
+|---|---|
+| Android | Nothing. The library manifest merges `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, the `foregroundServiceType="mediaPlayback"` service, the Android Auto declaration and the artwork provider. `POST_NOTIFICATIONS` is **not** required — media notifications are exempt |
+| iOS | `UIBackgroundModes: audio` in your `Info.plist`. A library cannot merge Info.plist keys; the [Expo plugin](#expo-config-plugin) writes it |
+| Expo | `"plugins": ["@rn-media/media-session"]`, then `npx expo prebuild --clean` |
 
 ## The model
 
-**Fan-in** — every command surface funnels into one handler:
+**Fan-in**: every command surface funnels into one handler. **Fan-out**: three
+broadcast channels are the only state source.
 
 ```ts
 import { BaseMediaHandler, MediaService } from '@rn-media/media-session'
@@ -20,1569 +28,373 @@ import { BaseMediaHandler, MediaService } from '@rn-media/media-session'
 class MyHandler extends BaseMediaHandler {
   async play() { await player.play() }
   async pause() { await player.pause() }
-  async stop() { await player.release() }
-  async seekTo(position: number) { await player.seek(position) }
+  async seekTo(position: number) { await player.seek(position) }   // ms
   async skipToNext() { /* your queue logic, may resolve URLs lazily */ }
-  async skipToPrevious() { /* ... */ }
-  async setRate(rate: number) { player.rate = rate }
-  async onSetRepeatMode(mode: 'off' | 'one' | 'all') { /* then broadcast it */ }
-  async onSetShuffle(enabled: boolean) { /* then broadcast it */ }
-  async customAction(name: string, extras?: Record<string, unknown>) { /* ... */ }
 }
 
 const service = await MediaService.init(() => new MyHandler(), {
-  android: {
-    notificationChannelId: 'playback',
-    notificationChannelName: 'Playback',
-    notificationIcon: 'ic_notification', // drawable name in YOUR app
-    stopForegroundOnPause: true,
-    notificationColor: 0xff1db954,       // ARGB — include the alpha byte
-  },
-  ios: {
-    // What the lock-screen rate control offers. iOS only; media3 takes an
-    // arbitrary float and draws no rate control, so there is no list to hand it.
-    supportedPlaybackRates: [1, 1.25, 1.5, 1.75, 2],
-  },
-  // How far the fastForward/rewind buttons jump, BOTH platforms. Default 15/15.
-  jumpForwardSeconds: 30,
-  jumpBackwardSeconds: 15,
-})
-```
-
-**Fan-out** — three broadcast channels are the only state source:
-
-```ts
-service.setMediaItem({
-  id: '1',
-  title: 'Track',
-  artist: 'Someone',
-  duration: 214_000,
-  // Optional extended tags — see "Metadata fields" below for what each
-  // platform can actually render.
-  albumArtist: 'Various Artists',
-  trackNumber: 7,
-  discNumber: 1,
-  year: 1997,
-  subtitle: 'Episode 12',
-  isLive: false,
-  extras: { source: 'library' }, // opaque, app-owned, string values
+  jumpForwardSeconds: 30,   // both platforms; default 15/15
+  android: { notificationChannelId: 'playback', notificationChannelName: 'Playback' },
 })
 
 service.setQueue([{ id: '1', title: 'Track' }, { id: '2', title: 'Next' }])
-
+service.setMediaItem({ id: '1', title: 'Track', artist: 'Someone', duration: 214_000 })
 service.setPlaybackState({
   status: 'playing',
-  position: { value: 0, at: Date.now(), rate: 1 }, // ANCHOR, see below
-  controls: ['skipToPrevious', 'pause', 'skipToNext', 'shuffle', 'repeatMode'],
-  capabilities: [
-    'play', 'pause', 'seek', 'skipToNext', 'skipToPrevious',
-    'setRepeatMode', 'setShuffle',
-  ],
-  repeatMode: 'off',      // default 'off'
-  shuffleEnabled: false,  // default false
+  position: { value: 0, at: Date.now(), rate: 1 },   // an anchor, not a stream
+  controls: ['skipToPrevious', 'pause', 'skipToNext'],
+  capabilities: ['play', 'pause', 'seek', 'skipToNext', 'skipToPrevious'],
   queueIndex: 0,
 })
-
-await service.stopService() // the ONLY way to end background execution
 ```
 
-## Platform parity, in one table
+`setMediaItem` **merges over the queue entry at `queueIndex`**, field by field,
+and only when the ids match; if they disagree the queue entry wins and
+`metadataMismatch` is raised. Commands are native-first: a notification button
+moves the native state machine first and calls your handler after, so nothing
+changes on any surface until your next broadcast
+([ARCHITECTURE §9](../../ARCHITECTURE.md#9-commands-are-native-first-js-is-notified-never-awaited)).
 
-Everything in the public API works the same on both platforms **except** the
-rows below. Each one is a platform ceiling with a citation, not a to-do — and
-every one of them is also stated in the TSDoc of the member itself, so a caller
-never discovers a no-op at runtime. Anything not listed here behaves identically.
+## API
+
+### Service
+
+| | what it does | notes |
+|---|---|---|
+| `MediaService.init(factory, config?)` | Wires the handler to every remote surface | Returns `Promise<MediaServiceApi>`; throws `alreadyInitialized` if called twice without a `stopService()` |
+| `setPlaybackState(state: PlaybackState): void` | Channel 1 | `{ status, position, bufferedPosition?, controls?, capabilities?, customActions?, compactControlIndices?, queueIndex?, errorMessage?, repeatMode?, shuffleEnabled? }` |
+| `setMediaItem(item?: MediaItem): void` | Channel 2 — merges over the queue entry at `queueIndex` | `{ id, title, artist?, album?, artworkUri?, duration?, genre?, albumArtist?, trackNumber?, discNumber?, year?, subtitle?, isLive?, extras? }` |
+| `setQueue(items: MediaItem[]): void` | Channel 3 | Duplicate ids are legal; position is carried by `queueIndex` |
+| `setRemotePlayback(remote?): void` | Declares the audio is coming out of another device | `{ volume, muted?, steps?, volumeControl?, routingControllerId?, holdLocalAudioSlot? }`; call with nothing to take it back |
+| `setSleepTimer(seconds)` / `setSleepTimerToTrackEnd()` / `cancelSleepTimer()` / `getSleepTimer()` / `getSleepTimerRemaining()` | A native countdown, and its state as `{ mode: 'duration', remainingSeconds } \| { mode: 'trackEnd', remainingSeconds? }` | `setSleepTimer` rejects `0`, negatives, `NaN` and `Infinity` — "cancel" and "pause now" already have names. A `trackEnd` timer may legitimately have no number, which `getSleepTimerRemaining()` alone cannot tell from "not armed" |
+| `setResumptionSnapshot(snapshot?)` / `stopService()` | Write the native mirror by hand; end background execution | `withPersistence` writes the mirror for you, and it is a no-op on iOS. `stopService()` is the only way to end background execution, and does not forget the persisted session |
+| `invalidateBrowse(parentId?)` / `getCarConnection()` | The car's list changed; who is connected | Android `notifyChildrenChanged`, CarPlay rebuilds the visible template; omit the id for everything. `CarConnection` is `{ kind: 'none' \| 'androidAuto' \| 'automotiveOs' \| 'carPlay' }`, with the reactive twin `useCarConnection()` |
+| `MediaControl` | `'play' \| 'pause' \| 'stop' \| 'skipToNext' \| 'skipToPrevious' \| 'fastForward' \| 'rewind' \| 'repeatMode' \| 'shuffle'` | Buttons, in order. Spelled `repeatMode` because every union member becomes a native enumerator and `repeat` is a Swift keyword |
+| `MediaCapability` / `MediaPlaybackStatus` | `'play' \| 'pause' \| 'stop' \| 'seek' \| 'skipToNext' \| 'skipToPrevious' \| 'skipToQueueItem' \| 'setRate' \| 'setRepeatMode' \| 'setShuffle'`; `'playing' \| 'paused' \| 'buffering' \| 'stopped' \| 'error'` | The commands your handler will service, and the status you broadcast |
+| `BrowseItem` / `BROWSE_ROOT` | One node of the car tree, and the id `getChildren` receives for the root | `{ id, title, subtitle?, artworkUri?, browsable?, playable?, childStyle?, group?, explicit?, completion?, mediaType? }` — an item may be **both** browsable and playable. The root's children are the car's tabs: ≤ 4, browsable only |
+| `BrowseError` | Throw it from any browse method | `new BrowseError('authenticationExpired', msg, { label, url })` shows the car's sign-in screen. Codes: `authenticationExpired \| premiumAccountRequired \| notAvailableInRegion \| parentalControlRestricted \| notSupported` |
+
+### Handlers
+
+`MediaHandler` is `play`, `pause`, `stop`, `seekTo(ms)`, `skipToNext`,
+`skipToPrevious`, `skipToQueueItem(index)`, `setRate(rate)`, `onTaskRemoved`,
+`customAction(name, extras?)`, the car trio `getChildren(parentId)` /
+`getMediaItem(id)` / `playFromMediaId(id)`, and the optional
+`playFromSearch(query, focus)`, `search(query)`, `onSetRepeatMode`,
+`onSetShuffle`, `onSetDeviceVolume`, `onAdjustDeviceVolume`, `onSetDeviceMuted`,
+`onSleepTimer`, `onPlaybackResumption`, `onSessionError`. The *absence* of the
+two search methods is advertised: voice play answers `ERROR_NOT_SUPPORTED` and
+Auto draws no search tab, rather than one that answers nothing.
+
+| | |
+|---|---|
+| `BaseMediaHandler` / `CompositeMediaHandler` | Every method defaulted — override what you use; or a decorator: override one method, `super` the rest |
+| `QueueHandler` / `withQueueHandling(Base)` | Default `skipToNext`/`skipToPrevious`/`skipToQueueItem` arithmetic over the queue you broadcast (wraparound, empty and single-item queues, stale indices); you implement `playQueueItem(item, index)`. It does not restart the track when more than 3 s in — that needs player state it does not have |
+| `MediaSessionError` / `logSessionError(error)` | The thrown error type, and the default `onSessionError` behaviour |
+
+### Persistence
+
+| | |
+|---|---|
+| `withPersistence(service, storage, options?)` | Tee decorator; adds `save()`, `flush()` and `clear()` |
+| `restorePersisted(storage, options?)` | `Promise<RestoreResult>` — `'restored' \| 'empty' \| 'unsupportedVersion' \| 'corrupt'`, never a throw |
+| `applyPersisted(service, session)` | Re-broadcast in the order the channels expect |
+| `clearPersisted(storage, options?)` | Forget the saved session (**storage only**) |
+| `PERSISTENCE_SCHEMA_VERSION`, `DEFAULT_PERSISTENCE_KEY`, `DEFAULT_AUTOSAVE_INTERVAL_MS` (`30_000`), `MIN_AUTOSAVE_INTERVAL_MS` (`1_000`) | Schema and timing constants. `options` is `{ key?, onError?, now?, autosave? }`; only `withPersistence` reads `autosave` |
+
+## Platform parity
+
+Everything works the same on both platforms **except** the rows below. Each is a
+platform ceiling, also stated in the member's own TSDoc.
 
 | Member | Android | iOS | Why |
 |---|---|---|---|
-| `customActions` / `MediaHandler.customAction` | notification overflow buttons + `SessionCommand`s | **nothing renders, handler never fires** | `MPRemoteCommandCenter`'s command set is fixed and closed, and nothing in it carries an app-defined id. `like`/`dislike`/`bookmark` are `MPFeedbackCommand`s with system heart/thumb icons and `rating` is a star rating — a wrong button is worse than a missing one ([command list](https://developer.apple.com/documentation/mediaplayer/mpremotecommandcenter)) |
-| `capabilities: ['skipToQueueItem']` / `MediaHandler.skipToQueueItem` | `COMMAND_SEEK_TO_MEDIA_ITEM` — Auto, Wear, car head units | **never reached from a remote surface** | no queue-jump command exists in that same list |
-| `bufferedPosition` | secondary bar behind the scrubber | ignored | no buffered-position key; `MPNowPlayingInfoPropertyPlaybackProgress` is a *watched-so-far* indicator, not a buffer |
-| `status: 'stopped'` / `'error'`, `errorMessage` | distinct media3 states + a real `PlaybackException` | **indistinguishable from `paused`**, message dropped | the only state lever iOS gives an app is the playback *rate*. `MPNowPlayingInfoCenter.playbackState` exists on iOS 13+ but Apple documents it as *"This property only applies to macOS"* ([docs](https://developer.apple.com/documentation/mediaplayer/mpnowplayinginfocenter/playbackstate)) |
-| `compactControlIndices` | picks the ≤3 collapsed notification slots | ignored | iOS has no button *layout*; commands are enabled or not and the system draws what it draws |
+| `customActions` / `MediaHandler.customAction` | notification overflow buttons + `SessionCommand`s | **nothing renders, handler never fires** | `MPRemoteCommandCenter`'s command set is fixed and closed, and nothing in it carries an app-defined id ([command list](https://developer.apple.com/documentation/mediaplayer/mpremotecommandcenter)) |
+| `capabilities: ['skipToQueueItem']` | `COMMAND_SEEK_TO_MEDIA_ITEM` — Auto, Wear, car head units | **never reached from a remote surface** | no queue-jump command exists in that list. It still works from your own UI, and from CarPlay's Up Next |
+| `bufferedPosition`; `compactControlIndices` | secondary bar behind the scrubber; the ≤3 collapsed notification slots | both ignored | no buffered-position key exists, and iOS has no button layout at all |
+| `status: 'stopped'` / `'error'`, `errorMessage` | distinct media3 states + a real `PlaybackException` | **indistinguishable from `paused`**, message dropped | the only state lever iOS gives an app is the playback *rate*; `MPNowPlayingInfoCenter.playbackState` is documented as macOS-only |
 | `year`, `subtitle`, `extras` on `MediaItem` | `setReleaseYear` / `setSubtitle` / `MediaMetadata` `Bundle` | carried + persisted, **not published** | no such key exists — see [Metadata fields](#metadata-fields) |
-| `setRemotePlayback(...)` | hardware volume keys drive the other device | accepted, changes nothing | iOS gives an app no way to take over the volume buttons — see [iOS: a documented no-op](#ios-a-documented-no-op) |
-| `android.*` config, `onRevivalRequested`, `MediaHandler.onTaskRemoved`, `MediaHandler.onPlaybackResumption` | the foreground service, its notification and its revival | not applicable | iOS has no service, and a terminated iOS app stays terminated — see [The platform story](#the-platform-story-read-this-before-why-is-it-android-only) |
-| `ios.supportedPlaybackRates`, `ios.artworkCacheSize` | not applicable | the lock screen's rate list; the decoded-artwork cache | media3 takes an arbitrary float and draws no rate control, and owns its own artwork cache |
-| `MediaHandler.search` | Android Auto's search tab, and the `SEARCH_SUPPORTED` flag that draws it | **never called** | CarPlay audio apps have no search template — there is no `CPSearchTemplate` outside the navigation entitlement. A missing surface, not a missing feature |
-| `BrowseItem.childStyle`, `group` | Android Auto content style (list / grid / category) and group headings | `childStyle` ignored, `group` becomes a `CPListSection` header | a `CPListTemplate` is always a list; there is no grid |
+| `setRemotePlayback(...)` | hardware volume keys drive the other device | accepted, changes nothing | iOS gives an app no way to take over the volume buttons — see [Remote playback](#remote-playback-hardware-volume-keys-drive-the-other-device) |
+| `android.*` config, `onRevivalRequested`, `onTaskRemoved`, `onPlaybackResumption`; `ios.supportedPlaybackRates`, `ios.artworkCacheSize` | the foreground service, its notification and its revival; not applicable | not applicable; the lock screen's rate list and the decoded-artwork cache | iOS has no service and a terminated iOS app stays terminated; media3 takes an arbitrary float, draws no rate control, and owns its own artwork cache |
+| `MediaHandler.search` | Auto's search tab, and the `SEARCH_SUPPORTED` flag that draws it | **never called** | CarPlay audio apps have no search template. A missing surface, not a missing feature |
+| `BrowseItem.childStyle`, `group` | Auto content style (list / grid / category) and group headings | `childStyle` ignored, `group` becomes a `CPListSection` header | a `CPListTemplate` is always a list; there is no grid |
 
-Two things people expect to be on this list and are not, because they were
-fixed rather than documented:
+## Broadcast rules
 
-- **Queue-only broadcasts.** `setQueue` + `queueIndex` with no `setMediaItem`
-  used to leave the iOS lock screen blank while Android showed the queue entry.
-  Both platforms now resolve the current item the same way, and merge
-  `setMediaItem` over the queue entry field by field — see
-  [`setMediaItem`'s channel priority](#the-model).
-- **The fast-forward / rewind key on a Bluetooth remote or a car head unit.**
-  media3 answers it from the same `COMMAND_SEEK_FORWARD` as the on-screen
-  button; MediaPlayer splits the two (`skipForwardCommand` vs
-  `seekForwardCommand`) and only the first used to be bound, so the accessory key
-  was dead on iOS. Both are bound now, and one press means one
-  `jumpForwardSeconds` jump on both platforms.
-
-## `MediaItem.id`: stable per **source**, and duplicates are fine
-
-One rule, because two different mechanisms depend on it:
-
-> Derive the id from the thing being played — its catalogue id, or its URI.
-> Never from its position in the queue, and never uniquified with a counter or a
-> timestamp.
-
-**Duplicates are legal.** The same id may appear twice in a queue, and it
-routinely does — "play next" on a track already in the queue produces exactly
-that. Nothing rejects it and nothing breaks: position is carried by
-`queueIndex`, and media3's timeline uids are built as `"$index:$id"`, so they
-stay unique even when the ids do not.
-
-**Where the id actually matters:**
-
-1. **The channel-2 merge.** `setMediaItem` enriches the *current* queue entry
-   field-by-field, and only when `item.id` equals the id of the entry at the
-   broadcast `queueIndex`. Keying on the id *at a known index* is what keeps the
-   merge well-defined when a queue contains duplicates — it never has to guess
-   which copy you meant. If the ids disagree, the queue entry wins unchanged and
-   Android logs the mismatch; the usual symptom is a missing scrubber, because
-   `duration` is the field that normally arrives only through `setMediaItem`.
-2. **`restorePersisted`.** A restored record is matched back to your catalogue
-   by id. Ids minted per *insertion* — `track-7#2`, `` `${id}-${Date.now()}` ``,
-   an array index — no longer exist when the app cold-starts, so the match fails
-   and the session comes back blank.
-
-So suffixing ids to "avoid" duplicates breaks resumption and buys nothing,
-because nothing here needed them unique in the first place.
-
-```ts
-// Wrong: unique per insertion, meaningless after a restart.
-service.setQueue(tracks.map((t, i) => ({ id: `${t.id}-${i}`, title: t.title })))
-
-// Right: the same source is always the same id, however many times it appears.
-service.setQueue(tracks.map((t) => ({ id: t.id, title: t.title })))
-```
-
-## The position anchor
-
-`position` is `{ value, at, rate }` — **not** a number you keep pushing.
-
-- `value` — position in ms, `at` — `Date.now()` when you sampled it, `rate` —
-  how fast it advances from then on (`0` while paused).
-- Broadcast it **only on a discontinuity**: seek, play, pause, rate change,
-  track change. Never on a timer.
-- Both platforms project it natively: Android feeds it to
-  `SimpleBasePlayer`'s position supplier, iOS to
-  `MPNowPlayingInfoPropertyElapsedPlaybackTime` + `...PlaybackRate`. The
-  seekbar on your lock screen moves with **zero** bridge traffic.
-
-Native converts `at` out of the wall clock and into a monotonic clock the
-instant the broadcast arrives, so an NTP step cannot corrupt the projection.
-
-## `controls` vs `capabilities`
-
-- **`capabilities`** — what your handler will actually service. On Android these
-  become `Player.Command`s; media3 *never* invokes a handler for a command that
-  is not declared. On iOS they enable `MPRemoteCommandCenter` commands.
-- **`controls`** — which buttons you want, in order. Android maps them to media3
-  media-button preferences; `compactControlIndices` (≤3) picks the ones that get
-  the collapsed notification's slots. iOS has no button layout, so `controls`
-  and `capabilities` are simply unioned into the enabled command set.
-
-Declare a capability for every button you ask for; the package is generous and
-adds the command anyway, but the handler still has to do the work.
-
-## Repeat and shuffle
-
-Two halves, and you almost always want both:
-
-```ts
-service.setPlaybackState({
-  status: 'playing',
-  position: { value: 0, at: Date.now(), rate: 1 },
-  capabilities: ['play', 'pause', 'setRepeatMode', 'setShuffle'], // accept them
-  controls: ['pause', 'shuffle', 'repeatMode'],                   // draw them
-  repeatMode: 'all',
-  shuffleEnabled: true,
-})
-```
-
-`repeatMode` / `shuffleEnabled` are **additive and optional**; omitted they are
-`'off'` and `false`, which is what every surface showed before they existed.
-
-**Pressing a toggle does not change anything by itself.** It calls
-`onSetRepeatMode(mode)` / `onSetShuffle(enabled)` on your handler, and the state
-(and the icon) move only when you broadcast the new `setPlaybackState` — the same
-acknowledge-by-broadcast contract `play`/`pause` follow. Both handler methods are
-optional, so adding them was not a breaking change for anyone implementing
-`MediaHandler` structurally.
-
-The **capability alone** lights up Android Auto, Wear and third-party
-controllers, which read `Player.repeatMode` / `shuffleModeEnabled` directly. The
-phone's notification needs the **control** as well: media3's
-`DefaultMediaNotificationProvider` draws previous / play-pause / next and nothing
-else, so without the control there is no button in the shade. The icon follows
-the state (`ICON_REPEAT_OFF` / `_ONE` / `_ALL`, `ICON_SHUFFLE_ON` / `_OFF`), and
-the two toggles take the secondary notification slots — never the central or
-back/forward ones, which belong to transport.
-
-The control is spelled `'repeatMode'`, not `'repeat'`, because every union member
-becomes a native enumerator verbatim and `repeat` is a Swift keyword.
-
-On iOS both map to `MPRemoteCommandCenter.changeRepeatModeCommand` /
-`changeShuffleModeCommand`, and the current state is pushed onto
-`currentRepeatType` / `currentShuffleType` on every broadcast. iOS's
-`MPShuffleType.collections` (shuffle albums, keep tracks in order) has no
-cross-platform twin and is read as "shuffle on" rather than dropped.
-
-## Remote playback: hardware volume keys drive the other device
-
-When the audio is coming out of **another device** — a Cast receiver, a UPnP
-renderer, a multi-room protocol, anything the phone is not producing itself —
-say so, and hand over that device's volume:
-
-```ts
-// while the remote backend owns playback
-service.setRemotePlayback({ volume: 0.4, muted: false })
-// …and when the phone takes it back
-service.setRemotePlayback()
-```
-
-That is the whole API. In return, **the phone's hardware volume keys drive the
-remote device instead of the phone's own music stream — with your app
-foregrounded, backgrounded, or with the screen off** (with one platform
-precondition on the screen-off case, spelled out below — read it before you
-promise it to a user). Presses arrive on your handler:
-
-```ts
-import { BaseMediaHandler } from '@rn-media/media-session'
-
-class MyHandler extends BaseMediaHandler {
-  override onSetDeviceVolume(volume: number) {   // 0..1
-    void backend.setVolume(volume)
-  }
-  override onSetDeviceMuted(muted: boolean) {
-    void backend.setMuted(muted)
-  }
-}
-```
-
-Nothing here knows what a receiver is. This package works with any player and
-any output, and it has no dependency on `@rn-media/cast`.
-
-### Why an Activity cannot do this
-
-An app can intercept volume keys in `Activity.dispatchKeyEvent` — and that is
-foreground-only *by construction*, because with the app backgrounded or the
-screen locked there is no Activity to receive a key event. The routing has to
-live on the **media session**, and Android's own contract for it is the feature:
-
-> Configure this session to use remote volume handling. **This must be called to
-> receive volume button events**, otherwise the system will adjust the
-> appropriate stream volume for this session.
-> — `android.media.session.MediaSession.setPlaybackToRemote`
-
-`setRemotePlayback` is what gets you there: the session starts advertising
-`DeviceInfo.PLAYBACK_TYPE_REMOTE`, media3 puts the platform session into remote
-volume handling, and clearing it puts the keys back on the phone's stream with
-nothing left behind.
-
-### Two platform conditions, because both look like bugs
-
-**1. Android routes volume keys to a session only while that session is
-actually playing.** Paused, the keys go back to the phone's stream. That is the
-platform's rule (`MediaSessionStack.getDefaultVolumeSession` keeps only sessions
-whose `PlaybackState.isActive()`), not this package's.
-
-**2. With the screen off, a system sound can take the keys away until you play
-locally again.** `MediaSessionService.dispatchAdjustVolumeLocked` contains a
-heuristic (b/275185436) that discards the chosen session when the *caller's* uid
-was the last to play local audio. With the screen off the caller is
-`PhoneWindowManager` — uid 1000, the system — so any system-played sound
-(notification, ringtone) makes the platform prefer the phone's local stream.
-Your session is dropped, and because a remote backend plays nothing on the local
-`STREAM_MUSIC`, the key is discarded entirely: neither device moves.
-
-It is sticky, not momentary — the platform's list never removes its head entry,
-and an app whose audio is remote never plays locally to displace it. The
-foreground case is immune, because a foregrounded `Activity` routes presses
-straight to its own session by token, bypassing the heuristic.
-
-Diagnose it in one command — the first `uid=` line is the value the heuristic
-compares against:
-
-```sh
-adb shell dumpsys media_session | grep -A3 "Audio playback"
-```
-
-`uid=1000` at the top with the screen off means the next volume press will be
-swallowed. Verified on Android 16 (API 36); the same code is in
-`android15-release` and `main`.
-
-#### Opting out of condition 2: `holdLocalAudioSlot`
-
-The platform documents one escape, in the same file: when the head uid goes
-**inactive**, the first still-**active** uid is promoted to the head. So an app
-that keeps a local audio output active reclaims the slot as soon as the
-interfering sound ends.
-
-```ts
-service.setRemotePlayback({
-  volume: 0.4,
-  holdLocalAudioSlot: true, // hold a silent local output while remote plays
-})
-```
-
-This holds a silent, looping, zero-filled `AudioTrack` (`USAGE_MEDIA`,
-`MODE_STATIC` at the device's native sample rate, deep-buffer path where the HAL
-accepts it) for exactly as long as the remote playback is published — cleared
-with it, never leaked. No writer thread, no periodic wakeup. It takes no audio
-focus and never touches your player.
-
-Two honest side effects: while it runs the audio HAL never enters standby (an
-active track keeps the output powered — that is the battery cost, and no flag
-removes it), and if your app *loses* audio focus the track is faded out like any
-other `USAGE_MEDIA` player, so the slot is briefly given up while something else
-is audible. Both self-heal.
-
-**It is off by default, and that is deliberate.** It keeps a real audio output —
-and so the audio HAL — awake for the whole remote session, which is measurable
-battery for something the user only notices when they reach for the rocker. It
-also makes `AudioSystem.isStreamActive(STREAM_MUSIC)` true, which *changes* the
-remaining failure mode rather than only removing one: if the session is
-discarded for condition 1 (not PLAYING), the key now moves the **phone's**
-volume instead of doing nothing. Turn it on when lock-screen volume over a
-remote device matters more than idle power; leave it off otherwise. No-op on
-iOS, where the buttons cannot be taken over at all.
-
-### Options, and their defaults
-
-| field | default | what it is for |
-| --- | --- | --- |
-| `volume` | — | required, `0..1` |
-| `muted` | `false` | |
-| `steps` | `20` | how many notches one key press moves through. 20 is media3's own `RemoteCastPlayer.MAX_VOLUME`, so a press feels like every other cast-enabled Android app |
-| `volumeControl` | `'absolute'` | what your backend can drive — see below |
-| `routingControllerId` | — | Android: ties the system output switcher's slider to the route that is playing |
-
-`volumeControl` decides which handler method a key press becomes, and it is
-decided by **what you declared**, never by which methods you happen to have
-defined (every `BaseMediaHandler` subclass inherits both, so sniffing would
-silently kill the keys for the common case):
-
-- `'absolute'` — the backend takes a level. A key press is converted here (one
-  `1 / steps` notch from the last published volume, quantised and clamped) and
-  delivered as `onSetDeviceVolume`. Cast, UPnP, essentially everything. **Write
-  one method, not two.**
-- `'relative'` — the backend can only be nudged: `onAdjustDeviceVolume('up' |
-  'down')`, no level.
-- `'fixed'` — readable, not writable. The volume shows on the remote surfaces
-  and the keys do nothing, which is the honest rendering of a device whose
-  volume you may not touch.
-
-Publish again on every volume change the backend reports — including the remote
-device's own physical knob — because a key press steps from the **last published
-level**. A stale one makes the next press jump.
-
-`setRemotePlayback` is deliberately **not** a fourth broadcast channel: it
-describes the output, not what is playing, and it is sticky — an ordinary
-`setPlaybackState` neither carries nor clears it. It is not persisted either
-(`withPersistence` passes it straight through): which device the audio came out
-of is a fact about a live session, and a restored one must not route volume keys
-at a backend this process has no connection to.
-
-### iOS: a documented no-op
-
-Calling this on iOS is free and changes nothing, and that is a platform ceiling
-rather than an omission. iOS gives an app no way to take over the hardware
-volume buttons: `MPRemoteCommandCenter` has no volume command,
-`AVAudioSession.outputVolume` is read-only, `MPVolumeView` renders the *system*
-slider, and `AVRoutePickerView` is AirPlay — which the OS handles because an
-AirPlay target is a *route*, and a network receiver is not. Google's Cast SDK
-documents the same limit for its own
-`GCKCastOptions.physicalVolumeButtonsWillControlDeviceVolume`: *"Due to changes
-in iOS, controlling the volume of a Cast session using the physical volume
-buttons is currently not supported for iOS 15+."*
-([Cast iOS sender guide](https://developers.google.com/cast/docs/ios_sender/integrate))
-The iOS answer is an in-app volume slider — which is what Google's own iOS cast
-apps ship. Write the `setRemotePlayback` call unconditionally: load-bearing on
-Android, harmless on iOS.
-
-## Jump intervals
-
-```ts
-import { MediaService } from '@rn-media/media-session'
-
-await MediaService.init(() => new MyHandler(), {
-  jumpForwardSeconds: 30,   // default 15
-  jumpBackwardSeconds: 15,  // default 15
-})
-```
-
-These drive the `fastForward` / `rewind` controls and apply **identically on both
-platforms** — Android through
-`SimpleBasePlayer.State.Builder.setSeekForwardIncrementMs`, iOS through
-`MPSkipIntervalCommand.preferredIntervals`. Both platforms resolve the increment
-natively and deliver an absolute `seekTo` to your handler, so there is no
-`fastForward` handler method to implement and no way for the two to disagree.
-
-They exist because the two platforms *did* disagree: iOS pinned 15 s in both
-directions while Android set no increment and inherited media3's
-`C.DEFAULT_SEEK_BACK_INCREMENT_MS` (5 s) and `..._FORWARD_...` (15 s), so the same
-JS call skipped back 5 s on Android and 15 s on iOS. The shared default is 15/15
-— matching RNTP V4/V5 — and podcast and audiobook apps set 30 explicitly.
+| Rule | Detail |
+|---|---|
+| `capabilities` are what your handler will service | On Android they become `Player.Command`s and media3 *never* invokes a handler for an undeclared command; on iOS they enable `MPRemoteCommandCenter` commands |
+| `controls` are which buttons you want, in order | Android maps them to media3 media-button preferences, with `compactControlIndices` (≤3) picking the collapsed notification's slots; iOS has no button layout and simply unions the two lists. Declare a capability for every button you ask for — the package adds the command anyway, but the handler still has to do the work |
+| `position` is `{ value, at, rate }`, not a number you keep pushing | `value` in ms, `at` from `Date.now()`, `rate` `0` while paused. Broadcast it **only on a discontinuity** — seek, play, pause, rate change, track change. Both platforms project it natively, so the lock-screen seekbar moves with zero bridge traffic ([ARCHITECTURE §7](../../ARCHITECTURE.md#7-position-is-never-streamed--anchors--projection)) |
+| `MediaItem.id` is stable per **source** | Derive it from the catalogue id or the URI, never from a queue position or a counter. `restorePersisted` matches by id, so a per-insertion id does not exist after a cold start; and duplicates are legal, because media3's timeline uids are built as `"$index:$id"` |
+| Pressing a repeat or shuffle toggle changes nothing by itself | It calls `onSetRepeatMode(mode)` / `onSetShuffle(enabled)`; the state and the icon move only when you broadcast. The **capability** alone lights up Auto, Wear and third-party controllers, which read `Player.repeatMode` directly; the phone's notification needs the **control** too, because media3's default provider draws only previous / play-pause / next |
+| `isLive: true` drops the scrubber; `extras` is string → string | `isLive` works even when a duration is also present, and omitting it keeps the "no duration means live" rule. `extras` crosses an Android `Bundle` and a JSON round trip through persistence, so anything richer comes back as `unknown` — stringify at the edge |
+| `jumpForwardSeconds` / `jumpBackwardSeconds` (15/15) drive `fastForward` / `rewind` | Identically on both platforms, resolved natively into an absolute `seekTo`, so there is no `fastForward` method to implement and no way for the two to disagree ([ARCHITECTURE §23](../../ARCHITECTURE.md#23-remote-surface-parity-one-jump-interval-repeatshuffle-on-both-sides-and-an-honest-metadata-table)) |
 
 ## Metadata fields
 
-`MediaItem` carries `id`, `title`, `artist`, `album`, `artworkUri`, `duration`,
-`genre`, plus these. **What each platform can render differs, and the table says
-so rather than pretending:**
-
 | Field | Android (media3 `MediaMetadata`) | iOS (`MPNowPlayingInfoCenter`) |
 |---|---|---|
-| `albumArtist` | `setAlbumArtist` | `MPMediaItemPropertyAlbumArtist` — a real key, sent; Apple documents no list of the keys `nowPlayingInfo` actually renders, so no promise is made that it is drawn |
-| `trackNumber` | `setTrackNumber` | `MPMediaItemPropertyAlbumTrackNumber` |
-| `discNumber` | `setDiscNumber` | `MPMediaItemPropertyDiscNumber` |
-| `year` | `setReleaseYear` | **no key exists** — MediaPlayer has no year key at all, and the one date-shaped key, `MPMediaItemPropertyReleaseDate`, is an `NSDate`; a synthesised "1 January *year*" would be a fabricated precision |
-| `subtitle` | `setSubtitle` (media3's notification content text) | **no third line exists** — the only free-text keys left (`Comments`, `Lyrics`, `PodcastTitle`, `ServiceIdentifier`) all mean something else |
+| `albumArtist` | `setAlbumArtist` | `MPMediaItemPropertyAlbumArtist` — sent; Apple documents no list of the keys it actually renders, so no promise is made that it is drawn |
+| `trackNumber` / `discNumber` | `setTrackNumber` / `setDiscNumber` | `MPMediaItemPropertyAlbumTrackNumber` / `…DiscNumber` |
+| `year` | `setReleaseYear` | **no key exists** — the one date-shaped key is an `NSDate`, so a synthesised "1 January *year*" would be a fabricated precision |
+| `subtitle` | `setSubtitle` (the notification's content text) | **no third line exists** — the remaining free-text keys all mean something else |
 | `isLive` | drops the duration + seekability, `isDynamic` timeline | `MPNowPlayingInfoPropertyIsLiveStream` |
 | `extras` | `MediaMetadata` `Bundle` (reaches third-party controllers) | **no key exists** |
 
 Fields with no iOS key are still carried through the session and through
-`withPersistence`, so your app gets them back — they are simply not published to
-a key that means something else. `year`, `subtitle` and `extras` are the three.
+`withPersistence`; they are simply not published to a key that means something
+else.
 
-`isLive` is worth calling out: before it, the *absence of a duration* was the
-only way to say "live", which conflated it with "I don't know the duration yet".
-Setting `isLive: true` drops the scrubber even when a duration is also present.
-Omitting it keeps the old rule exactly.
+## Session errors: `onSessionError`
 
-`extras` is **string → string**. It crosses an Android `Bundle` to third-party
-controllers and a JSON round trip through persistence; a string map survives both
-unchanged, and anything richer would come back as `unknown` anyway. Stringify at
-the edge.
+An argument you got wrong throws synchronously as a `MediaSessionError`. Most of
+what can go wrong here happens where no call is waiting — a media3 service
+callback, an `MPRemoteCommandCenter` target, a late artwork download — so those
+get a channel
+([ARCHITECTURE §28](../../ARCHITECTURE.md#28-failures-with-no-caller-get-a-channel-not-a-log-line)).
+`onSessionError(error: SessionError)` takes `{ code, severity, message }`;
+implementing it is optional, since every failure still reaches `console.error`.
+It cannot take the session down, and nothing here is retryable from JS. Branch on
+`severity` — `'fatal'` (background playback is not going to work) or `'degraded'`
+(a surface shows less than you asked for) — rather than on `code`.
 
-## Handler composition
+| `code` | `severity` | Meaning |
+|---|---|---|
+| `backgroundPlaybackUnavailable` | fatal | Android: the OS refused the foreground service, so playback runs on with no notification and an unprotected process. iOS: `Info.plist` has no `audio` in `UIBackgroundModes` |
+| `playbackResumptionFailed` / `playbackResumptionNotWired` | fatal | A resumption started and never finished — and its cause: the runtime is alive and `MediaService.init(...)` has not been called. The message names which wiring is missing, the entry-file import or `android.onRevivalRequested`, and both are delivered to the *next* `init` |
+| `playbackResumptionUnavailable` / `artworkFailed` / `iconNotFound` | degraded | `playbackResumption` is on but inert (no `MediaButtonReceiver` in the manifest, or the mirror could not be written); artwork could not be fetched or decoded (once per URI); a drawable name does not resolve, so a fallback icon is drawn (once per name) |
+| `metadataMismatch` / `localAudioSlotUnavailable` / `browseRootRejected` | degraded | `setMediaItem` does not describe the current queue entry, so the merge did not happen and its `duration` — and the scrubber — was dropped; `holdLocalAudioSlot: true` but the silent output would not open, so the opt-in is inert; a root entry was dropped for exceeding the four-tab cap or for not being browsable, naming each one |
 
-```ts
-import {
-  CompositeMediaHandler,
-  MediaService,
-  QueueHandler,
-  type MediaItem,
-} from '@rn-media/media-session'
+## Remote playback: hardware volume keys drive the other device
 
-// Decorator: override one method, delegate the rest.
-class Analytics extends CompositeMediaHandler {
-  override play() { track('play'); return super.play() }
-}
+When the audio comes out of **another device** — a Cast receiver, a UPnP
+renderer, any multi-room protocol — say so with
+`setRemotePlayback({ volume: 0.4 })`, and take it back with
+`setRemotePlayback()`. The phone's hardware volume keys then drive the remote
+device instead of the phone's music stream, foregrounded, backgrounded or with
+the screen off, and presses arrive as `onSetDeviceVolume` / `onSetDeviceMuted`.
+Nothing here knows what a receiver is, and this package has no dependency on
+`@rn-media/cast`.
 
-// Default queue navigation over the data you broadcast on channel 3.
-class MyQueueHandler extends QueueHandler {
-  async playQueueItem(item: MediaItem, index: number) { await player.load(item.id) }
-}
-const handler = new MyQueueHandler()
-handler.wrapAround = true
-handler.setQueue([...items], 0) // stores AND broadcasts
-
-await MediaService.init(() => new Analytics(handler))
-```
-
-`QueueHandler` gives you `skipToNext` / `skipToPrevious` / `skipToQueueItem`
-index arithmetic (including wraparound, empty and single-item queues, and stale
-indices from remote surfaces). It deliberately does *not* implement "restart the
-track if more than 3 s in" — that needs player state it does not have; override
-`skipToPrevious` and call `super` for the real skip.
-
-## When the session itself fails: `onSessionError`
-
-An argument you got wrong throws — synchronously, at the call, as a
-`MediaSessionError`. But most of what can go wrong here happens where **no call
-is waiting**: a media3 service callback, an `MPRemoteCommandCenter` target, an
-artwork download that finishes long after the broadcast that asked for it. Those
-used to be a `Log.e` / `NSLog` and nothing else, which meant an app could ship a
-broken background story and only learn about it from a bug report.
-
-```ts
-import { BaseMediaHandler, type SessionError } from '@rn-media/media-session'
-
-class Handler extends BaseMediaHandler {
-  override onSessionError(error: SessionError) {
-    if (error.severity === 'fatal') banner(error.message)
-    else console.warn(`[${error.code}] ${error.message}`)
-  }
-}
-```
-
-`SessionError` is `{ code, severity, message }`. **Optional** — implement
-nothing and every failure still reaches `console.error`, including through a
-`CompositeMediaHandler` whose inner handler does not implement it. It cannot
-take the session down: a throw or rejection goes to `onHandlerError`. Nothing on
-this channel is retryable from JS; each code is fixed in configuration, or in
-*when* playback was started.
-
-`severity` is `'fatal'` (background playback is not going to work) or
-`'degraded'` (a surface is showing less than you asked for). Branch on it rather
-than on `code` if you want new codes handled sensibly on the day they are added.
-
-| `code` | `severity` | Android | iOS |
-|---|---|---|---|
-| `backgroundPlaybackUnavailable` | fatal | the OS refused the foreground service (Android 12+ background start) — playback runs on with **no notification and an unprotected process**. Per refused attempt | at `init`: the app's `Info.plist` has no `audio` in `UIBackgroundModes`, so iOS suspends the process the moment it backgrounds |
-| `playbackResumptionFailed` | fatal | a resumption started and never finished — the message says which half. Delivered to the *next* `init` when the runtime is alive but stopped; log-only when the process had no JS at all | not applicable (no resumption — see [The platform story](#the-platform-story-read-this-before-why-is-it-android-only)) |
-| `playbackResumptionUnavailable` | degraded | `playbackResumption` is on but inert: no `MediaButtonReceiver` in the manifest, or the native mirror could not be written | not applicable |
-| `playbackResumptionNotWired` | fatal | the *cause* of the row above it, raised ~3 s after a revived runtime comes up and ~7 s before the deadline: the runtime is alive and `MediaService.init(...)` has not been called. Names which of the two wirings is missing — a bare entry-file import, or `android.onRevivalRequested`. Held for the next `init`, and dropped if that `init` arrives before the deadline | not applicable |
-| `artworkFailed` | degraded | media3's `BitmapLoader` future failed (404, unreachable host, undecodable bytes). Once per URI | `ArtworkCache` could not build a `UIImage` — unparseable URI, transport error, non-2xx, or data `UIImage` refused |
-| `metadataMismatch` | degraded | `setMediaItem` does not describe the current queue entry, so the merge did not happen and its `duration` (and the scrubber) was dropped — see [the model](#the-model) | identical rule, identical message |
-| `iconNotFound` | degraded | a drawable *name* — `notificationIcon`, or a `customActions[].icon` — does not resolve, so a fallback icon is drawn. Once per name | not applicable (no small icon, no custom actions) |
-| `localAudioSlotUnavailable` | degraded | `holdLocalAudioSlot: true` but the silent output would not open, so the opt-in is inert — see [Two platform conditions](#two-platform-conditions-because-both-look-like-bugs) | not applicable (iOS cannot take the volume buttons over) |
-
-The five Android-only rows are not an asymmetry this channel introduces: each
-belongs to a feature that is *already* Android-only for a documented platform
-reason. There is no code only iOS can emit.
+| Option / precondition | Detail |
+|---|---|
+| `volume` (required, `0..1`), `muted` (`false`) | Publish again on every volume change the backend reports, including the device's own knob: a key press steps from the **last published level**, so a stale one makes the next press jump |
+| `steps` (`20`) | Notches one key press moves through. 20 is media3's own `RemoteCastPlayer.MAX_VOLUME`, so a press feels like every other cast-enabled Android app |
+| `volumeControl` (`'absolute'`) | `'absolute'` converts a press to a level and delivers `onSetDeviceVolume` — write one method, not two. `'relative'` delivers `onAdjustDeviceVolume('up' \| 'down')`. `'fixed'` is readable, not writable: the volume shows and the keys do nothing |
+| `routingControllerId` | Android: ties the system output switcher's slider to the route that is playing |
+| `holdLocalAudioSlot` (`false`) | Holds a silent, looping `AudioTrack` for exactly as long as remote playback is published, reclaiming the volume-key slot after a system sound takes it. It keeps the audio HAL out of standby — measurable battery — and makes a press move the *phone's* volume in the not-playing case rather than doing nothing |
+| Android routes volume keys to a session only while it is **playing**, and a system sound can take them away with the screen off | Paused, the keys go back to the phone's stream — the platform's own rule. With the screen off the platform prefers the last uid to play local audio, and the caller is the system itself; it is sticky, not momentary, the foreground case is immune, and `holdLocalAudioSlot: true` opts out |
+| `setRemotePlayback` is **not** a fourth channel | It describes the output, not what is playing, and it is sticky: an ordinary `setPlaybackState` neither carries nor clears it. It is not persisted either, because a restored session must not route volume keys at a backend this process has no connection to |
+| iOS is a documented no-op | `MPRemoteCommandCenter` has no volume command, `AVAudioSession.outputVolume` is read-only, and Google's Cast SDK documents the same limit for its own switch. The iOS answer is an in-app slider — write the call unconditionally: load-bearing on Android, harmless on iOS |
 
 ## Surviving process death: `withPersistence`
 
-A paused, demoted foreground service is **killable** (see [Android](#android)
-below). When Android reclaims the process, your JS runtime — and with it the
-queue, the current track and the position — goes with it. Persistence is the
-mitigation: tee the three broadcast channels into storage, read them back on the
-next launch, re-broadcast.
+A paused, demoted foreground service is killable. Persistence tees the three
+broadcast channels into storage, reads them back on the next launch, and
+re-broadcasts
+([ARCHITECTURE §19](../../ARCHITECTURE.md#19-background-hardening-persistence-is-injected-the-sleep-timer-is-native-the-fgs-grace-period-is-a-knob)).
 
 ```ts
-import {
-  MediaService,
-  withPersistence,
-  restorePersisted,
-  applyPersisted,
-} from '@rn-media/media-session'
+import { MediaService, applyPersisted, restorePersisted, withPersistence } from '@rn-media/media-session'
 
-// 1. Wrap the service. Every broadcast from here on saves itself.
-const service = withPersistence(
-  await MediaService.init(() => new MyHandler(), config),
-  storage,
-)
-
-// 2. On the next launch, read it back.
+const service = withPersistence(await MediaService.init(() => new MyHandler(), config), storage)
 const restored = await restorePersisted(storage)
-if (restored.status === 'restored') {
-  applyPersisted(service, restored.session)   // queue → item → state
-}
+if (restored.status === 'restored') applyPersisted(service, restored.session)
 ```
 
-### Storage is yours; this package has no dependency
+`storage` is anything with `{ getItem, setItem }`, sync or async. AsyncStorage
+satisfies it as-is; MMKV and `expo-sqlite/kv-store` need two lines. This package
+depends on none of them.
 
-`storage` is anything structurally matching:
-
-```ts
-interface MediaSessionStorage {
-  getItem(key: string): Promise<string | null> | string | null
-  setItem(key: string, value: string): Promise<void> | void
-}
-```
-
-Sync or async, both work. `@react-native-async-storage/async-storage` satisfies
-it as-is; MMKV, `expo-sqlite/kv-store` and a `Map` need two lines:
-
-```ts
-import AsyncStorage from '@react-native-async-storage/async-storage'
-import { createMMKV } from 'react-native-mmkv'
-import { withPersistence } from '@rn-media/media-session'
-
-withPersistence(service, AsyncStorage)
-
-const mmkv = createMMKV()
-withPersistence(service, {
-  getItem: (k) => mmkv.getString(k) ?? null,
-  setItem: (k, v) => mmkv.set(k, v),
-})
-```
-
-The library depends on none of them — the same reason `wireAudioSession` takes a
-structural player rather than importing `@rn-media/player`.
-
-### What is saved, and when
-
-- **Every broadcast writes.** The three broadcast setters are the primary
-  trigger, and those are already discontinuity-only by design — a track change,
-  a seek, a pause, a queue-index change. Nothing polls a player and no state is
-  ever *read* on a timer.
-
-- **Playback also checkpoints itself every 30 s.** Broadcasts alone leave a real
-  gap: a 40-minute track played straight through produces no broadcast, so it
-  used to produce **no write at all**, and the saved position stayed at whatever
-  the last play/seek/track-change said. A default that saves nothing is not a
-  default worth having, so autosave is on.
-
-  ```ts
-  withPersistence(service, storage, {
-    autosave: { intervalMs: 30_000 },   // the default; `false` turns it off
-  })
-  ```
-
-  What it costs is **one storage `setItem` per interval, and nothing else**. A
-  tick re-projects the anchor the app already broadcast — `value + (now − at) ×
-  rate` — in JavaScript. It asks no player where playback is, and it does not
-  cross the bridge: the native resumption mirror is deliberately refreshed by
-  broadcasts and `save()` only, so a checkpoint can never become per-tick bridge
-  traffic. The timer runs only while the last broadcast said `playing` with a
-  rate above zero, stops on pause, on `stopService()` and on `clear()`, and
-  re-arms from the *last write* — an app that broadcasts every ten seconds pays
-  for no autosave writes at all. Intervals below 1 s are rejected rather than
-  clamped: below that it stops being a checkpoint and becomes the per-tick write
-  the design forbids.
-
-  It does not change what is restored. **The restored position is still always
-  paused** — see below; freezing the anchor at write time is what makes a
-  restore honest, whoever wrote it.
-
-- **Android freezes JS timers once the Activity is gone**, so autosave covers the
-  foreground and `service.save()` covers the rest. That is a React Native
-  platform behaviour, not something this package can reach — and the moment the
-  timer stops is the moment this fires:
-
-  ```ts
-  import { AppState } from 'react-native'
-
-  AppState.addEventListener('change', (next) => {
-    if (next !== 'active') service.save()   // last moment JS is guaranteed to run
-  })
-  ```
-
-  `service.save()` re-projects the live anchor to *right now*, refreshes the
-  native mirror too, and writes, with no broadcast. Other good moments:
-  `onTaskRemoved` (the app was swiped away), and just before a deliberate
-  `stopService()`. Nothing can checkpoint a process killed without warning while
-  playing with no Activity; the position then restores to the last checkpoint —
-  at worst one interval before the app was backgrounded — which is a defensible
-  answer and never a wrong one.
-- A **synchronous** storage is written *inside* the setter, so the record is on
-  disk before `setPlaybackState` returns. An **asynchronous** one gets at most
-  one write in flight; snapshots produced while it is pending collapse into a
-  single follow-up, so three channel broadcasts in one tick cost one round trip
-  and a late `setItem` can never resurrect stale state. `service.flush()`
-  resolves once everything has settled.
-- A broadcast the service **rejects** is not persisted — validation runs first.
-- Write failures go to `options.onError` (default `console.error`); they are
-  never swallowed, and one failure does not stop later writes.
-
-### The position is always restored paused
-
-This is the part that is easy to get wrong. A persisted `{ value, at, rate: 1 }`
-becomes a lie the instant the process dies: every surface projects
-`value + (now − at) × rate`, so a session restored the next morning would claim
-a position eight hours into the track.
-
-So the record is frozen at write time — the anchor is projected to the write
-instant, `rate` is set to `0`, and a `playing`/`buffering` status is downgraded
-to `paused`. On the way back in, `at` is re-stamped to *now*. The consequences:
-
-- restoring never lies about where you were, however long the gap;
-- restoring never starts a foreground service (a `playing` broadcast is exactly
-  what does that on Android — see below), so a cold launch is silent until the
-  user presses play;
-- the projection is clamped to the track's `duration` when one is known, so a
-  long-lived `playing` state cannot restore past the end;
-- **a live entry persists position `0`.** A missing `duration` is this
-  package's live/unknown discriminator everywhere else (Android marks the
-  timeline entry dynamic and draws no scrubber, iOS sets
-  `MPNowPlayingInfoPropertyIsLiveStream`), and persistence uses the same one. A
-  restored offset into a live stream is meaningless in every direction: there
-  is nothing to seek back to, the number measures how long you *listened* rather
-  than a place in the content, and `1:47:32` on a radio station you tuned in
-  yesterday is the same class of lie as a running anchor. Both channels are
-  consulted — an item without a duration still counts as finite if the matching
-  queue entry has one.
-
-Resume playback from a **user gesture**, not from the restore.
-
-### Every failure is a value, not a throw
-
-```ts
-import type { PersistedSession } from '@rn-media/media-session'
-
-type RestoreResult =
-  | { status: 'restored'; session: PersistedSession }
-  | { status: 'empty' }                                          // first launch, or cleared
-  | { status: 'unsupportedVersion'; found?: number; expected: number }
-  | { status: 'corrupt'; reason: string }
-```
-
-A truncated write, an app downgrade, a user clearing storage — all ordinary
-runtime conditions, so none of them throws; an app that has to `try/catch` its
-cold start eventually will not. What *does* reject is a failing storage engine,
-because that is a broken dependency and not bad data.
-
-Restored payloads go through the **same validators a live broadcast does**, so
-nothing that could not have been broadcast can be restored.
-
-| Export | Purpose |
-| --- | --- |
-| `withPersistence(service, storage, options?)` | Tee decorator; adds `save()`, `flush()` and `clear()` |
-| `restorePersisted(storage, options?)` | `Promise<RestoreResult>` |
-| `applyPersisted(service, session)` | Re-broadcast in the order the channels expect |
-| `clearPersisted(storage, options?)` | Forget the saved session (**storage only**) |
-| `PERSISTENCE_SCHEMA_VERSION`, `DEFAULT_PERSISTENCE_KEY` | Schema constants |
-| `DEFAULT_AUTOSAVE_INTERVAL_MS`, `MIN_AUTOSAVE_INTERVAL_MS` | `30_000` and `1_000` |
-
-`options` is `{ key?, onError?, now?, autosave? }`; only `withPersistence` reads
-`autosave`. Sleep-timer state is deliberately *not* persisted — see below. `service.clear()` and `clearPersisted(storage)` differ in
-one way that matters once resumption is on: `clear()` also forgets the native
-mirror, so the session stops being offered as a System UI resumption card.
+| Rule | Detail |
+|---|---|
+| Every broadcast writes | The three setters are the primary trigger, and they are already discontinuity-only; nothing polls a player and no state is read on a timer |
+| Playback also checkpoints every 30 s | `{ autosave: { intervalMs } }`; `false` turns it off. One `setItem` per interval: a tick re-projects the anchor the app already broadcast, in JavaScript, and never crosses the bridge. It runs only while the last broadcast said `playing` and re-arms from the *last write*, so an app that broadcasts every ten seconds pays for no autosave writes. Intervals below 1 s are rejected. Android freezes JS timers once the Activity is gone, so autosave covers the foreground and `service.save()` covers the rest — call it on `AppState` leaving `active`, in `onTaskRemoved`, and before a deliberate `stopService()` |
+| A **synchronous** storage is written inside the setter | An **asynchronous** one gets at most one write in flight, and snapshots produced while it is pending collapse into one follow-up, so a late `setItem` can never resurrect stale state. `service.flush()` resolves once everything has settled |
+| A broadcast the service rejects is not persisted | Validation runs first, and restored payloads go through the same validators a live broadcast does. Write failures go to `options.onError` (default `console.error`), never swallowed, and one failure does not stop later writes |
+| Every failure is a value, not a throw | `RestoreResult` is `restored` / `empty` / `unsupportedVersion` / `corrupt`; a failing storage engine *does* reject, because that is a broken dependency rather than bad data |
+| The restored position is **always paused**, and a live entry persists position `0` | The anchor is projected to the write instant, `rate` set to `0`, and `playing` downgraded to `paused`; `at` is re-stamped on the way back in. So restoring never lies about where you were, never starts a foreground service, and is clamped to the track's duration — resume from a user gesture. A restored offset into a live stream has nothing to seek back to, and sleep-timer state is not persisted either |
+| `service.clear()` also forgets the native mirror | The session then stops being offered as a System UI resumption card; `clearPersisted(storage)` touches storage only |
 
 ## Playback resumption after process death
 
 **Android only, opt-in.** Lets the System UI resumption card, a Bluetooth
-reconnect or a headset play button bring the whole app back — foreground service,
-notification, queue, position and all — from a process Android had killed.
+reconnect or a headset play button bring the whole app back — service,
+notification, queue and position — from a process Android had killed. The service
+reads the native mirror synchronously, rebuilds the media3 session, posts the
+correct notification inside the foreground-service deadline, and only *then*
+starts your runtime; the `play` the user pressed is held and replayed on your
+handler
+([ARCHITECTURE §20](../../ARCHITECTURE.md#20-playback-resumption-the-session-is-rebuilt-natively-first-and-javascript-is-booted-behind-it)).
 
-```ts
-import { MediaService, withPersistence } from '@rn-media/media-session'
+| Requirement | Detail |
+|---|---|
+| `android.playbackResumption: true`, and `withPersistence(...)` | The flag is off by default, because this path starts a foreground service in a process the user did not open; `withPersistence` writes the snapshot the service reads, and nothing else does |
+| `MediaService.init(...)` reachable at JS **module scope**, from a bare side-effect import in your entry file (`import './src/playback'`) | A revived runtime starts no surface, so nothing mounts and no effect runs; and Metro's release-mode inline requires defer a *binding* import to its first use, which for anything used inside a component is the first render. A bare side-effect import has no bindings to defer |
+| `androidx.media3.session.MediaButtonReceiver` declared in your `AndroidManifest.xml`, with an `android.intent.action.MEDIA_BUTTON` intent filter | media3 reads the declaration as your app's promise that it can resume, so an AAR cannot merge it. Under Expo prebuild the plugin writes it: `["@rn-media/media-session", { "playbackResumption": true }]` |
+| `android.onRevivalRequested` | The same recovery for a process that is still **alive**: `stopService()` keeps the persisted session so the card stays, and module scope cannot run twice. Give it your idempotent "bring the session up" path. Test the whole thing with `am kill` — `am force-stop` removes the System UI card, which `am kill` does not |
 
-const service = withPersistence(
-  await MediaService.init(() => new MyHandler(), {
-    android: {
-      notificationChannelId: 'playback',
-      notificationChannelName: 'Playback',
-      playbackResumption: true,       // default false
-    },
-  }),
-  storage,
-)
-```
-
-```xml
-<!-- your app's AndroidManifest.xml, inside <application> -->
-<receiver android:name="androidx.media3.session.MediaButtonReceiver"
-          android:exported="true">
-  <intent-filter>
-    <action android:name="android.intent.action.MEDIA_BUTTON" />
-  </intent-filter>
-</receiver>
-```
-
-On **Expo prebuild** that block is not yours to keep — `android/` is
-regenerated — so the [config plugin](#options) writes it for you:
-
-```json
-["@rn-media/media-session", { "playbackResumption": true }]
-```
-
-Four requirements, and the library tells you which one you are missing — on the
-`onSessionError` channel, not only in logcat:
-
-1. **`playbackResumption: true`.** Off by default — this path starts a foreground
-   service in a process the user did not open.
-2. **`withPersistence(...)`.** It writes the snapshot the service reads. Nothing
-   else does.
-3. **`MediaService.init(...)` reachable at JS *module scope*, in a module your
-   entry file imports for its side effects:**
-
-   ```js
-   // index.js
-   import './src/playback'   // ← this line is the requirement
-   import App from './App'
-   ```
-
-   Two separate platform facts make the bare entry-file import the only form
-   that works, and each kills resumption on its own:
-
-   - A revived runtime loads your bundle and starts **no surface**, so nothing
-     mounts and no effect ever runs — `init` in a component, hook or screen is
-     dead code in that process.
-   - Metro's release-mode **inline requires** (`inlineRequires: true`, the RN
-     default) rewrites every *binding* import — `import { x } from './m'` —
-     into a `require` at the first **use** of `x`. For anything used only
-     inside a component, that first use is the first *render*, which a
-     headless runtime never performs. So `App.tsx` importing your playback
-     hook does **not** execute your playback module at boot, however
-     module-scoped its `init` is. A bare side-effect import has no bindings to
-     defer; the entry file is the one module guaranteed to run.
-
-   This is the single most likely way to enable resumption and see it not work,
-   so it is **reported, not merely logged**. About three seconds after the
-   revived runtime comes up — the earliest moment the answer is knowable, since
-   a `ReactContext` exists only once your bundle has been evaluated — the
-   service raises `playbackResumptionNotWired` on the `onSessionError` channel,
-   naming this fix in these words. At the 10 s deadline it raises
-   `playbackResumptionFailed` as well and stops cleanly: the first is the cause,
-   the second the outcome.
-
-   Both are **held for your next `MediaService.init(...)`**, because "no session
-   is initialized" is precisely what they report and there is nobody to deliver
-   them to at the time. And an `init` that arrives *before* the deadline throws
-   the diagnosis away instead of delivering it — an app whose own init path is
-   merely slow is never accused of not having one.
-4. **`android.onRevivalRequested`** — the same recovery for a process that is
-   still **alive**. `stopService()` ends background execution but deliberately
-   keeps the persisted session (stop is not forget — see
-   [persistence](#surviving-process-death-withpersistence)), so the System UI
-   keeps offering its resumption card. Tapping play on it starts the service
-   into a process whose module scope already ran and cannot run again; the
-   service instead asks your app to re-run its init path:
-
-   ```ts
-   android: {
-     playbackResumption: true,
-     // Your idempotent "bring the session up" path — the same thing your
-     // module scope runs. Only invoked while no init is up or in flight.
-     onRevivalRequested: () => void playback.start(),
-   }
-   ```
-
-   Without it, play on the card after a stop does nothing — and says so:
-   `playbackResumptionNotWired` about three seconds in, naming this callback
-   rather than the module-scope fix above, because module scope cannot run twice
-   in a runtime that is already alive.
-
-### What actually happens
-
-The persisted record is mirrored into native `SharedPreferences` on every write —
-the same serialized string, so the two copies cannot drift. When the OS creates
-the service into an empty process it reads that mirror **synchronously**, rebuilds
-the media3 session from it, posts the notification with the right track inside the
-foreground-service deadline, and only *then* calls `ReactHost.start()`. Your
-runtime boots behind a notification that is already correct. The `play` the user
-pressed is held and replayed on your handler once it arrives.
-
-```ts
-import { BaseMediaHandler } from '@rn-media/media-session'
-
-class MyHandler extends BaseMediaHandler {
-  override onPlaybackResumption() {
-    // Optional and informational. The notification is already up and `play()`
-    // is about to be replayed on this handler — this is where you'd refresh an
-    // expired stream token or log the event.
-  }
-}
-```
-
-Measured on device (Android 16, release build) from a killed process:
-notification up **59 ms** after the OS granted the foreground-service start,
-runtime up at 84 ms, `init` done at 254 ms, audio playing from the persisted
-position at 377 ms.
-
-### The platform story (read this before "why is it Android-only?")
-
-Three layers, and only the middle one is platform-specific:
-
-| Layer | Android | iOS |
-| --- | --- | --- |
-| Save + restore the session (`withPersistence` / `restorePersisted`) | ✅ identical | ✅ identical |
-| Who consumes it | the OS: resumption card, Bluetooth, media button — **automatically**, no app launch | the **user**, by opening the app; `restorePersisted` puts them back on the same track, paused |
-| Config flag | `android.playbackResumption` | none, and none is possible |
-
-The cross-platform feature is persistence. `playbackResumption` only names the
-extra thing *Android* can do with that same data. An iOS twin cannot exist: a
-terminated iOS app stays terminated — a force-quit is read as the user's intent
-that it stop, and no media button, Control Center press or route change may
-resurrect a process for playback. That is Apple's policy, the same platform
-reality as "force-quit kills playback", not a missing feature here. If it ever
-changes, the flag has a natural home at `ios.playbackResumption`; it is
-namespaced under `android` deliberately, so nobody later "fixes" the asymmetry by
-hoisting it.
-
-Honest edges:
-
-- **`setResumptionSnapshot` is a no-op on iOS**, because the mirror only exists
-  for a service that has to read it with no JS alive, and iOS has no such service.
-  Your own `withPersistence` storage is untouched and is what the next launch
-  restores from.
-- **`adb shell am force-stop` removes the System UI resumption card**; `am kill` —
-  what actually happens to a paused, demoted app — does not. Test with `am kill`.
-- A **START_STICKY restart** (the OS bringing the service back on its own) is not
-  a resumption and does not boot your app; it stops quietly.
-- An `Application` that does not implement `ReactApplication` (brownfield) gets
-  one warning and the pre-existing behaviour.
+A missing wiring is **reported, not merely logged**: `playbackResumptionNotWired`
+about three seconds after the revived runtime comes up, then
+`playbackResumptionFailed` at the 10 s deadline, both held for your next `init`
+— and an `init` that arrives before the deadline throws the diagnosis away.
+`onPlaybackResumption()` is optional and informational, and is where you would
+refresh an expired stream token. A START_STICKY restart is not a resumption and
+stops quietly, and `setResumptionSnapshot` is a no-op on iOS, where a terminated
+app stays terminated.
 
 ## Sleep timer (native)
 
-```ts
-import { BaseMediaHandler } from '@rn-media/media-session'
+`setSleepTimer(seconds)` and `setSleepTimerToTrackEnd()` arm it;
+`cancelSleepTimer()` clears it. End-of-track is the mode a JS timer cannot
+express: the deadline is `(duration − projectedPosition) / rate`, computed
+natively and re-armed on every broadcast, so a seek, pause, rate change or late
+duration all move it. With no duration it arms with no deadline and waits for the
+item to change — and when the item changes it fires.
 
-service.setSleepTimer(30 * 60)      // pause in 30 minutes
-service.setSleepTimerToTrackEnd()   // pause when THIS track finishes
-service.cancelSleepTimer()
+| Detail | |
+|---|---|
+| Do not build this on `setTimeout` | React Native gates JS timers on the Activity lifecycle, so they stop firing exactly when a sleep timer matters. This one is a main-looper `Handler.postDelayed` on Android and a cancellable `DispatchQueue.main.asyncAfter` work item on iOS |
+| The pause happens natively first | The session, notification and lock screen go to paused and your `pause` handler is invoked; `onSleepTimer` reports something already done, so the default no-op is correct |
+| Re-arming replaces, across modes; it never stacks | `cancelSleepTimer()` on nothing is a no-op. The timer is also cancelled by `stopService()` and by a dev reload. `getSleepTimerRemaining()` reads the clock the timer was scheduled against, so it cannot disagree with when the pause happens |
+| **Android**: `postDelayed` counts in uptime, which does not advance in deep sleep | Playing audio holds the CPU awake, so uptime and wall time move together for the window that matters. `AlarmManager` would make this library demand `SCHEDULE_EXACT_ALARM` from every consumer |
+| **iOS**: a timer armed over silence cannot be relied on | iOS suspends a backgrounded process shortly after its audio stops. Armed while audio plays — the case that matters — it fires |
 
-service.getSleepTimerRemaining()    // seconds, or undefined
-service.getSleepTimer()             // { mode, remainingSeconds? } | undefined
+## Android
 
-class MyHandler extends BaseMediaHandler {
-  override onSleepTimer() { /* already paused — clear your badge */ }
-}
-```
+media3 `MediaLibraryService` with a `SimpleBasePlayer` facade whose `State` is
+built from the broadcast — which is where the session, the notification, Android
+Auto and Bluetooth come from
+([ARCHITECTURE §10](../../ARCHITECTURE.md#10-media3-from-day-one-simplebaseplayer-as-the-facade)).
 
-### End of current track
+| `android.*` option | Detail |
+|---|---|
+| `notificationChannelId` / `notificationChannelName` / `notificationIcon` / `notificationColor` | The first two are required for the notification; the third is a drawable **name** in your app (under Expo prebuild use the plugin's `androidNotificationIcon`, because `android/` is generated). The colour is an **ARGB integer** — `0x1db954` is transparent black — and it is a hint, since Android 12+ media notifications derive their palette from the artwork |
+| `stopForegroundOnPause` (default `true`) / `stopForegroundTimeoutMs` | The first demotes the service on pause: the notification stays, the service becomes killable — wrap in `withPersistence` if losing state matters. The second is the grace period before that demotion: omitted, media3's 10-minute default stands; `0` demotes immediately; above `600000` media3 clamps back down; a negative value is rejected here, because media3 would clamp it to `0`. Shorter frees the process sooner, longer makes a resume-from-notification more likely to find everything alive. Applied when the service is created, so a later `init` does not retro-fit a running one |
+| `playbackResumption` / `onRevivalRequested` | [Playback resumption](#playback-resumption-after-process-death) |
 
-The mode most sleep-timer users actually want, and the one a JS timer cannot
-express even in the foreground: "30 minutes" cuts a track in half, "end of this
-track" does not.
+The foreground service starts on the first `status: 'playing'` broadcast, not at
+`init`, because Android 12+ forbids starting one from the background. Swiping the
+app away calls `onTaskRemoved`, then keeps playing if the last broadcast said
+`playing`, otherwise stops the service.
 
-A package with no playback engine still knows when a track ends, because the
-broadcast channels already carry both numbers: the deadline is
-`(duration − projectedPosition) / rate`, computed **natively** and re-armed on
-every broadcast. A seek, a pause, a rate change or a duration that arrives late
-all move it — and since broadcasts are discontinuity-only by design, that is
-exactly the update rate this needs. Nothing polls, and nothing new crosses the
-bridge.
+**Keeping JavaScript alive.** The runtime belongs to the `Application`, so it
+survives Activity destruction while the foreground service keeps the process
+resident; there is no second JS context and no headless task
+([ARCHITECTURE §8](../../ARCHITECTURE.md#8-one-js-runtime-kept-alive-by-platform-primitives--no-headless-fork)).
+That does not cover **process death** (persistence and resumption do), **JS
+timers** (which stop once the Activity is gone — hence the native sleep timer and
+`service.save()`), or a **dev reload**, which tears the session down first.
 
-Two cases it handles with no duration at all:
-
-- **the current item changes** (the track ended and you advanced, or the user
-  skipped) → it fires immediately, which is the honest reading of "stop after
-  this one";
-- **no duration was ever broadcast** (a live stream, or it has not arrived yet)
-  → armed with no deadline, waiting for that item change.
-
-Which is why `getSleepTimer()` exists alongside `getSleepTimerRemaining()`:
-
-```ts
-const timer = service.getSleepTimer()
-if (timer?.mode === 'trackEnd') {
-  badge(timer.remainingSeconds ?? 'end of track')  // may legitimately have none
-}
-```
-
-`getSleepTimerRemaining()` returns `undefined` for an armed end-of-track timer
-with no computable deadline, which a UI cannot tell apart from "not armed" —
-`getSleepTimer()` can. A `'duration'` timer always has a number.
-
-**Do not build this on `setTimeout`.** React Native's `JavaTimerManager` gates
-JS timers on the Activity lifecycle plus headless tasks, so with the Activity
-destroyed they stop firing — and Samsung freezes them even with one alive
-(RN #56324). A sleep timer's entire job happens after the user has put the phone
-down, which is precisely when JS timers do not run. So this one is a platform
-timer: a main-looper `Handler.postDelayed` on Android, a cancellable
-`DispatchQueue.main.asyncAfter` work item on iOS. Neither is tied to an Activity
-and neither is a JS timer.
-
-**When it fires, the pause happens natively first.** On Android the facade
-player is paused through its own `Player.pause()` — the identical call a
-notification or Bluetooth pause makes — so the session, the notification and the
-lock screen go to paused immediately and your `pause` handler is invoked to stop
-the audio. iOS does the same two steps explicitly (now-playing state, then the
-handler), since it has no facade player. *Only then* is `onSleepTimer` called.
-It is a notification of something already done, so the default no-op is correct:
-an app that just wants "stop after 30 minutes" writes no handler code at all.
-
-Details worth knowing:
-
-- Re-arming **replaces**; it never stacks, and that is true across modes —
-  `setSleepTimerToTrackEnd()` after `setSleepTimer(600)` leaves exactly one
-  timer. `cancelSleepTimer()` on nothing is a no-op.
-- `setSleepTimer` rejects `0`, negatives, `NaN` and `Infinity` with
-  `MediaSessionError('invalidArgument')` — "cancel" and "pause now" both already
-  have names.
-- The timer is cancelled by `stopService()` and by a dev reload (the session is
-  torn down through `ReactHost.addBeforeDestroyListener` before the runtime
-  dies).
-- It does **not** survive process death, and it is not persisted: restoring
-  "37 minutes left" into a process that has just been born would be a fiction —
-  the premise is an OS timer that has been counting the whole time.
-- `getSleepTimerRemaining()` reads the same clock the timer was scheduled
-  against (`SystemClock.uptimeMillis()` / `DispatchTime.now()`), so it cannot
-  disagree with when the pause will happen. Polling it from a JS interval is
-  fine: a visible screen has a live Activity, which is the one place JS timers
-  work.
-- **Android**: `Handler.postDelayed` counts in *uptime*, which does not advance
-  in deep sleep. That is the right trade rather than a defect — playing audio
-  holds the CPU awake, so uptime and wall time move together for the whole
-  window that matters, and the alternative (`AlarmManager` with an exact alarm)
-  would make this library demand `SCHEDULE_EXACT_ALARM` from every consumer.
-- **iOS**, honestly: iOS suspends a backgrounded process shortly after its audio
-  *stops*, and a suspended process runs no timers. A timer armed while audio is
-  playing fires — playing audio is what keeps the process out of suspension, and
-  the job is finished at the moment it fires. A timer armed over silence, or
-  still pending when playback stops for another reason, cannot be relied on.
-  There is no supported way around that.
-
-## Platform notes
-
-### Android
-
-- **media3 `MediaLibraryService`** (`androidx.media3:media3-session`) with a
-  `SimpleBasePlayer` facade whose `State` is built from the broadcast. media3
-  gives us the session, the notification, Android Auto and Bluetooth for free.
-- The library manifest merges in `FOREGROUND_SERVICE` +
-  `FOREGROUND_SERVICE_MEDIA_PLAYBACK` and the service declaration
-  (`foregroundServiceType="mediaPlayback"`). You do not have to add anything.
-- `POST_NOTIFICATIONS` is **not** required — media-session notifications are
-  exempt. Declare it only if your app posts other notifications.
-- The foreground service starts on the first `status: 'playing'` broadcast, not
-  at `init`: Android 12+ forbids starting one from the background.
-- `stopForegroundOnPause: true` (default) demotes the service on pause. The
-  notification stays; the service becomes **killable**. That is the documented
-  trade-off — wrap the service in
-  [`withPersistence`](#surviving-process-death-withpersistence) if losing state
-  matters. Set `false` to stay in the foreground while paused.
-
-  The demotion is **not instant**: media3 1.11 keeps the service foreground for
-  a "user engaged" grace period after the pause
-  (`MediaSessionService.DEFAULT_FOREGROUND_SERVICE_TIMEOUT_MS`, 10 minutes) and
-  demotes only when it expires. So `dumpsys activity services` still reports
-  `isForeground=true` right after pausing — measured on Android 16, media3
-  1.11. That is media3's behaviour on every API level, and it is what keeps a
-  resume-from-notification working.
-
-- `notificationColor` sets the notification's accent, as an **ARGB integer**:
-
-  ```ts
-  android: { …, notificationColor: 0xff1db954 }
-  ```
-
-  Include the alpha byte — `0x1db954` is transparent black. Both signed
-  (`-16777216`) and unsigned (`0xff000000`) spellings are accepted; they are the
-  same 32 bits.
-
-  Applied to `Notification.color` through a thin `MediaNotification.Provider`
-  decorator, because `DefaultMediaNotificationProvider.createNotification` is
-  `final` in media3 1.11 and its `Builder` exposes channel id, channel name,
-  notification id and small icon — but no colour. Setting the field after media3
-  has finished building is the only public lever, and it means nothing media3
-  does can overwrite it.
-
-  **It is a hint, not a guarantee**, and that is the platform's doing: pre-12
-  shades tint the small icon and action text with it, while Android 12+ media
-  notifications derive their own palette from the artwork and may ignore it
-  entirely. Ignored on iOS, which has no colour surface at all — the lock
-  screen's palette comes from the artwork, which is not ours to tint.
-
-- `stopForegroundTimeoutMs` sets that grace period.
-
-  ```ts
-  android: { …, stopForegroundTimeoutMs: 60_000 }   // demote a minute after pausing
-  ```
-
-  Maps 1:1 onto `MediaSessionService.setForegroundServiceTimeoutMs(long)`
-  (`@UnstableApi`, media3 1.11.0 —
-  [source](https://github.com/androidx/media/blob/1.11.0/libraries/session/src/main/java/androidx/media3/session/MediaSessionService.java#L643-L668)),
-  applied in the service's `onCreate`. Omit it and media3's default stands.
-
-  | Value | Effect |
-  | --- | --- |
-  | omitted | media3's default: 10 minutes |
-  | `0` | demote immediately on pause |
-  | `1…600000` | that many milliseconds |
-  | `> 600000` | media3 clamps it back down to 600000 — 10 minutes is the ceiling, not just the default |
-  | `< 0` | rejected here, because media3 would silently clamp it to `0`, i.e. the opposite of what a negative is likely to mean |
-
-  **Shorter** stops the process being protected sooner, so Android may reclaim
-  it — and with it the JS runtime and your handler — minutes after a pause.
-  Better for battery and memory pressure, and the honest choice for an app that
-  does not expect to be resumed from the notification much later; pair it with
-  `withPersistence`. **Longer** makes a resume-from-notification far more likely
-  to find everything still alive, at the cost of holding a foreground service
-  (and its process) for that whole window. Neither end is free, which is why
-  there is no opinionated default beyond media3's.
-
-  Applied when the service is created — the first `playing` broadcast. Calling
-  `init` again with a different value does not retro-fit a running service.
-
-- `playbackResumption` lets the service come back after the process is killed.
-  Off by default; see
-  [Playback resumption](#playback-resumption-after-process-death). Note that a
-  service created *by a resumption* is configured from the **mirrored** config of
-  the previous run, for the same reason as above: the app's real config is in
-  JavaScript, which is what a cold start does not have yet.
-- Swiping the app away: the JS `onTaskRemoved` handler is called, and the
-  built-in policy keeps playing if the last broadcast said `playing`, otherwise
-  it stops the service.
-
-### Keeping JavaScript alive (Android)
-
-The service calls your handler with no Activity in sight. That works because on
-bridgeless React Native 0.86 the JS runtime belongs to the `Application`, not to
-an Activity: `ReactActivityDelegate.onDestroy` bottoms out in
-`ReactHostImpl.onHostDestroy`, which only moves the lifecycle state and drops the
-Activity reference — it never touches the ReactInstance. Only an explicit
-`ReactHost.destroy()` does that.
-
-So the runtime survives Activity destruction by construction, and the foreground
-service keeps the *process* resident. There is no second JS context and no
-`HeadlessJsTaskService`: on 0.86 a headless task only runs a JS task, it cannot
-pin the runtime, and this package has no background JS timers to keep warm
-(position is projected natively).
-
-What that does **not** cover:
-
-- **Process death.** If Android kills the process, your handler is gone. By
-  default a later media button starts the service into a process with no session;
-  it logs and stops rather than showing a notification with dead buttons, and the
-  state itself is not lost —
-  [`withPersistence`](#surviving-process-death-withpersistence) saves the three
-  channels on every broadcast (plus a 30 s checkpoint while playing) and the
-  next launch restores queue, track and a paused position. With
-  [`playbackResumption: true`](#playback-resumption-after-process-death) that
-  media button (or the System UI resumption card) instead rebuilds the session
-  natively and boots your runtime behind it.
-- **JS timers.** `setTimeout` inside your handler stops firing once the Activity
-  is gone. That is an RN platform behaviour, not something this package can fix
-  — which is why the [sleep timer](#sleep-timer-native) is native, and why
-  persistence's 30 s autosave covers the foreground while `service.save()` on
-  `AppState` covers the transition out of it.
-- A **dev reload** destroys the runtime. The session is torn down first via
-  `ReactHost.addBeforeDestroyListener`, so you never get a live notification
-  wired to a dead runtime.
-
-### iOS
+## iOS
 
 - `MPRemoteCommandCenter` targets are added *and removed* to match
-  `controls ∪ capabilities` exactly — stale handlers are the endemic bug here.
-- `MPNowPlayingInfoCenter` is written from all three channels: the queue entry
-  at `queueIndex` is the base and `setMediaItem` is merged over it field by
-  field, exactly as on Android (`NowPlaying.resolve` ↔ `Snapshot.timeline`).
-  Artwork loads off the main thread and is cached.
-- The two accessory scan commands (`seekForwardCommand` / `seekBackwardCommand`
-  — the FF/RW key on a Bluetooth remote or a car head unit) are bound alongside
+  `controls ∪ capabilities` exactly, and `MPNowPlayingInfoCenter` is written from
+  all three channels with the same queue-entry-plus-merge rule as Android.
+- The accessory scan commands (`seekForwardCommand` / `seekBackwardCommand`, the
+  FF/RW key on a Bluetooth remote or a head unit) are bound alongside
   `skipForwardCommand` / `skipBackwardCommand`, because media3 answers both from
-  one `COMMAND_SEEK_FORWARD`. A press delivers one `jumpForwardSeconds` jump; a
-  *continuous* scan has no Android twin, so it is not invented here.
-- There is **no service**. The process lives while audio plays, which requires
-  `UIBackgroundModes: audio` in *your* Info.plist (a library cannot merge
-  Info.plist keys — the Expo config plugin below writes it for you).
-  Force-quitting from the app switcher kills everything — that is iOS policy,
-  not a bug here.
-- `skipToQueueItem` and custom actions have no iOS remote surface. They still
-  work from your own UI — and, since CarPlay landed, from the car's Up Next
-  list.
+  one `COMMAND_SEEK_FORWARD`. A continuous scan has no Android twin.
+- There is **no service**. The process lives while audio plays, which needs
+  `UIBackgroundModes: audio`. Force-quitting kills everything — iOS policy.
 
 ## Android Auto
 
-Nothing to install and nothing to declare: this package ships the
+Nothing to install and nothing to declare: the package ships the
 `com.google.android.gms.car.application` meta-data and the `automotive_app_desc`
-XML that Android Auto's launcher looks for, so an app that depends on it is
-already listed in the car. What you add is the tree.
+XML the launcher looks for. You add the tree — `getChildren`, `playFromMediaId`,
+optionally `search` / `playFromSearch`
+([recipe](../../docs/recipes/in-the-car.md), [ARCHITECTURE §31](../../ARCHITECTURE.md#31-the-car-is-a-browser-that-taps-one-handler-a-per-controller-door-and-a-cache-that-outlives-js)).
 
-```ts
-import { BaseMediaHandler, BROWSE_ROOT, BrowseError } from '@rn-media/media-session'
-import type { BrowseItem, SearchFocus } from '@rn-media/media-session'
+| Rule the car imposes | Detail |
+|---|---|
+| The root is at most four browsable items | Google's own guidance, and the root supports `FLAG_BROWSABLE` only. Extra or playable root entries are dropped and reported as `browseRootRejected`; the same cap runs on iOS, from the same function |
+| Artwork must be `content://` | Set `artworkUri` to an ordinary `https://` URL and the package rewrites it to a `content://` served by its own provider: download, downscale to the requested size, cache. `file://`, `content://` and `android.resource://` pass through, and only URLs your browse tree registered are served |
+| A browse error is a screen, not an exception | Throw a `BrowseError` and the car draws its sign-in or upgrade screen, with an optional button that deep-links into your app. Auto's legacy browser renders only `authenticationExpired` and `parentalControlRestricted`; the other three come back as an empty list there, while CarPlay draws all five |
+| A tap is not a `play` | It arrives as `playFromMediaId(id)` and nothing else; the duplicate `play()` media3 synthesises after a browse tap is swallowed. An unknown parent is an empty list, never an error |
 
-const toRow = (t: { id: string; title: string; artist: string }): BrowseItem => ({
-  id: `track:${t.id}`,
-  title: t.title,
-  subtitle: t.artist,
-  playable: true,
-})
-
-class Handler extends BaseMediaHandler {
-  async getChildren(parentId: string): Promise<BrowseItem[]> {
-    if (!(await auth.isSignedIn())) {
-      // A browse error is a screen, not an exception — see rule 3 below.
-      throw new BrowseError('authenticationExpired', 'Sign in to browse', {
-        label: 'Sign in',
-        url: 'myapp://signin',
-      })
-    }
-    if (parentId === BROWSE_ROOT) {
-      // The car's tabs: at most four, all browsable (see below).
-      return [
-        { id: 'library', title: 'Library', browsable: true },
-        { id: 'albums', title: 'Albums', browsable: true, childStyle: 'grid' },
-      ]
-    }
-    if (parentId === 'albums') {
-      return (await catalogue.albums()).map((a) => ({
-        id: `album:${a.id}`,
-        title: a.title,
-        subtitle: a.artist,
-        // An item may be BOTH: the tap plays, the chevron opens the track list.
-        browsable: true,
-        playable: true,
-      }))
-    }
-    if (parentId.startsWith('album:')) {
-      return (await catalogue.tracks(parentId.slice('album:'.length))).map(toRow)
-    }
-    return [] // an unknown parent is an empty list, never an error
-  }
-
-  async getMediaItem(id: string): Promise<BrowseItem | undefined> {
-    const tracks = await catalogue.tracks(id)
-    return tracks.map(toRow).find((row) => row.id === id)
-  }
-
-  // A tap in the car. Build the queue, broadcast it, play — exactly like
-  // `play()`: the app's next broadcast is the acknowledgement.
-  playFromMediaId(id: string): void {
-    void this.playAlbumOrTrack(id)
-  }
-
-  // Optional. Its *absence* is advertised: without it, voice playback is
-  // answered `ERROR_NOT_SUPPORTED` instead of playing something arbitrary.
-  async playFromSearch(query: string, focus: SearchFocus): Promise<void> {
-    const [hit] = await this.search(focus.title ?? focus.artist ?? query)
-    if (hit !== undefined) this.playFromMediaId(hit.id)
-  }
-
-  // Optional. Without it Android Auto hides its search tab entirely
-  // (`SEARCH_SUPPORTED=false`) rather than showing one that answers nothing.
-  async search(query: string): Promise<BrowseItem[]> {
-    return (await catalogue.search(query)).map(toRow)
-  }
-
-  private async playAlbumOrTrack(id: string): Promise<void> {
-    const tracks = id.startsWith('album:')
-      ? await catalogue.tracks(id.slice('album:'.length))
-      : await catalogue.search(id.slice('track:'.length))
-    service.setQueue(tracks.map((t) => ({ id: t.id, title: t.title })))
-    // …then load the queue into your player and broadcast `status: 'playing'`.
-  }
-}
-```
-
-### The four rules the car imposes
-
-1. **The root is at most four browsable items.** Google: *"expect this number to
-   be four"*, and the root supports `FLAG_BROWSABLE` only. Extra or playable
-   root entries are **dropped, never silently**: the drop is reported on
-   `onSessionError` as `browseRootRejected`, naming each one. The same cap runs
-   on iOS, from the same function, so a tree that works in one car works in the
-   other.
-2. **Artwork must be `content://`.** Set `artworkUri` to an ordinary
-   `https://` URL and this package rewrites it to a `content://` served by its
-   own provider — download, downscale to the browser's requested size, cache,
-   all handled. `file://`, `content://` and `android.resource://` pass through.
-   Only URLs your own browse tree registered are ever served.
-3. **A browse error is a screen, not an exception.** Throw (or reject with) a
-   `BrowseError` and the car draws its sign-in / upgrade screen, with an
-   optional button that deep-links back into your app:
-
-   ```ts
-   throw new BrowseError('authenticationExpired', 'Sign in to continue.', {
-     label: 'Sign in',
-     url: 'myapp://signin',
-   })
-   ```
-
-   Two of the five codes reach a *legacy* browser's screen — Android Auto is one
-   — because media3 replicates only those two into the platform playback state:
-   `authenticationExpired` and `parentalControlRestricted`. The other three are
-   returned faithfully and render as an empty list there; CarPlay draws all
-   five. Use `authenticationExpired` for anything that needs a button.
-4. **A tap is not a `play`.** It arrives as `playFromMediaId(id)` and nothing
-   else — the duplicate `play()` media3 synthesises after a browse tap is
-   swallowed, so your handler is not asked to resume the *previous* track while
-   it loads the new one.
-
-### Telling the car something changed
-
-```ts
-service.invalidateBrowse('albums')  // or omit the id for "everything"
-```
-
-Evicts the cached answer and makes every connected browser ask again. Cheap and
-safe with no car connected.
-
-### While the app is not running
-
-A car that reconnects to an app the OS killed is answered **from a native cache**
-(64 nodes / 2 MB, on disk) rather than with an empty library — and, because the
-asker is a car, the JS runtime is started behind it and every parent served from
-cache is refreshed the moment your handler exists. A System UI bind never starts
-your app; only a car does.
-
-Cold browse needs `android.playbackResumption: true`, for the same reason
-playback resumption does: with no JavaScript in the process, the persisted
-mirror is the only thing that can build a session at all.
-
-### Is a car connected?
-
-```ts
-import { useCarConnection } from '@rn-media/media-session'
-
-const car = useCarConnection()   // { kind: 'none' | 'androidAuto' | 'automotiveOs' | 'carPlay' }
-```
-
-`MediaService.getCarConnection()` is the synchronous twin. Both are fed by
-native: the Auto companion (`com.google.android.projection.gearhead`) and
-Automotive OS (`com.android.car.media`, `com.android.car.carlauncher`) on
-Android, a connected CarPlay scene on iOS.
-
-### Testing it
-
-Two ways, and the first is the one that catches layout.
-
-**The Desktop Head Unit** (Linux / macOS, `sdkmanager "extras;google;auto"`)
-draws the real Android Auto UI on your desk. Three things its documentation
-does not say, all handled by [`scripts/dhu.sh`](../../scripts/dhu.sh) in this
-repo: `~/.android/headunit.ini` must contain `startupfocus = true` or the DHU
-connects and **draws nothing** (no shipped sample sets it); Android Auto's
-head-unit server must be restarted after a force-stop before every connect, or
-the link dies right after `connected.`; and the DHU exits the moment its stdin
-closes. One-time on the phone: Android Auto → About → tap the header 10× for
-developer mode.
-
-**A real `MediaBrowser`** walks the same session callbacks over the same
-binder that Auto's legacy client does, and unlike a head unit it produces
-values you can assert on. The example app's
-`CarBrowseInstrumentedTest` (`./gradlew :app:connectedDebugAndroidTest`) is
-the model: root, tabs, drilling in, `content://` artwork bytes, paging,
-`getItem`, search, and a tap end to end, on the phone.
+`service.invalidateBrowse('albums')` evicts the cached answer and makes every
+connected browser ask again; it is cheap and safe with no car connected. A car
+that reconnects to a killed app is answered from a native cache (64 nodes / 2 MB,
+on disk), and because the asker is a car the JS runtime is started behind it and
+every cached parent is refreshed once your handler exists — a cold path that
+needs `android.playbackResumption: true`. Test with the Desktop Head Unit
+([`scripts/dhu.sh`](../../scripts/dhu.sh)) or a real `MediaBrowser`.
 
 ## CarPlay
 
-Your browse tree — the same `getChildren` / `playFromMediaId` handler Android
-Auto uses — rendered as CarPlay tabs and lists, plus the system Now Playing
-screen you already feed through `MPNowPlayingInfoCenter`.
-
-You write **one** handler. Nothing below is iOS-specific application code.
-
-```ts
-import { BaseMediaHandler, BROWSE_ROOT } from '@rn-media/media-session'
-import type { BrowseItem } from '@rn-media/media-session'
-
-class Handler extends BaseMediaHandler {
-  async getChildren(parentId: string): Promise<BrowseItem[]> {
-    if (parentId === BROWSE_ROOT) {
-      // ≤ 4 browsable items: these become the car's tabs.
-      return [
-        { id: 'albums', title: 'Albums', browsable: true },
-        { id: 'artists', title: 'Artists', browsable: true },
-      ]
-    }
-    return loadChildren(parentId)
-  }
-
-  playFromMediaId(id: string) {
-    // Build the queue, broadcast it, play. Exactly like `play()`.
-  }
-}
-```
+The same `getChildren` / `playFromMediaId` handler, rendered as CarPlay tabs and
+lists, plus the system Now Playing screen. You write no Swift.
 
 ### Two things your app must declare
 
-CarPlay only connects to a **scene-based** app, and it is a managed capability.
-Both are app-level declarations a library cannot merge for you.
-
-With Expo, set `carPlay: true` on the config plugin (see
-[Options](#options)) and re-run `npx expo prebuild --clean`. For a bare project,
-paste these two yourself.
-
-`ios/<YourApp>/Info.plist`:
-
-```xml
-<key>UIApplicationSceneManifest</key>
-<dict>
-  <key>UIApplicationSupportsMultipleScenes</key>
-  <true/>
-  <key>UISceneConfigurations</key>
-  <dict>
-    <key>CPTemplateApplicationSceneSessionRoleApplication</key>
-    <array>
-      <dict>
-        <key>UISceneClassName</key>
-        <string>CPTemplateApplicationScene</string>
-        <key>UISceneConfigurationName</key>
-        <string>RnMediaCarPlay</string>
-        <key>UISceneDelegateClassName</key>
-        <string>RnMediaCarPlaySceneDelegate</string>
-      </dict>
-    </array>
-    <key>UIWindowSceneSessionRoleApplication</key>
-    <array>
-      <dict>
-        <key>UISceneClassName</key>
-        <string>UIWindowScene</string>
-        <key>UISceneConfigurationName</key>
-        <string>RnMediaPhone</string>
-        <key>UISceneDelegateClassName</key>
-        <string>RnMediaWindowSceneDelegate</string>
-      </dict>
-    </array>
-  </dict>
-</dict>
-```
-
-`ios/<YourApp>/<YourApp>.entitlements`:
-
-```xml
-<key>com.apple.developer.carplay-audio</key>
-<true/>
-```
-
-Both scene delegates ship in this pod; you write no Swift. `RnMediaCarPlaySceneDelegate`
-is the head unit. `RnMediaWindowSceneDelegate` is the **phone**, and it is there
-because adopting scenes is all-or-nothing: the window your `AppDelegate` builds
-React Native into is attached to no scene, so iOS never shows it and the app
-launches to black. The shim re-parents that window's root view controller into a
-scene-owned window. It disappears when the tested React Native version reaches
-**0.88**, whose `RCTReactNativeFactory` gains
-`startReactNativeWithModuleName:inWindow:connectionOptions:` — the scene-aware
-entry point that makes re-parenting unnecessary. 0.87.1 does not have it.
-
-If your app already declares its own `UIWindowSceneSessionRoleApplication`
-delegate, the plugin leaves it alone: you own your startup, and the shim is only
-for apps that have none.
-
-### Testing it
-
-- **Simulator**: the Info.plist key alone is enough. Run the app, then
-  I/O → External Displays → CarPlay.
-- **A real head unit** additionally needs Apple to grant
-  `com.apple.developer.carplay-audio` on your developer account — a per-app
-  request only you can make:
-  [Requesting CarPlay entitlements](https://developer.apple.com/documentation/carplay/requesting-carplay-entitlements).
-
-### What the car shows
+CarPlay connects only to a **scene-based** app, and it is a managed capability;
+both are app-level declarations a library cannot merge. With Expo, set
+`carPlay: true` on the plugin (see [Options](#options)) and re-run
+`npx expo prebuild --clean`. Bare projects add `UIApplicationSceneManifest` to
+`Info.plist` naming this pod's `RnMediaCarPlaySceneDelegate` (the head unit) and
+`RnMediaWindowSceneDelegate` (the phone), plus
+`com.apple.developer.carplay-audio` in the entitlements. The phone-side delegate
+is a shim: adopting scenes is all-or-nothing, so without it the app launches to
+black. It goes away at React Native 0.88, and an app that already declares its
+own window-scene delegate is left alone.
 
 | `BrowseItem` field | CarPlay |
-| --- | --- |
+|---|---|
 | `browsable` at `BROWSE_ROOT` | a tab (≤ 4; the car reports the real limit) |
-| `browsable` elsewhere | a row with a chevron that pushes a child list |
-| `playable` | a tap calls `playFromMediaId` and shows Now Playing |
-| both | plays **and** opens the list, like Apple's own music app |
-| `title` / `subtitle` | the row's two lines |
-| `artworkUri` | the row's image, downloaded and scaled to the car's `maximumImageSize` |
-| `group` | contiguous rows sharing it get one section heading |
-| `explicit` | the explicit-content badge |
-| `completion` | the podcast-style progress bar |
-| `childStyle`, `mediaType` | ignored — Android content-style hints with no CarPlay equivalent |
+| `browsable` elsewhere / `playable` / both | a row with a chevron that pushes a child list; a tap that calls `playFromMediaId` and shows Now Playing; or both at once |
+| `title` / `subtitle` / `artworkUri` / `group` / `explicit` / `completion` | the row's two lines and its image (scaled to the car's `maximumImageSize`); a section heading over contiguous rows sharing a `group`; the explicit badge; the podcast-style progress bar |
+| `childStyle` / `mediaType` | ignored — Android content-style hints with no CarPlay equivalent |
 
-Nesting is capped at five levels, which is Apple's limit for non-food apps. A
-`BrowseError` thrown from `getChildren` becomes a modal alert carrying your
-message, with your `resolution.label` opening `resolution.url` **on the phone**
-— signing in is not something a head unit can do.
-
-The Now Playing screen gains a repeat, shuffle or rate button for each of
-`setRepeatMode` / `setShuffle` / `setRate` you advertise in `capabilities`, and
-an Up Next list — your broadcast queue, tapping through to `skipToQueueItem` —
-whenever the queue has more than one entry.
-
-### Two parity notes
-
-- **`search` is never called on iOS.** CarPlay audio apps have no search
-  template: the vocabulary Apple gives them is list / grid / tab bar / now
-  playing / alert, and none of them takes a query. This is a missing *surface*,
-  not a missing feature — there is nothing in the car to type into. Voice on iOS
-  arrives through `INPlayMediaIntent` (a Siri integration, not shipped yet).
-- **`useCarConnection()` reports `{ kind: 'carPlay' }`** while a head unit is
-  showing your templates, and `{ kind: 'none' }` otherwise, exactly as it
-  reports `androidAuto` / `automotiveOs` on the other platform.
+Nesting is capped at five levels (Apple's limit for non-food apps). A
+`BrowseError` becomes a modal alert whose `resolution.url` opens **on the phone**.
+Now Playing gains a repeat, shuffle or rate button for each of `setRepeatMode` /
+`setShuffle` / `setRate` you advertise, and an Up Next list — your broadcast
+queue, tapping through to `skipToQueueItem` — whenever the queue has more than
+one entry. The Simulator needs only the Info.plist key (I/O → External Displays →
+CarPlay); a real head unit also needs Apple to grant the entitlement.
 
 ## Expo config plugin
 
-This package ships the config plugin for the whole library — it is the package
-that owns background playback, and it is the only one that needs anything an
-Expo app cannot express by itself. `@rn-media/player` and
-`@rn-media/audio-session` need no plugin.
-
-```json
-{
-  "expo": {
-    "plugins": ["@rn-media/media-session"]
-  }
-}
-```
-
-```sh
-npx expo prebuild --clean
-```
-
-What it does:
-
-| Platform | Change | Why |
-| --- | --- | --- |
-| iOS | merges `audio` into `UIBackgroundModes` | without it iOS suspends the app on backgrounding and the audio session is torn down mid-track |
-| Android | nothing by default | this package's own manifest already merges the foreground-service permissions and the `mediaPlayback` service into the app |
-
-The merge is additive and idempotent: existing modes such as `voip` survive, and
-a plist that already lists `audio` is left alone, so re-running prebuild is a
-no-op. The plugin is wrapped in `createRunOncePlugin`, so listing it twice (say,
-directly and through another library) applies it once.
+`{ "expo": { "plugins": ["@rn-media/media-session"] } }` is the config plugin for
+the whole library; `@rn-media/player` and `@rn-media/audio-session` need none
+([ARCHITECTURE §16](../../ARCHITECTURE.md#16-expo-support-is-one-config-plugin-owned-by-media-session)).
+With no options it merges `audio` into iOS `UIBackgroundModes` and changes
+nothing on Android, where this package's manifest already merges what is needed.
+The merge is additive and idempotent, and the plugin is wrapped in
+`createRunOncePlugin`, so listing it twice applies it once. Bare projects need no
+plugin: add `UIBackgroundModes` and the `MediaButtonReceiver` yourself, add the
+two [CarPlay](#carplay) declarations, and drop the drawable into
+`android/app/src/main/res`.
 
 ### Options
 
-Everything above needs no options. Three are available:
+Passed as `["@rn-media/media-session", { … }]`.
 
-```json
-{
-  "expo": {
-    "plugins": [
-      ["@rn-media/media-session", {
-        "androidNotificationIcon": "./assets/ic_notification.xml",
-        "playbackResumption": true,
-        "carPlay": true
-      }]
-    ]
-  }
-}
-```
-
-`androidNotificationIcon` — path, relative to the project root, of the drawable
-to install as the notification small icon. It exists because a prebuild app has
-no other way to add an Android resource: `android/` is generated, so
-`android.notificationIcon` in `MediaService.init` would have nothing to resolve
-and media3 would silently fall back to its own icon.
-
-- A **vector drawable** (`.xml`) is copied to `res/drawable/`; a `.png`/`.webp`
-  is copied to `res/drawable-xxxhdpi/`, where a 96×96 px white-on-transparent
-  source is the 24 dp the platform asks for (a raster in unqualified
-  `drawable/` would be read as mdpi and upscaled 4×).
-- The file name without its extension is the resource name — pass that same
-  string as `android.notificationIcon`. It must be a valid Android resource
-  name (lowercase, digits, `_`, letter-first); the plugin fails the prebuild
-  rather than letting `aapt2` do it later.
-
-`playbackResumption` — adds media3's `MediaButtonReceiver` to the generated
-`AndroidManifest.xml`, the manifest half of [playback
-resumption](#playback-resumption-after-process-death). Off by default, and set
-it **only** together with `android.playbackResumption: true` at
-`MediaService.init` — the two are one feature, and the receiver alone does
-nothing but change how media buttons are routed.
-
-- It is not merged in from the library's own manifest on purpose: media3 reads
-  the declaration as your app's promise that it can resume, and an AAR cannot
-  make that promise on behalf of every app that installs it.
-- The mod is idempotent — a receiver you already declared is left exactly as it
-  is, so repeated prebuilds and a hand-written declaration both stay put.
-
-`carPlay` — makes the app a [CarPlay](#carplay) audio app: writes
-`UIApplicationSceneManifest` (this package's two scene delegates) into
-`Info.plist` and `com.apple.developer.carplay-audio` into the entitlements. Off
-by default, because the scene manifest changes how *every* launch of the app
-works on every device, car or no car — adopting it is your decision, exactly as
-`playbackResumption` is on Android.
-
-- A scene role you already declare is left exactly as it is, so an app with its
-  own window-scene delegate keeps its own startup and repeated prebuilds are a
-  no-op.
-- The entitlement key is enough for the CarPlay simulator; a real head unit
-  needs Apple to grant it on your account. See [CarPlay](#carplay).
-
-Bare React Native projects do not need the plugin at all: add
-`UIBackgroundModes` to `Info.plist`, paste the `MediaButtonReceiver` block
-above into `android/app/src/main/AndroidManifest.xml`, the two
-[CarPlay](#two-things-your-app-must-declare) snippets into your `Info.plist` and
-`.entitlements`, and drop the drawable into `android/app/src/main/res`
-yourself.
-
-## Development
-
-```sh
-npm run codegen       # nitrogen + bob build
-npm run typecheck     # tsc --noEmit (strict), src + plugin
-npm test              # vitest — src and plugin suites
-npm run build:plugin  # tsc -p plugin → plugin/build (what app.plugin.js loads)
-```
-
-The Kotlin half has its own JVM suite — the resumption record parser, the
-channel-priority merge, and the guard that keeps `ResumptionStore.SCHEMA_VERSION`
-equal to `PERSISTENCE_SCHEMA_VERSION` in `src/persistence.ts`. It needs the
-Android SDK (it runs through the example app's Gradle build) but no device, and
-CI runs both of these on every Android-touching change:
-
-```sh
-npm run test:android  # :rn-media_media-session:testReleaseUnitTest
-npm run lint:android  # :rn-media_media-session:lintRelease
-```
+| Option | Default | Detail |
+|---|---|---|
+| `androidNotificationIcon` | none | Path, relative to the project root, of the drawable to install as the notification small icon. It exists because a prebuild app has no other way to add an Android resource. A `.xml` vector goes to `res/drawable/`; a `.png`/`.webp` goes to `res/drawable-xxxhdpi/`, where a 96×96 white-on-transparent source is the 24 dp the platform asks for. The file name without its extension is the resource name — pass that same string as `android.notificationIcon`, and it must be a valid Android resource name or the prebuild fails here rather than in `aapt2` |
+| `playbackResumption` | `false` | Adds media3's `MediaButtonReceiver` to the generated manifest — the manifest half of [playback resumption](#playback-resumption-after-process-death). Set it **only** together with `android.playbackResumption: true` at `init`: the two are one feature, and the receiver alone only changes how media buttons are routed. Idempotent; a receiver you already declared is left alone |
+| `carPlay` | `false` | Writes `UIApplicationSceneManifest` (this package's two scene delegates) into `Info.plist` and `com.apple.developer.carplay-audio` into the entitlements. Off by default because the scene manifest changes how *every* launch works, car or no car; a scene role you already declare is left alone |
 
 ## Also exported
 
 | Group | Exports |
 |---|---|
 | Config | `MediaSessionConfig`, `AndroidMediaSessionConfig`, `IosMediaSessionConfig`; `MediaCustomAction` — `{ name, title, icon? }`; the defaults `DEFAULT_JUMP_SECONDS`, `DEFAULT_SUPPORTED_PLAYBACK_RATES`, `DEFAULT_REPEAT_MODE`, `DEFAULT_SHUFFLE_ENABLED`, `DEFAULT_STOP_FOREGROUND_ON_PAUSE`, `DEFAULT_PLAYBACK_RESUMPTION`, `DEFAULT_REMOTE_VOLUME_CONTROL`, `DEFAULT_REMOTE_VOLUME_STEPS`, `MAX_COMPACT_CONTROLS`, `MAX_STOP_FOREGROUND_TIMEOUT_MS` |
-| Errors | `SessionErrorCode`, `SessionErrorSeverity`, `SESSION_ERROR_SEVERITY` (the channel, see [`onSessionError`](#when-the-session-itself-fails-onsessionerror)); `MediaSessionErrorCode` — `'invalidArgument' \| 'alreadyInitialized' \| 'notInitialized'` (the thrown kind); `toSessionError` |
-| The car | `BrowseStyle` — `'list' \| 'grid' \| 'categoryList' \| 'categoryGrid'`; `BrowseMediaType`; `BrowseErrorCode`; `isBrowseError(x)`; `MAX_ROOT_TABS` = `4`; `capRootTabs(items)` (the same cap both platforms apply) |
-| Persistence | `PersistedSession`, `PersistenceOptions`, `RestoreResult` |
-| Queue helper | `QueueHandlerOptions`, `QueueHandlerMethods`, `QueueBroadcaster` |
-| Remote playback | `RemoteVolumeControl`, `RemoteVolumeDirection` |
+| Errors | `SessionErrorCode`, `SessionErrorSeverity`, `SESSION_ERROR_SEVERITY` (the channel, see [`onSessionError`](#session-errors-onsessionerror)); `MediaSessionErrorCode` — `'invalidArgument' \| 'alreadyInitialized' \| 'notInitialized'` (the thrown kind); `toSessionError` |
+| The car | `BrowseStyle` — `'list' \| 'grid' \| 'categoryList' \| 'categoryGrid'`; `BrowseMediaType`; `BrowseErrorCode`; `isBrowseError(x)`; `MAX_ROOT_TABS` = `4`; `capRootTabs(items)`; `SearchFocus`; `CarConnection`; `useCarConnection` |
+| Persistence, the queue helper and remote playback | `PersistedSession`, `PersistenceOptions`, `RestoreResult`, `PersistedMediaService`, `MediaSessionStorage`; `QueueHandlerOptions`, `QueueHandlerMethods`, `QueueBroadcaster`; `RemoteVolumeControl`, `RemoteVolumeDirection` |
 | Validation | `normalizePlaybackState`, `normalizeRemotePlayback`, `validateQueue`, `validateAnchor`, `validateSleepTimerSeconds` — what `MediaService` runs on every broadcast, exported so a host can pre-check |
 | Native layer | `RnMediaMediaSession`, `MediaSessionHandlers`, `NativeMediaItem`, `NativePlaybackState`, `NativeRemotePlayback`, `NativeSleepTimerState`, `MediaServiceController` — the Nitro contract, for a host that bypasses `MediaService` |
-| Shapes | `PositionAnchor` — `{ value, at, rate }`, the projected position every broadcast carries; `SleepTimerMode` — `'duration' \| 'trackEnd'` |
+| Shapes | `PositionAnchor` — `{ value, at, rate }`; `SleepTimerMode` — `'duration' \| 'trackEnd'`; `MediaRepeatMode` |
+
+## Development
+
+```sh
+npm run codegen       # nitrogen + bob build
+npm run typecheck     # tsc --noEmit (strict), src + plugin
+npm test              # vitest — src and plugin suites; build:plugin builds the plugin
+npm run test:android  # JVM suite        npm run lint:android  # android lint
+```

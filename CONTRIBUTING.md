@@ -97,8 +97,9 @@ first: `npm run codegen --prefix packages/<pkg>`.
   npm run check:readme      # extracts every ```ts / ```tsx block, tsc --noEmit
   ```
 
-  It reads the five shipped READMEs (root + the four packages), writes each
-  block to a gitignored `.readme-samples/` as a standalone module with
+  It reads the five shipped READMEs (root + the four packages) and the recipes
+  in `docs/recipes/`, writes each block to a gitignored `.readme-samples/` as a
+  standalone module with
   `@rn-media/*` mapped at the packages' `src`, and reports failures at
   `README.md:LINE` — the README's line, not the generated file's. Fix the
   sample; never the check. A block that is deliberately partial (an options
