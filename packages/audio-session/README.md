@@ -123,6 +123,7 @@ member that exists on one platform and quietly does nothing on the other.
 | Events | `AudioSessionEventMap`, `AudioSessionEventName`, `AudioSessionInterruptionEvent`, `AudioSessionRouteChangeEvent`, `AudioInterruptionType` — `'duck' \| 'pause'` |
 | Wiring | `WireAudioSessionOptions`, `AudioSessionPlayerLike` (the structural player the wiring accepts), `AudioSessionApi` |
 | Native layer | `RnMediaAudioSession`, `NativeInterruptionEvent`, `NativeRouteChangeEvent` |
+| Factory and route reasons | `createAudioSession` (the factory `AudioSession` wraps), `AudioRouteChangeReason` |
 
 ## Development
 
