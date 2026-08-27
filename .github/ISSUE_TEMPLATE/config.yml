@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Read the decision record first
-    url: https://github.com/afkcodes/rn-media/blob/main/ARCHITECTURE.md
+    url: https://github.com/afkcodes/timbre/blob/main/ARCHITECTURE.md
     about: Every design decision and the evidence behind it, plus the platform traps. Most "why does it do that?" answers live here.
   - name: Known limitations
-    url: https://github.com/afkcodes/rn-media/blob/main/README.md#limitations
+    url: https://github.com/afkcodes/timbre/blob/main/README.md#limitations
     about: DRM, Chromecast, iOS force-quit and the two persistence edges are out of scope by construction — not bugs.
   - name: Contributing and local setup
-    url: https://github.com/afkcodes/rn-media/blob/main/CONTRIBUTING.md
+    url: https://github.com/afkcodes/timbre/blob/main/CONTRIBUTING.md
     about: Build, test and device-verification workflow for pull requests.

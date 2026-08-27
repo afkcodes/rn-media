@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
   # time, which is the honest failure mode (an app on 15.1 gets a clear
   # resolver error, not a runtime crash).
   s.platforms    = { :ios => "16.0" }
-  s.source       = { :git => "https://github.com/afkcodes/rn-media.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/afkcodes/timbre.git", :tag => "#{s.version}" }
 
   s.source_files = [
     # Implementation (Swift)

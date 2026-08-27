@@ -23,9 +23,9 @@ export const PROJECT = {
   /** GitHub org/user. */
   org: 'afkcodes',
   /** GitHub repo name. */
-  repo: 'rn-media',
+  repo: 'timbre',
   /** Full repository URL. */
-  repoUrl: 'https://github.com/afkcodes/rn-media',
+  repoUrl: 'https://github.com/afkcodes/timbre',
   /**
    * The future documentation domain. Not yet public (spec §6, name gate); the
    * GitHub Pages URL below is what CI builds against until then.

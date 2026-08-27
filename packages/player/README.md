@@ -5,7 +5,7 @@ core per `Player`, a gapless queue, a typed filter/EQ chain, a spectrum
 visualizer, and a raw escape hatch onto mpv's client API.
 
 [![Version](https://img.shields.io/npm/v/@timbre/player.svg)](https://www.npmjs.com/package/@timbre/player)
-[![License](https://img.shields.io/npm/l/@timbre/player.svg)](https://github.com/afkcodes/rn-media/blob/main/LICENSE)
+[![License](https://img.shields.io/npm/l/@timbre/player.svg)](https://github.com/afkcodes/timbre/blob/main/LICENSE)
 
 ## Requirements
 

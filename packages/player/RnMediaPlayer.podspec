@@ -43,7 +43,7 @@ Pod::Spec.new do |s|
   # `min_ios_version_supported` (15.1 for RN 0.86), so no reconciliation is
   # needed — the binaries never raise our floor.
   s.platforms    = { :ios => min_ios_version_supported }
-  s.source       = { :git => "https://github.com/afkcodes/rn-media.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/afkcodes/timbre.git", :tag => "#{s.version}" }
 
   s.source_files = [
     # Implementation (Swift)
