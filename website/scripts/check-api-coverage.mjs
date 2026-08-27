@@ -26,15 +26,18 @@ import { fileURLToPath } from 'node:url'
 const WEBSITE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const REPO_ROOT = dirname(WEBSITE_ROOT)
 
-/** The package under coverage. One entry today; the other three are pass 2. */
-const PACKAGES = [
-  {
-    name: '@timbre/player',
-    indexFile: join(REPO_ROOT, 'packages/player/src/index.ts'),
-    srcDir: join(REPO_ROOT, 'packages/player/src'),
-    apiDir: join(WEBSITE_ROOT, 'docs/api/player'),
-  },
-]
+/**
+ * Every published package is under coverage. The list mirrors PROJECT.packages
+ * in src/project.ts (kept in sync by hand — this script has zero deps and does
+ * not import TS). Each entry's generated pages are diffed against its index.ts.
+ */
+const PACKAGE_NAMES = ['player', 'audio-session', 'media-session', 'cast']
+const PACKAGES = PACKAGE_NAMES.map((name) => ({
+  name: `@timbre/${name}`,
+  indexFile: join(REPO_ROOT, `packages/${name}/src/index.ts`),
+  srcDir: join(REPO_ROOT, `packages/${name}/src`),
+  apiDir: join(WEBSITE_ROOT, `docs/api/${name}`),
+}))
 
 /** Strip comments so `export { … }` inside a doc block is never miscounted. */
 function stripComments(source) {
