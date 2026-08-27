@@ -22,7 +22,7 @@ reader can check the table rather than trust it.
 | Spectrum visualizer | ❌ | ❌ | ❌ | ✅ | ✅ both platforms, no `RECORD_AUDIO` |
 | Crossfade | ❌ | ❌ | ❌ | ✅ | ❌ deliberately — built, listened to, dropped ([Limitations](../README.md#limitations)) |
 | Casting (Chromecast / AirPlay) | ❌ (V5, commercial: Chromecast/Android + AirPlay/iOS, platform-split) | ❌ | ❌ app-side | ✅ | ✅ Chromecast, both platforms — session handoff, receiver-side queue, live streams; Android device-verified, iOS CI-verified |
-| Remote (receiver) volume from the app | ❌ | ❌ | ❌ | ❌ | ✅ Android `setRemotePlayback`, plus the hardware keys while the app is foreground; screen-off key routing is [under investigation](../README.md#limitations). iOS is a documented platform no-op |
+| Remote (receiver) volume from the app | ❌ | ❌ | ❌ | ❌ | ✅ Android `setRemotePlayback`, plus the hardware keys, foreground or screen off. iOS is a documented platform no-op |
 | Android Auto / CarPlay | ⚠️ controls only | ❌ | ❌ | ✅ | ✅ browse + voice (Auto), CarPlay templates |
 | DRM (Widevine/FairPlay) | ⚠️ announced | ❌ | ✅ | not documented | ❌ libmpv cannot ([Limitations](../README.md#limitations)) |
 | Native binary it adds | ≈none (platform codecs) | ≈none | ≈none | — | 3.63 MB downloaded for `arm64-v8a`, ≈7.1 MB for the iOS device slice ([Requirements](../README.md#requirements)) |
@@ -59,7 +59,7 @@ Every ✅ in the `rn-media` column is a claim this repo has to be able to prove:
 | 16 ffmpeg filters, 22 EQ presets | [`@rn-media/player`](../packages/player/README.md#audio-filters-and-eq) |
 | Visualizer on both platforms, no `RECORD_AUDIO` | PCM-tap patch — [`@rn-media/player`](../packages/player/README.md#visualizer-spectrum--waveform) |
 | Casting, Android device-verified / iOS CI-verified | [`@rn-media/cast`](../packages/cast/README.md) |
-| Remote (receiver) volume from the app; foreground keys | [`@rn-media/media-session`](../packages/media-session/README.md#remote-playback-hardware-volume-keys-drive-the-other-device) — screen-off key routing is [under investigation](../README.md#limitations) |
+| Remote (receiver) volume from the app; hardware keys, foreground or screen off | [`@rn-media/media-session`](../packages/media-session/README.md#remote-playback-hardware-volume-keys-drive-the-other-device) |
 | Binary sizes | [Requirements](../README.md#requirements), byte-exact |
 
 The cells that favour a competitor stay in the table on purpose: crossfade

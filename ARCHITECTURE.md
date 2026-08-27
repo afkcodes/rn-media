@@ -1539,6 +1539,12 @@ not read about):**
   runs here were found only because a probe kept pressing while unrelated state
   moved underneath it.
 
+  **Closed 2026-08-27 by the only evidence that settles it.** The owner pressed
+  the physical rocker with the screen off during a cast session on the POCO F4
+  and the receiver's volume moved. The README's "under investigation" entry is
+  gone; the rows above stand as the record of how an injected key almost made
+  a working feature look broken and a broken measurement look like proof.
+
   **Platform truth found on the way, worth recording because it reads exactly
   like a failure: Android only routes volume keys to a session that is
   actually PLAYING.** A first attempt looked like the feature was broken —

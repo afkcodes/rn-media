@@ -739,8 +739,7 @@ function CastRow() {
 13-15 is the SDK's documented behaviour, not something we have run) — and it hides
 itself when there is nothing to cast to. `service.setRemotePlayback({ volume })`
 declares playback remote, which points the app's volume control — and the hardware
-keys while the app is on screen — at the receiver; routing those keys with the
-**screen off** is [under investigation](#limitations), and on iOS the call is a
+keys, on screen or with the screen off — at the receiver; on iOS the call is a
 documented no-op because iOS gives no app the volume buttons. `wireCastHandoff`
 lives in `@rn-media/cast`, not `media-session`, which stays player-agnostic and
 cast-free in both directions.
@@ -1074,7 +1073,6 @@ Every row here is a real bug someone hit, in this repo or in review.
 | The cast build fails on `_OBJC_CLASS_$_UIGlassEffect` | `google-cast-sdk` 4.8.6 is built against the iOS 26.2 SDK. **Xcode 26+** is required to link it; the runtime floor stays iOS 16 |
 | A cast route greyed out for a track mpv plays fine | Receivers decode far less than mpv. Ask `canCastMedia()` — ALAC, hi-res FLAC, WMA, DSD and AC-3 are out |
 | `content://` from the Android storage picker will not load | Neither libmpv nor FFmpeg has a handler for that scheme. Copy the file or resolve it to a path |
-| A measurement says a hardware key works and a thumb says otherwise | **Injected key events are not real input** — they skip the path a physical press takes. That is how the screen-off volume-key entry in [Limitations](#limitations) got there |
 
 ## Limitations
 
@@ -1114,13 +1112,6 @@ Every row here is a real bug someone hit, in this repo or in review.
   played straight through saves nothing until you call `service.save()`; and a
   live stream saves position `0`, because an offset into it has nothing to seek
   back to.
-- **Hardware volume keys with the screen off, while casting, do not work yet**
-  — and the way we learned it is the point. It shipped with a measurement
-  behind it, but that measurement used *injected* key events, which do not
-  travel the path a physical press takes; a real thumb on the rocker says
-  otherwise. In-app volume control and the keys with the app on screen do drive
-  the receiver. The routing rules with the screen off are under investigation,
-  and this entry stays until a physical press proves it either way.
 - **CarPlay has never been run** — it compiles on CI and mirrors Android Auto's
   handler contract, but no Simulator or head-unit session has been observed
   (Apple hardware and the entitlement are both owner-side). Android Auto *is*
@@ -1141,8 +1132,7 @@ handler behind both (ARCHITECTURE §31). Next, owner-approved:
 **`@rn-media/downloads`** — offline playback as a *source resolver*, so the player
 needs no changes at all — then LRC lyrics over position projection, then video as
 an additive plugin package with its own binaries and zero core changes.
-Investigations rather than promises: output-device routing, and the screen-off
-volume-key routing in [Limitations](#limitations). Full analysis and rationale:
+Investigations rather than promises: output-device routing. Full analysis and rationale:
 [`PLAN.md`](PLAN.md).
 
 ## Licensing
