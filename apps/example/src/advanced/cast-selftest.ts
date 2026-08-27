@@ -13,7 +13,8 @@
  * foreground — the one place timers are legal in this codebase.
  */
 import { Cast } from '@timbre/cast'
-import { cast, getPlayer, jumpTo, pause, play, seekTo } from '../playback'
+import { getPlayer } from '../playback'
+import { cast, jumpTo, pause, play, seekTo } from './cast-wiring'
 
 const TAG = '[cast-test]'
 

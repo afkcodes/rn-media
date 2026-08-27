@@ -29,6 +29,17 @@ import {
 } from '@timbre/player'
 import { COLORS, SPACE, TYPE } from './theme'
 import * as pb from './playback'
+// Transport is imported from the cast module: its routed play/pause/… drive the
+// receiver while a handoff is active and the core player otherwise. Without cast
+// installed, the App would import these straight from `./playback` instead.
+import * as transport from './advanced/cast-wiring'
+import {
+  cancelSleepTimer,
+  getChapters,
+  getSleepTimer,
+  setSleepTimer,
+  setSleepTimerToTrackEnd,
+} from './advanced/extras'
 import { durationMs, nowPlaying, sameShell, selectShell } from './projections'
 import { runCastSelfTest } from './advanced/cast-selftest'
 import { AdvancedSection } from './advanced'
@@ -52,7 +63,6 @@ function App(): React.JSX.Element {
   // restore note, which change a handful of times per session.
   const {
     player,
-    cast,
     queueRows,
     queue,
     station,
@@ -63,6 +73,9 @@ function App(): React.JSX.Element {
     shuffleEnabled,
     restoreNote,
   } = pb.usePlayback()
+  // Cast lives in the advanced layer; the composition root is allowed to know
+  // about it (the core `playback.ts` is not). `undefined`-safe when cast is off.
+  const cast = transport.useCast()
 
   // Selector-scoped, not the whole snapshot: a buffered-position tick must not
   // re-render the tree. Module-level functions so their identity is stable.
@@ -103,7 +116,7 @@ function App(): React.JSX.Element {
   // changes, not kept in state. Most tracks have none.
   const [chapters, setChapters] = React.useState<readonly ChapterEntry[]>([])
   React.useEffect(() => {
-    setChapters(ready ? pb.getChapters() : [])
+    setChapters(ready ? getChapters() : [])
   }, [ready, shell.index, shell.status])
 
   return (
@@ -128,7 +141,7 @@ function App(): React.JSX.Element {
           live={live}
           ready={ready}
           chapters={chapters}
-          onSeek={pb.seekTo}
+          onSeek={transport.seekTo}
         />
 
         <TransportControls
@@ -136,10 +149,10 @@ function App(): React.JSX.Element {
           ready={ready}
           hasNext={shell.hasNext}
           hasPrevious={shell.hasPrevious}
-          onPrevious={pb.previous}
-          onToggle={pb.toggle}
-          onNext={pb.next}
-          onSeekBy={pb.seekBy}
+          onPrevious={transport.previous}
+          onToggle={transport.toggle}
+          onNext={transport.next}
+          onSeekBy={transport.seekBy}
           onStop={() => void pb.stopSession()}
         />
 
@@ -161,7 +174,7 @@ function App(): React.JSX.Element {
           index={index}
           playing={playing}
           ready={ready}
-          onJump={(i) => void pb.jumpTo(i)}
+          onJump={transport.jumpTo}
           onPlayNext={(item) => void pb.playNext(item)}
           onAddLast={(item) => void pb.addLast(item)}
           onRemove={(i) => void pb.removeAt(i)}
@@ -195,10 +208,10 @@ function App(): React.JSX.Element {
 
         <SleepTimerSection
           ready={ready}
-          getTimer={pb.getSleepTimer}
-          onArm={pb.setSleepTimer}
-          onArmTrackEnd={pb.setSleepTimerToTrackEnd}
-          onCancel={pb.cancelSleepTimer}
+          getTimer={getSleepTimer}
+          onArm={setSleepTimer}
+          onArmTrackEnd={setSleepTimerToTrackEnd}
+          onCancel={cancelSleepTimer}
         />
 
         <AdvancedSection
