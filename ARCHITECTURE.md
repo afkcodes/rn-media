@@ -2583,6 +2583,39 @@ example manifest now declares `READ_MEDIA_AUDIO`, which is what any MediaStore
 browser holds, and playback followed. A file-backed row is seekable and carries
 a duration; a pipe-backed provider would surface `seekable=false` / `isLive=true`
 through the same fields, no new path.
+
+### 33. Releases are driven by Changesets, not semantic-release
+
+The repo briefly carried a per-package semantic-release setup (a
+`release.config.cjs` in each of the four packages, driven by Conventional
+Commit parsing). It never worked as a monorepo release: the root `release`
+script invoked semantic-release for `packages/player` **only**, so the other
+three could never be versioned or published by it, and semantic-release is
+single-package by design. It was removed.
+
+Releases now run on **Changesets** (`@changesets/cli`, config in
+`.changeset/config.json`). The reasons it fits where semantic-release did not:
+
+- **Multi-package is the default, not a bolt-on.** One command versions and
+  publishes exactly the packages that changed, each with its own `CHANGELOG.md`.
+- **Versioning is independent** (`fixed: []`, `linked: []`). The four packages
+  have no cross-dependencies and the modularity principle is a hard rule
+  (media-session must work with ANY player), so each moves only when it moves.
+  A fix in `player` publishes `player` alone.
+- **Intent is explicit, not inferred from commit prose.** A contributor states
+  the bump and the changelog line in a `.changeset/` file committed with the PR;
+  the release note is authored, not reverse-engineered from `feat:`/`fix:`.
+- **Publishing is a reviewable PR.** `changesets/action` opens a "Version
+  Packages" PR that accumulates pending changesets; merging it is the act that
+  publishes to npm and cuts the GitHub releases + tags. Nothing publishes from a
+  laptop, and the version bump is seen before it ships.
+
+`lib/` is builder-bob output and gitignored, so CI builds every package before
+`changeset publish` runs `npm publish` per package; provenance is on
+(`id-token: write` + `NPM_CONFIG_PROVENANCE`). Conventional Commits stay — they
+are how the git history reads (CONTRIBUTING) — but they no longer *drive* the
+release; the changeset does.
+
 ## Platform truths we build around (learned, verified)
 
 - **`UInt(_: Double)` traps in Swift where `Double.toInt()` is total in

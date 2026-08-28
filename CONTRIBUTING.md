@@ -170,3 +170,22 @@ re-derive your reasoning.
 
 Open PRs against `main`. The checklist in the PR template is the same standard
 as this file — tests, docs, and `ARCHITECTURE.md` when a decision moved.
+
+## Releases (Changesets)
+
+If your change touches a published package, add a changeset in the same PR:
+
+```
+npm run changeset
+```
+
+Pick the packages you moved, pick the bump (patch / minor / major), and write
+the one line a user should read in the changelog. Commit the generated
+`.changeset/*.md` file. A PR that changes a published package but adds no
+changeset publishes nothing — CI won't stop you, but the release will skip it.
+
+Skip the changeset only for changes that never reach a user: the example app,
+docs, CI, tests. Everything about the flow — the "Version Packages" PR, who
+publishes, why versioning is independent — is in [`.changeset/README.md`](.changeset/README.md)
+and `ARCHITECTURE.md` §33. Conventional commits still describe the history; the
+changeset drives the release.

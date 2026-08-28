@@ -1,7 +1,7 @@
 {
   "name": "@afkcodes/timbre-cast",
   "version": "0.1.0",
-  "description": "First-party Google Cast sender binding, audio-scoped: discovery, sessions, RemoteMediaClient + receiver queue, typed errors \u2014 powered by Nitro Modules",
+  "description": "First-party Google Cast sender binding, audio-scoped: discovery, sessions, RemoteMediaClient + receiver queue, typed errors — powered by Nitro Modules",
   "main": "./lib/commonjs/index.js",
   "module": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
@@ -10,7 +10,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p plugin/tsconfig.test.json",
     "clean": "git clean -dfX",
-    "release": "semantic-release",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:android": "cd ../../apps/example/android && ./gradlew :afkcodes_timbre-cast:testReleaseUnitTest -PreactNativeArchitectures=arm64-v8a",
@@ -61,8 +60,6 @@
   },
   "devDependencies": {
     "@jamesacarr/eslint-formatter-github-actions": "^0.2.0",
-    "@semantic-release/changelog": "^7.0.0",
-    "@semantic-release/git": "^11.0.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^26.2.0",
@@ -77,7 +74,6 @@
     "react-native": "0.87.1",
     "react-native-builder-bob": "^0.43.0",
     "react-native-nitro-modules": "^0.37.0",
-    "semantic-release": "^25.0.7",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
