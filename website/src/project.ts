@@ -33,7 +33,7 @@ export const PROJECT = {
   futureDomain: 'https://timbre.afk.codes',
   /** GitHub Pages origin + base, used until the domain is chosen. */
   pagesUrl: 'https://afkcodes.github.io',
-  pagesBaseUrl: '/rn-media/',
+  pagesBaseUrl: '/timbre/',
 } as const
 
 /** `@afkcodes/timbre-player`, `@afkcodes/timbre-media-session`, … from a bare package name. */
