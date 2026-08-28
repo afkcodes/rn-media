@@ -13,11 +13,11 @@ arbiter, a media session that drives lock screens for *any* player, and a
 Chromecast sender. The C++ core binds libmpv's client API through
 [Nitro Modules](https://nitro.margelo.com), with no bridge layer.
 
-> **Status: v0.1, pre-release — nothing is on npm yet.** The install line below
-> is what it will be; today the packages are consumed from this workspace. The
-> Android stack is device-verified end to end. iOS playback and the media
-> notification are device-verified; cast and CarPlay on iOS are not yet. APIs
-> may still change.
+> **Status: v0.1.0 — published, early, pre-1.0.** The packages are on npm under
+> `@afkcodes/timbre-*` and the install line below works. The Android stack is
+> device-verified end to end; iOS playback and the media notification are
+> device-verified; cast and CarPlay on iOS are not yet. The API may still change
+> before 1.0.
 
 <p align="center">
   <img src="docs/assets/demo.gif" width="330"
@@ -219,11 +219,11 @@ Every export is tabulated in its package README.
 
 ## Roadmap
 
-The gate that unlocks shipping, in order: the naming decision → the first npm
-publish (iOS playback and notifications are device-verified; iOS cast and
-CarPlay remain to be tested). Next up, owner-approved:
-`@afkcodes/timbre-downloads` (offline playback as a source resolver), LRC lyrics, then
-video as an additive plugin package. Full analysis: [`PLAN.md`](PLAN.md).
+Naming and the first npm publish are done — the four packages are live at
+v0.1.0. Next up, owner-approved: `@afkcodes/timbre-downloads` (offline playback
+as a source resolver), LRC lyrics, then video as an additive plugin package.
+Still to prove on hardware: iOS cast and CarPlay. Full analysis:
+[`PLAN.md`](PLAN.md).
 
 ## Licensing
 
