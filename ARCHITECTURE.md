@@ -2616,6 +2616,42 @@ Releases now run on **Changesets** (`@changesets/cli`, config in
 are how the git history reads (CONTRIBUTING) — but they no longer *drive* the
 release; the changeset does.
 
+### 34. `trackChanged` reports identity (`entryId` + `uri`), not just an index
+
+The event began as `{ index, previousIndex }` — a pure cursor position. That is
+a trap, and a consuming app fell into it: the natural handler is
+`onTrackChanged(e => selectByIndex(e.index))`, and it is correct only while the
+app's list and mpv's playlist share an ordering. The instant the two drift — a
+`shuffle`, a `playlist.move`, an insert or a remove — index `k` names a
+different source on each side, and the app draws the wrong track for the one
+that is actually playing. It surfaced exactly that way: a real "displayed track
+≠ playing track" mismatch in an app that trusted the index. The failure is not
+the app's carelessness; it is that a positional index is the wrong thing to put
+on an identity event, because *any* consumer will match on whatever the event
+hands it.
+
+The engine already knew the stable identity, so the event now carries it.
+`TrackChangedEvent` gains `entryId` (mpv's `playlist/N/id` — unique for the life
+of the core, surviving `playlist-move`/`playlist-remove`, distinct even for
+duplicate URIs) and `uri` (the logical `playlist/N/filename` string that was
+loaded). Consumers match on `entryId` — or `uri` when their sources are unique —
+and their displayed track stays equal to the loaded one under any reorder. It
+also lets a consumer detect mpv's "the cursor moved but the entry is the same"
+non-change (which a `shuffle` produces for the playing track) and no-op, which
+the bare index cannot express because the index is precisely what moved.
+
+The read is free at the boundary: `#readTrackChange` already reads
+`duration`/`seekable`/`media-title`/`filename` in one batch when the cursor
+moves, so `entryId` is one more synchronous read on a boundary mpv is already
+paying for (the per-batch read budget in `player.ts` moves 4 → 5, worst case
+6 → 7). `entryId` relies on the fork binaries' `prefetch-playlist-entry-id`
+support, which timbre's own libmpv forks provide (section 11); on a build
+without it the field is simply absent. Both fields are `undefined` when the
+cursor moves to `-1` (no current entry). The change is **additive and
+non-breaking**: the two indices are untouched, existing handlers keep compiling,
+and the identity fields are new optionals — hence a minor bump for
+`@afkcodes/timbre-player`.
+
 ## Platform truths we build around (learned, verified)
 
 - **`UInt(_: Double)` traps in Swift where `Double.toInt()` is total in

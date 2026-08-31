@@ -15,11 +15,7 @@ import {
 import type { CommonMetadata } from './common-metadata'
 import { toCommonMetadata } from './common-metadata'
 import type { AudioFilter } from './filters'
-import {
-  AudioFilters,
-  compileAudioFilters,
-  isAudioFilterName,
-} from './filters'
+import { AudioFilters, compileAudioFilters, isAudioFilterName } from './filters'
 import type { HttpHeaders } from './headers'
 import { HTTP_HEADER_FIELDS_OPTION, compileHttpHeaderFields } from './headers'
 import { createMpvClient } from './native-client'
@@ -31,6 +27,7 @@ import {
   OBSERVED_PROPERTIES,
   isMetadataProperty,
   metadataByKeyProperty,
+  playlistEntryIdProperty,
   playlistFilenameProperty,
 } from './properties'
 import type { SourceResolver } from './source-resolver'
@@ -784,6 +781,31 @@ export interface TrackChangedEvent {
   readonly index: number
   /** The index that was current before. */
   readonly previousIndex: number
+  /**
+   * mpv's stable playlist *entry id* (`playlist/N/id`) of the entry now current
+   * — the identity to match your own list against, not the position.
+   *
+   * A bare `index` silently disagrees with an app's own ordering the moment the
+   * queue drifts (shuffle, reorder, insert, remove): position `1` is a different
+   * source before and after, so `onTrackChanged(e => selectByIndex(e.index))`
+   * shows the wrong track. The entry id does not drift — it is "unique for the
+   * entire life time of the current mpv core instance" (mpv 0.41.0 `input.rst`),
+   * survives `playlist-move`/`playlist-remove`, and is distinct even for
+   * duplicate URIs — so matching on it keeps the displayed track equal to the
+   * loaded one. Pair it with {@link PlaylistApi.entries}' `entryId`.
+   *
+   * `undefined` when there is no current entry (`index === -1`), and on a
+   * libmpv build without `prefetch-playlist-entry-id` (timbre's own forks carry
+   * it — see {@link PrefetchStartedEvent.entryId}).
+   */
+  readonly entryId: number | undefined
+  /**
+   * The logical source (`playlist/N/filename`) that was loaded for the entry now
+   * current — the string passed to `loadfile`, unchanged by any source
+   * resolver. A second, human-legible identity for consumers whose own sources
+   * are unique. `undefined` when there is no current entry (`index === -1`).
+   */
+  readonly uri: string | undefined
 }
 
 /** Payload of the `chapterChanged` event. */
@@ -1368,7 +1390,11 @@ export interface PlaylistApi {
    *   uninterrupted — but its `playlist-pos` almost certainly changes, which
    *   surfaces here as a {@link PlayerEventMap.trackChanged} event for a track
    *   that did not actually change. Treat that event as "the cursor moved", and
-   *   re-read `state.playlist.index`.
+   *   re-read `state.playlist.index`. This is exactly why the event carries
+   *   {@link TrackChangedEvent.entryId}: a consumer can compare it against the
+   *   entry it already had current and no-op when they match — "the cursor
+   *   moved but the entry is the same" — which the bare `index` cannot express,
+   *   because the index is precisely what the shuffle changed.
    * - **Each shuffle overwrites the entries' recorded original order**, which is
    *   exactly why {@link unshuffle} can only undo the most recent one.
    *
@@ -2233,6 +2259,8 @@ function isQueueMovement(event: PlayerEvent): boolean {
 interface TrackChangeSnapshot {
   readonly reads: TrackChangeReads
   readonly uri?: string
+  /** mpv's stable entry id of the new cursor (`playlist/N/id`); see `#readTrackChange`. */
+  readonly entryId?: number
 }
 
 /**
@@ -2763,7 +2791,9 @@ export class Player {
         index === startIndex ? options : sharedOptions,
         source
       )
-      appends.push(this.command(buildLoadfileArgs(source, 'append', fileOptions)))
+      appends.push(
+        this.command(buildLoadfileArgs(source, 'append', fileOptions))
+      )
     }
     await Promise.all(appends)
     // Shuffle before the jump, never after: the jump is what starts playback,
@@ -4270,10 +4300,10 @@ export class Player {
    * | read | when | count |
    * | ---- | ---- | ----- |
    * | `#readTimePos` | batch carried a position discontinuity | 1 |
-   * | `#readTrackChange` | batch moved the playlist cursor | 4 |
+   * | `#readTrackChange` | batch moved the playlist cursor | 5 |
    * | {@link getMetadata} | batch touched `metadata`/`media-title` **and** something is listening for `metadataChanged` | 1 |
    *
-   * **Worst case: 6 synchronous reads per batch**, whatever the tag count and
+   * **Worst case: 7 synchronous reads per batch**, whatever the tag count and
    * whatever the queue length. It was `6 + 2N` (47 for a 20-tag FLAC) until
    * `metadata` became a single node read and resolve-ahead's two playlist reads
    * moved off this turn — see `#resolveAhead`.
@@ -4309,7 +4339,14 @@ export class Player {
 
     for (const event of mapped) {
       const after = reducePlayerState(next, event, context)
-      this.#collectEmissions(next, after, event, context.now, emissions)
+      this.#collectEmissions(
+        next,
+        after,
+        event,
+        context.now,
+        trackChange,
+        emissions
+      )
       next = after
     }
 
@@ -4499,6 +4536,7 @@ export class Player {
     after: PlayerState,
     event: PlayerEvent,
     now: number,
+    trackChange: TrackChangeSnapshot | undefined,
     out: Array<() => void>
   ): void {
     switch (event.kind) {
@@ -4580,8 +4618,20 @@ export class Player {
         // a synchronous `time-pos` here would buy nothing but a round-trip at
         // the worst moment (see the batch read budget).
         const from = projectPosition(before, now)
+        // Identity of the entry the cursor moved *to*, read once for this batch
+        // in `#readTrackChange(cursor)` above. It corresponds to `index` (the
+        // new cursor) and is `undefined` on both fields when `index === -1` —
+        // there is no entry to identify. Consumers match on `entryId`/`uri`
+        // rather than the position, which drifts under reorder/shuffle.
+        const entryId = trackChange?.entryId
+        const uri = trackChange?.uri
         out.push(() => {
-          this.#emit('trackChanged', { index, previousIndex })
+          this.#emit('trackChanged', {
+            index,
+            previousIndex,
+            entryId,
+            uri,
+          })
           // The cursor moving is a position discontinuity in its own right —
           // the clock did not seek, it restarted somewhere else entirely.
           this.#pendingDiscontinuity = 'auto-advance'
@@ -4941,6 +4991,25 @@ export class Player {
             this.#client.getPropertyString(playlistFilenameProperty(index))
           )
         : undefined
+    // The fifth read: the entry's stable identity, so `trackChanged` can report
+    // *which* source is current and not merely its position. `playlist/N/id` is
+    // mpv's own entry id — it survives `playlist-move`/`playlist-remove` and is
+    // unique even for duplicate URIs, which is exactly what a consumer needs to
+    // keep its displayed track equal to the loaded one when the queue drifts.
+    //
+    // Reading it back per index relies on the fork binaries'
+    // `prefetch-playlist-entry-id` support (see `PrefetchStartedEvent.entryId`
+    // docs, and the `entryId` notes around the `entries()`/prefetch APIs);
+    // timbre's own libmpv forks provide it. On a build without it the read is
+    // unavailable and the field is simply absent. Read here rather than
+    // anywhere else for the same reason `uri` is: the boundary is already paid
+    // for. `-1` (no current entry) is not read — there is no such property.
+    const entryId =
+      index >= 0
+        ? this.#readInBatch(() =>
+            this.#client.getPropertyNumber(playlistEntryIdProperty(index))
+          )
+        : undefined
     return {
       reads: {
         ...(duration !== undefined ? { duration } : {}),
@@ -4948,6 +5017,7 @@ export class Player {
         ...(title !== undefined ? { title } : {}),
       },
       ...(uri !== undefined ? { uri } : {}),
+      ...(entryId !== undefined ? { entryId } : {}),
     }
   }
 

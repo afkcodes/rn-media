@@ -215,8 +215,47 @@ describe('Player — state and events', () => {
     client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
 
     expect(changed.mock.calls).toEqual([
-      [{ index: 0, previousIndex: -1 }],
-      [{ index: 1, previousIndex: 0 }],
+      [{ index: 0, previousIndex: -1, entryId: undefined, uri: undefined }],
+      [{ index: 1, previousIndex: 0, entryId: undefined, uri: undefined }],
+    ])
+  })
+
+  it('reports the new entry identity (entryId + uri) on trackChanged', async () => {
+    const player = await createPlayer()
+    const changed = vi.fn()
+    player.on('trackChanged', changed)
+
+    // mpv answers the per-index identity reads for the entry the cursor lands on.
+    client.readable.set('playlist/1/filename', 'https://cdn/track-7.flac')
+    client.readable.set('playlist/1/id', 42)
+    client.emit([propertyEvent(MpvProperty.playlistPos, 1)])
+
+    expect(changed.mock.calls).toEqual([
+      [
+        {
+          index: 1,
+          previousIndex: -1,
+          entryId: 42,
+          uri: 'https://cdn/track-7.flac',
+        },
+      ],
+    ])
+  })
+
+  it('leaves the identity fields undefined when the cursor goes to -1', async () => {
+    const player = await createPlayer()
+    // Land on a real entry first, identity known.
+    client.readable.set('playlist/0/filename', 'https://cdn/track-0.flac')
+    client.readable.set('playlist/0/id', 7)
+    client.emit([propertyEvent(MpvProperty.playlistPos, 0)])
+
+    const changed = vi.fn()
+    player.on('trackChanged', changed)
+    // Cursor clears — there is no current entry, so nothing to identify.
+    client.emit([propertyEvent(MpvProperty.playlistPos, -1)])
+
+    expect(changed.mock.calls).toEqual([
+      [{ index: -1, previousIndex: 0, entryId: undefined, uri: undefined }],
     ])
   })
 
@@ -392,12 +431,17 @@ describe('Player — gapless track transitions', () => {
       propertyEvent(MpvProperty.playlistPos, 1),
       propertyEvent(MpvProperty.playlistPos, 1),
     ])
-    expect(numbers.mock.calls).toEqual([[MpvProperty.duration]])
+    expect(numbers.mock.calls).toEqual([
+      [MpvProperty.duration],
+      ['playlist/1/id'],
+    ])
     expect(bools.mock.calls).toEqual([[MpvProperty.seekable]])
-    // Four reads per cursor change, not three: `media-title` for the state, and
-    // `playlist/<new index>/filename` for the URI error classification is keyed
-    // on. Both are one-shot, both ride the same already-paid boundary, and the
-    // duplicate `playlist-pos` in this batch still buys only one of each.
+    // Five reads per cursor change, not three: `media-title` for the state,
+    // `playlist/<new index>/filename` for the URI the error classification is
+    // keyed on, and `playlist/<new index>/id` for the entry identity that
+    // `trackChanged` reports. All one-shot, all riding the same already-paid
+    // boundary, and the duplicate `playlist-pos` in this batch still buys only
+    // one of each.
     expect(strings.mock.calls).toEqual([
       [MpvProperty.mediaTitle],
       ['playlist/1/filename'],

@@ -151,6 +151,7 @@ export {
   metadataByKeyProperty,
   metadataKeyProperty,
   metadataValueProperty,
+  playlistEntryIdProperty,
   playlistFilenameProperty,
 } from './properties'
 export type { ObservedProperty } from './properties'

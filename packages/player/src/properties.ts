@@ -302,6 +302,27 @@ export function playlistFilenameProperty(index: number): string {
 }
 
 /**
+ * The property that yields mpv's stable *entry id* of the `index`-th playlist
+ * entry.
+ *
+ * mpv `input.rst`: "``playlist/N/id`` — Unique ID for this entry. This is an
+ * automatically assigned integer ID that is unique for the entire life time of
+ * the current mpv core instance." Unlike the array index it survives
+ * `playlist-move`/`playlist-remove` and is distinct even for duplicate URIs, so
+ * it is the right key for an app to match a `trackChanged` against its own list.
+ *
+ * Reading it back per index relies on the fork binaries' `prefetch-playlist-
+ * entry-id` support (see {@link PrefetchStartedEvent.entryId}); timbre's own
+ * libmpv forks provide it (ARCHITECTURE section 11). On a build without it the
+ * read returns unavailable and the field is simply absent.
+ *
+ * @param index - 0-based playlist index, `< playlist-count`.
+ */
+export function playlistEntryIdProperty(index: number): string {
+  return `playlist/${index}/id`
+}
+
+/**
  * mpv's `volume` property is a percentage: `100` is unattenuated output.
  *
  * The public {@link PlayerState.volume} is normalised to `0..1`, so every
