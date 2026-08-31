@@ -21,8 +21,8 @@ Chromecast sender. The C++ core binds libmpv's client API through
 
 <p align="center">
   <img src="docs/assets/demo.gif" width="330"
-       alt="The example app: a track playing, a scrub across the timeline, the equaliser morphing its ten-band curve across presets, and the live FFT visualiser reacting to the audio." /><br>
-  <sub><a href="apps/example">The example app</a>: play → seek → equaliser
+       alt="The example app: a live station playing with its real now-playing metadata, the equaliser morphing its ten-band curve across presets, and the live FFT visualiser reacting to the audio." /><br>
+  <sub><a href="apps/example">The example app</a>: a live station → equaliser
   presets (the curve morphs) → live FFT visualiser.</sub>
 </p>
 
